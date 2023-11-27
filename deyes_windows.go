@@ -12,11 +12,12 @@ import (
 	"github.com/urfave/cli/v2"
 	"github.com/xuri/excelize/v2"
 
-	"d-eyes/basicinfo/info"
-	"d-eyes/filedetection"
 	"d-eyes/logo"
 	"d-eyes/output"
 	"d-eyes/yaraobj"
+
+	"d-eyes/basicinfo/info"
+	"d-eyes/filedetection"
 )
 
 var path string
@@ -25,7 +26,7 @@ var thread int
 var pid int
 var vulnerability int
 
-func main() {
+func main1() {
 	srcPath := SrcPath()
 	logo.ShowLogo()
 	app := &cli.App{
@@ -43,20 +44,20 @@ func main() {
 				Name:        "pid",
 				Aliases:     []string{"p"},
 				Value:       -1,
-				Usage:       "-p 666 (Only For processcan.'-1' means all processes.)",
+				Usage:       "--pid 666 or -p 666 (Only For processcan.'-1' means all processes.)",
 				Destination: &pid,
 			},
 			&cli.StringFlag{
 				Name:        "rule",
 				Aliases:     []string{"r"},
-				Usage:       "-r Ransom.Wannacrypt",
+				Usage:       "--rule Ransom.Wannacrypt or -r Ransom.Wannacrypt",
 				Destination: &rule,
 			},
 			&cli.IntFlag{
 				Name:        "thread",
 				Aliases:     []string{"t"},
 				Value:       5,
-				Usage:       "-t 1 (Only For Filescan)",
+				Usage:       "--thread 1 or -t 1 (Only For Filescan)",
 				Destination: &thread,
 			},
 			&cli.IntFlag{
@@ -173,7 +174,6 @@ func main() {
 						}
 						f.SetCellStyle("Sheet1", "A1", "A1", style)
 						f.SetCellStyle("Sheet1", "B1", "B1", style)
-
 						// save the result to Deyes.xlsx
 						if err := f.SaveAs(srcPath + "D-Eyes_FileResult.xlsx"); err != nil {
 							fmt.Println(err)
@@ -181,7 +181,6 @@ func main() {
 					} else {
 						fmt.Println("\nNo suspicious files found. Your computer is safe with the rules you choose.")
 					}
-
 					var end = time.Now().Sub(start)
 					fmt.Println("Consuming Time: ", end, "  Number of scanned files: ", sum)
 
@@ -208,7 +207,6 @@ func main() {
 					},
 				},
 				Action: func(c *cli.Context) error {
-
 					var start = time.Now()
 					// todo
 					//controller.ScanProcess(pid, rule, src_path)
@@ -248,7 +246,7 @@ func main() {
 				Usage: "Command for displaying host network information",
 				Action: func(c *cli.Context) error {
 					color.Infoln("Network Info:")
-					info.DisplayNetStat(srcPath)
+					info.DisplayNetStat()
 					return nil
 				},
 			},
@@ -321,7 +319,7 @@ func main() {
 func SrcPath() string {
 
 	args := os.Args
-	lastIndex := strings.LastIndex(args[0], "\\")
+	lastIndex := strings.LastIndex(args[0], string(os.PathSeparator))
 	cmdPath := args[0][0 : lastIndex+1]
 	currentDir, _ := os.Getwd()
 
@@ -329,7 +327,7 @@ func SrcPath() string {
 	for _, f := range dir {
 		if f.IsDir() {
 			if f.Name() == "yaraRules" {
-				return currentDir + "\\"
+				return currentDir + string(os.PathSeparator)
 			}
 		}
 	}

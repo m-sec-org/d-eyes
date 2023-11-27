@@ -12,13 +12,13 @@ import (
 	"github.com/urfave/cli/v2"
 	"github.com/xuri/excelize/v2"
 
-	"d-eyes/basicinfo/info"
-	"d-eyes/configcheck/check"
-	"d-eyes/filedetection"
-	"d-eyes/logo"
-	"d-eyes/output"
-	"d-eyes/process/controller"
-	"d-eyes/yaraobj"
+	"d-eyes/old/basicinfo/info"
+	"d-eyes/old/configcheck/check"
+	"d-eyes/old/filedetection"
+	"d-eyes/pkg/logo"
+	"d-eyes/pkg/output"
+	"d-eyes/pkg/process/controller"
+	"d-eyes/pkg/yaraobj"
 )
 
 var path string
@@ -26,7 +26,7 @@ var rule string
 var thread int
 var pid int
 
-func main() {
+func main1() {
 	logo.ShowLogo()
 	app := &cli.App{
 		Name:  "D-Eyes",
@@ -47,9 +47,8 @@ func main() {
 				Destination: &pid,
 			},
 			&cli.StringFlag{
-				Name:    "rule",
-				Aliases: []string{"r"},
-				//Value:   5,
+				Name:        "rule",
+				Aliases:     []string{"r"},
 				Usage:       "--rule Ransom.Wannacrypt or -r Ransom.Wannacrypt",
 				Destination: &rule,
 			},
@@ -75,9 +74,8 @@ func main() {
 						Destination: &path,
 					},
 					&cli.StringFlag{
-						Name:    "rule",
-						Aliases: []string{"r"},
-						//Value:   5,
+						Name:        "rule",
+						Aliases:     []string{"r"},
 						Usage:       "--rule Ransom.Wannacrypt or -r Ransom.Wannacrypt",
 						Destination: &rule,
 					},
@@ -90,11 +88,8 @@ func main() {
 					},
 				},
 				Action: func(c *cli.Context) error {
-					// fmt.Println("added task: ", c.Args().First())
-					//
-					//
 					var paths []string
-					r := []output.Result{}
+					var r []output.Result
 					paths = strings.Split(path, ",")
 					var start = time.Now()
 					var sum = 0
