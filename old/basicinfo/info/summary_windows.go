@@ -21,8 +21,8 @@ func SaveSummaryBaseInfo() {
 
 	users := GetWindowsUser()
 	_, err = f.WriteString("AllUsers: \n")
-	for _, userInfo := range users {
-		_, err = f.WriteString("    * " + userInfo + "\n")
+	for _, user := range users {
+		_, err = f.WriteString("    * " + user + "\n")
 	}
 
 	crontab := GetCronTab()

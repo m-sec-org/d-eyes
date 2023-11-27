@@ -2,6 +2,7 @@ package logo
 
 import (
 	"fmt"
+
 	"github.com/daviddengcn/go-colortext"
 )
 

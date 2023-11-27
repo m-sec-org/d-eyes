@@ -7,7 +7,7 @@ import (
 
 	"github.com/gookit/color"
 
-	"d-eyes/configcheck/common"
+	"d-eyes/old/configcheck/common"
 )
 
 var suspiciousContents [][2]string

@@ -3,9 +3,8 @@ package info
 import (
 	"os"
 
+	"github.com/botherder/go-autoruns"
 	"github.com/olekukonko/tablewriter"
-
-	autoruns "d-eyes/basicinfo/utils"
 )
 
 type AutoRuns struct {
@@ -22,13 +21,13 @@ func DisplayAutoruns(autoRuns *AutoRuns) {
 	for _, autorun := range autoRuns.AutoRuns {
 		autorunData := make([]string, 0)
 
-		path := StringNewLine(autorun.ImagePath, 25)
-		autorunData = append(autorunData, autorun.Type, autorun.ImageName, autorun.Arguments, path)
+		path := StringNewLine(autorun.LaunchString, 25)
+		autorunData = append(autorunData, autorun.Type, autorun.ImageName, path)
 		data = append(data, autorunData)
 	}
 
 	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"Type", "ImageName", "Arguments", "Path"})
+	table.SetHeader([]string{"Type", "ImageName", "LaunchCommand"})
 	table.SetHeaderAlignment(tablewriter.ALIGN_CENTER)
 	table.SetBorder(true)
 	table.SetRowLine(true)
@@ -39,21 +38,21 @@ func DisplayAutoruns(autoRuns *AutoRuns) {
 }
 
 func StringNewLine(str string, ln uint8) string {
-	var sub_str string
+	var subStr string
 	res_str := ""
 	for {
 		if len(str) < int(ln) {
 			res_str += str
 			break
 		}
-		sub_str = str[0:ln]
+		subStr = str[0:ln]
 		str = str[ln:]
-		res_str += sub_str + "\n"
+		res_str += subStr + "\n"
 	}
 	return res_str
 }
 
 func CallDisplayAutoruns() {
-	autoruns := GetAutoruns()
-	DisplayAutoruns(autoruns)
+	ar := GetAutoruns()
+	DisplayAutoruns(ar)
 }

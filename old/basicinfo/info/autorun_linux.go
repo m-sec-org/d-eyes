@@ -3,9 +3,8 @@ package info
 import (
 	"os"
 
+	"github.com/botherder/go-autoruns"
 	"github.com/olekukonko/tablewriter"
-
-	autoruns "d-eyes/basicinfo/utils"
 )
 
 type AutoRuns struct {
@@ -22,13 +21,13 @@ func DisplayAutoruns(autoRuns *AutoRuns) {
 	for _, autorun := range autoRuns.AutoRuns {
 		autorunData := make([]string, 0)
 
-		path := StringNewLine(autorun.LaunchString, 25)
-		autorunData = append(autorunData, autorun.Type, autorun.ImageName, path)
+		path := StringNewLine(autorun.ImagePath, 25)
+		autorunData = append(autorunData, autorun.Type, autorun.ImageName, autorun.Arguments, path)
 		data = append(data, autorunData)
 	}
 
 	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"Type", "ImageName", "LaunchCommand"})
+	table.SetHeader([]string{"Type", "ImageName", "Arguments", "Path"})
 	table.SetHeaderAlignment(tablewriter.ALIGN_CENTER)
 	table.SetBorder(true)
 	table.SetRowLine(true)

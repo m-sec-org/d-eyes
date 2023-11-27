@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/olekukonko/tablewriter"
 	"github.com/shirou/gopsutil/v3/process"
-
-	"d-eyes/basicinfo/utils"
 )
 
 // remote connection ip
@@ -47,13 +47,13 @@ func DisplayNetStat() {
 		if len(connection) > 0 && _pUname != "" {
 			network := strings.Join(connection, "")
 			_exe, _ := p.Exe()
-			path := utils.StringNewLine(_exe, 25)
-			connList = append(connList, fmt.Sprintf("%v", p.Pid), fmt.Sprintf("%v", p.Username), network, path)
+			path := StringNewLine(_exe, 25)
+			username, _ := p.Username()
+			connList = append(connList, fmt.Sprintf("%v", p.Pid), fmt.Sprintf("%v", username), network, path)
 			networkData = append(networkData, connList)
 		}
 	}
 
-	//output the information of current netstat
 	tableConn := tablewriter.NewWriter(os.Stdout)
 	tableConn.SetHeader([]string{"pid", "user", "local/remote(TCP Status)", "program name"})
 	tableConn.SetBorder(true)
@@ -63,6 +63,14 @@ func DisplayNetStat() {
 	remoteIpNew := RemoveRepeatedElement(remoteIp)
 
 	if len(remoteIpNew) > 0 {
+		client := resty.New()
+		for i := range remoteIpNew {
+			_, _ = client.R().
+				SetQueryParam("query", remoteIpNew[i]).
+				SetHeader("X-Ns-Nti-Key", ""). // todo token
+				SetHeader("Accept", "application/nsfocus.nti.spec+json; version=2.0").
+				Get("https://nti.nsfocus.com/api/v2/objects/ioc-ipv4/")
+		}
 
 		f, err := os.Create("RemoteConnectionIP.csv")
 		if err != nil {
@@ -106,4 +114,36 @@ func RemoveRepeatedElement(arr []string) (newArr []string) {
 		}
 	}
 	return
+}
+
+type TiResp struct {
+	Count       int       `json:"count"`
+	SpecVersion string    `json:"spec_version"`
+	Objects     []Objects `json:"objects"`
+	Type        string    `json:"type"`
+}
+type Tags struct {
+	TagValues []string `json:"tag_values"`
+	TagType   string   `json:"tag_type"`
+}
+type Observables struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+type Objects struct {
+	ValidUntil  time.Time     `json:"valid_until"`  // 有效期截止时间
+	Confidence  int           `json:"confidence"`   // 情报置信度，0-100 的整形数，值越大置信度越高
+	ThreatLevel int           `json:"threat_level"` // 威胁程度，低到高（1,3,5），其中 1(低)，3（中），5（高）。
+	Revoked     bool          `json:"revoked"`
+	Tags        []Tags        `json:"tags"` // Ioc出站/入站标记
+	CreditLevel int           `json:"credit_level"`
+	Pattern     string        `json:"pattern"`  // 指示器模式。带与或条件的规则表达式，条件以可观察对象字段值的方式表示。
+	Modified    time.Time     `json:"modified"` // 情报更新时间
+	CreatedBy   string        `json:"created_by"`
+	Observables []Observables `json:"observables"`  // 可观察数据值，解释该指示器对应的ip/域名/url/样本。
+	ThreatTypes []int         `json:"threat_types"` // 威胁类型列表。
+	ActTypes    []int         `json:"act_types"`    // 处置类型：  0：产品可根据策略正常处置，为默认值  1：监测  2：拦截  3：回溯分析  4：应急响应  5：热点事件
+	Type        string        `json:"type"`
+	ID          string        `json:"id"`
+	Categories  []string      `json:"categories"` // 指示器类型：  ip：恶意ip   c2：c2主机
 }

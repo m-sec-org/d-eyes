@@ -2,9 +2,10 @@ package info
 
 import (
 	"fmt"
-	"github.com/gookit/color"
 	"io/ioutil"
 	"strings"
+
+	"github.com/gookit/color"
 )
 
 func DisplayAllUsers() {

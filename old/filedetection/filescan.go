@@ -7,8 +7,8 @@ import (
 
 	"github.com/hillu/go-yara/v4"
 
-	"d-eyes/output"
-	"d-eyes/yaraobj"
+	"d-eyes/pkg/output"
+	"d-eyes/pkg/yaraobj"
 )
 
 func StringSlice(name string) []string {

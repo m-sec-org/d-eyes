@@ -11,10 +11,10 @@ import (
 )
 
 func SaveSummaryBaseInfo() {
-	f, err := os.Create("SummaryBaseInfo")
-
+	f, err := os.Create("SummaryBaseInfo.txt")
 	if err != nil {
-		fmt.Errorf(err.Error())
+		fmt.Println(err)
+		return
 	}
 
 	baseInfo := GetBaseInfo()

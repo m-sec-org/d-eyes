@@ -9,7 +9,7 @@ import (
 
 	"github.com/gookit/color"
 
-	"d-eyes/configcheck/common"
+	"d-eyes/old/configcheck/common"
 )
 
 var suspiciousHistory [][2]string

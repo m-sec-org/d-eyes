@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"d-eyes/configcheck/common"
+	"d-eyes/old/configcheck/common"
 )
 
 func checkBackdoor(tag string) bool {
