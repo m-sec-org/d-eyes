@@ -4,9 +4,9 @@ import (
 	"github.com/gookit/color"
 	"github.com/shirou/gopsutil/v3/process"
 
-	"d-eyes/process/models"
-	"d-eyes/process/scanner"
-	"d-eyes/process/utils"
+	"d-eyes/pkg/process/models"
+	"d-eyes/pkg/process/scanner"
+	"d-eyes/pkg/process/utils"
 )
 
 func GetProcess() models.Process {
@@ -36,7 +36,7 @@ func ScanProcess(pid int, rule string, src_path string) {
 	Npattern := []string{"ms-msdt:/id\\s+PCWDiagnostic\\s+/skip force\\s+/param"}
 
 	if err == nil {
-		err, scanResults := scannerEngine.ScanProcesses(pid, ipList, Npattern)
+		scanResults, err := scannerEngine.ScanProcesses(pid, ipList, Npattern)
 		if err == nil {
 			models.SaveProcessResult(scanResults)
 		} else {

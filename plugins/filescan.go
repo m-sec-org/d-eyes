@@ -1,9 +1,8 @@
 package plugins
 
 import (
-	"github.com/urfave/cli/v2"
-
 	"d-eyes/cmd"
+	"github.com/urfave/cli/v2"
 )
 
 type PluginFileScan struct {
@@ -31,7 +30,7 @@ func (f *PluginFileScan) InitCommands() *cli.Command {
 }
 
 func (f *PluginFileScan) Run(c *cli.Context) error {
-	/*	var paths []string
+		/*var paths []string
 		var r []output.Result
 		paths = strings.Split(f.Path, ",")
 		var start = time.Now()

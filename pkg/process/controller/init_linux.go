@@ -4,9 +4,9 @@ import (
 	"github.com/gookit/color"
 	"github.com/shirou/gopsutil/v3/process"
 
-	"d-eyes/process/models"
-	"d-eyes/process/scanner"
-	"d-eyes/process/utils"
+	"d-eyes/pkg/process/models"
+	"d-eyes/pkg/process/scanner"
+	"d-eyes/pkg/process/utils"
 )
 
 func GetProcess() models.Process {

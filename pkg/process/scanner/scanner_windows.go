@@ -12,9 +12,9 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 	"github.com/toolkits/slice"
 
-	"d-eyes/process/models"
-	"d-eyes/process/utils"
-	"d-eyes/yaraobj"
+	"d-eyes/pkg/process/models"
+	"d-eyes/pkg/process/utils"
+	"d-eyes/pkg/yaraobj"
 )
 
 var resultListTMP []*models.ProcessScanResult
