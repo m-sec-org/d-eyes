@@ -1,5 +1,0 @@
-package info
-
-func DisplayBaseInfo() {
-
-}

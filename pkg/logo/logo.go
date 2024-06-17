@@ -2,8 +2,7 @@ package logo
 
 import (
 	"fmt"
-
-	"github.com/daviddengcn/go-colortext"
+	"github.com/m-sec-org/d-eyes/pkg/color"
 )
 
 var logo = [...]string{
@@ -16,27 +15,18 @@ var logo = [...]string{
 }
 
 func ShowLogo() {
-	ct.Foreground(ct.Blue, true)
-	fmt.Println(logo[0])
-	fmt.Println(logo[1])
+	fmt.Println(color.Blue.Sprintf(logo[0]))
+	fmt.Println(color.Blue.Sprintf(logo[1]))
 
-	ct.ResetColor()
-	ct.Foreground(ct.Blue, true)
-	fmt.Println(logo[2])
-	ct.Foreground(ct.Magenta, true)
-	fmt.Println(logo[3])
-	ct.ResetColor()
+	fmt.Println(color.Blue.Sprintf(logo[2]))
 
-	ct.Foreground(ct.Magenta, true)
-	fmt.Println(logo[4])
-	ct.ResetColor()
+	fmt.Println(color.Magenta.Sprintf(logo[3]))
 
-	ct.Foreground(ct.Magenta, true)
-	fmt.Println(logo[5])
-	ct.ResetColor()
+	fmt.Println(color.Magenta.Sprintf(logo[4]))
 
-	ct.Foreground(ct.Blue, true)
-	fmt.Println("                                  ———The Eyes of Darkness from Nsfocus spy on everything")
-	ct.ResetColor()
+	fmt.Println(color.Magenta.Sprintf(logo[5]))
+
+	fmt.Println(color.Blue.Sprintf("                                    ———The Eyes of Darkness from Nsfocus spy on everything"))
+
 	fmt.Println()
 }
