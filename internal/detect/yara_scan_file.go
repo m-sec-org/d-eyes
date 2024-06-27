@@ -101,7 +101,7 @@ func (scan *YaraFileScanOptions) InitCommand() []*cli.Command {
 					Usage:       "Assigned scan thread\n                       example: --thread 50 or -t 50",
 					Destination: &YaraFileScanOption.Thread,
 					// 默认线程数量
-					Value: 100,
+					Value: 50,
 				},
 			},
 		},
@@ -110,6 +110,7 @@ func (scan *YaraFileScanOptions) InitCommand() []*cli.Command {
 func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 	var result []FileResult
 	var AllFile = make(chan string, 500)
+	var scanTotal int64
 	Wg := &sync.WaitGroup{}
 	dir, err := os.Getwd()
 	if err != nil {
@@ -147,10 +148,11 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 		_ = filepath.Walk(dir, func(path string, info fs.FileInfo, _ error) error {
 			if !info.IsDir() {
 				// 不是目录
-				if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) {
+				if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) && info.Name() != "D-Eyes.exe" {
 					// 添加文件到chan
 					AllFile <- path
 					Wg.Add(1)
+					scanTotal += 1
 				}
 			}
 			return nil
@@ -171,14 +173,16 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 					// 不是目录
 					AllFile <- pathUse
 					Wg.Add(1)
+					scanTotal += 1
 				} else {
 					_ = filepath.Walk(pathUse, func(path string, info fs.FileInfo, _ error) error {
 						if !info.IsDir() {
 							// 不是目录
-							if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) {
+							if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) && info.Name() != "D-Eyes.exe" {
 								// 添加文件到chan
 								AllFile <- path
 								Wg.Add(1)
+								scanTotal += 1
 							}
 						}
 						return nil
@@ -187,6 +191,7 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 			}
 		}
 	}
+	Wg.Wait()
 	if len(result) > 0 {
 		length := len(result)
 		vulSumTmp := 0
@@ -199,7 +204,7 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 			fmt.Println(color.Magenta.Sprint("[ Risk ", vulSumTmp, " ]"))
 			fmt.Print("Risk Description: ")
 			fmt.Println(color.Magenta.Sprint(result[i].Risk))
-			fmt.Println("Risk File Path: ")
+			fmt.Print("Risk File Path: ")
 			fmt.Println(color.Magenta.Sprint(result[i].RiskPath))
 			excelValueTmpA := "A" + strconv.Itoa(vulSumTmp+1)
 			excelValueTmpB := "B" + strconv.Itoa(vulSumTmp+1)
@@ -229,16 +234,16 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 		}
 		FileExcelErr = f.SetCellStyle("Sheet1", "A1", "A1", style)
 		FileExcelErr = f.SetCellStyle("Sheet1", "B1", "B1", style)
-
 		// save the result to d-eyes.xlsx
 		if err := f.SaveAs(dir + "d-eyes.xlsx"); err != nil {
 			fmt.Println(err)
 		}
 	} else {
-		fmt.Println("\nNo suspicious files found. Your computer is safe with the rules you choose.")
+		fmt.Println(color.Green.Sprint("No suspicious files found. Your computer is safe with the rules you choose."))
 	}
+	//
+	fmt.Println(color.Magenta.Sprintf("The scan is complete. %d files have been scanned", scanTotal))
 	close(AllFile)
-	Wg.Wait()
 	return nil
 }
 func (scan *YaraFileScanOptions) LoadBuiltRule() {
@@ -317,6 +322,7 @@ func (scan *YaraFileScanOptions) scanFile(files chan string, wg *sync.WaitGroup,
 		var matches yara.MatchRules
 		err := scan.Rules.ScanFile(targetFile, 0, 0, &matches)
 		if err != nil {
+			wg.Done()
 			continue
 		}
 		if len(matches) != 0 {
