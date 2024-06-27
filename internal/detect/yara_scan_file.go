@@ -246,7 +246,7 @@ func (scan *YaraFileScanOptions) LoadBuiltRule() {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() {
+		if !d.IsDir() && strings.Contains(d.Name(), ".yar") {
 			ruleContent, err := yaraRules.RulesFS.ReadFile(path)
 			if err != nil {
 				return err
