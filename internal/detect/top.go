@@ -1,16 +1,18 @@
-//go:build linux || windows
+//go:build linux || windows || darwin
 
 package detect
 
 import (
 	"fmt"
-	"github.com/m-sec-org/d-eyes/internal"
-	"github.com/m-sec-org/d-eyes/pkg/color"
-	"github.com/shirou/gopsutil/v4/process"
-	"github.com/urfave/cli/v2"
 	"os"
 	"sort"
 	"time"
+
+	"github.com/shirou/gopsutil/v4/process"
+	"github.com/urfave/cli/v2"
+
+	"github.com/m-sec-org/d-eyes/internal"
+	"github.com/m-sec-org/d-eyes/pkg/color"
 )
 
 type (
@@ -48,7 +50,13 @@ func (top *TopOptions) InitCommand() []*cli.Command {
 			Usage: "Command for displaying the top 15 processes in CPU usage",
 			// 这是执行命令只会激活的函数
 			Action: top.Action,
-		}}
+		},
+	}
+}
+
+type PsWithCpu struct {
+	p   *process.Process
+	cpu float64
 }
 
 func (top *TopOptions) Action(c *cli.Context) error {
@@ -57,37 +65,45 @@ func (top *TopOptions) Action(c *cli.Context) error {
 		fmt.Println(color.Red.Sprint(err.Error()))
 		return nil
 	}
+	PsWithCpuList := make([]PsWithCpu, 0, len(ps))
+	for i := range ps {
+		cpu, _ := ps[i].CPUPercent()
+		PsWithCpuList = append(
+			PsWithCpuList,
+			PsWithCpu{
+				p:   ps[i],
+				cpu: cpu,
+			},
+		)
+	}
 
 	sort.Slice(
-		ps, func(i, j int) bool {
-			pic, _ := ps[i].CPUPercent()
-			pjc, _ := ps[j].CPUPercent()
-			return pic > pjc
+		PsWithCpuList, func(i, j int) bool {
+			return PsWithCpuList[i].cpu > PsWithCpuList[j].cpu
 		},
 	)
-	pss := Process{Process: ps}
 	CPUSum := 0
 	fmt.Println(color.Green.Sprint("=============================================================================================="))
-	for _, ps := range pss.Process {
+	for i := range PsWithCpuList {
 		pid := os.Getpid()
-		if pid == int(ps.Pid) {
+		if pid == int(PsWithCpuList[i].p.Pid) {
 			continue
 		}
 		CPUSum++
 		fmt.Println(color.Green.Sprint("* CPU Top ", CPUSum))
 		fmt.Println()
-		_pct, _ := ps.CreateTime()
-		_pPath, _ := ps.Exe()
-		_pCpuP, _ := ps.CPUPercent()
+		_pct, _ := PsWithCpuList[i].p.CreateTime()
+		_pPath, _ := PsWithCpuList[i].p.Exe()
+		_pCpuP, _ := PsWithCpuList[i].p.CPUPercent()
 		startDate := time.Unix(_pct, 0).Format("2006-01-02 15:04:05")
-		username, _ := ps.Username()
-		MemPer, _ := ps.MemoryPercent()
+		username, _ := PsWithCpuList[i].p.Username()
+		MemPer, _ := PsWithCpuList[i].p.MemoryPercent()
 		fmt.Printf(
 			"[User]:%s | [Pid]:%d  | [Path]:%s | [CPU]:%.5f | [Memory]:%.5f | [Createdtime]:%v \n",
-			username, ps.Pid, _pPath, _pCpuP, MemPer, startDate,
+			username, PsWithCpuList[i].p.Pid, _pPath, _pCpuP, MemPer, startDate,
 		)
 		//network
-		_ps, _ := ps.Connections()
+		_ps, _ := PsWithCpuList[i].p.Connections()
 		if len(_ps) == 0 {
 			fmt.Println("[netstat]: null")
 		} else {

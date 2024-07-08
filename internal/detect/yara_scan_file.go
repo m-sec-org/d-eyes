@@ -7,14 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/hillu/go-yara/v4"
-	"github.com/m-sec-org/d-eyes/internal"
-	"github.com/m-sec-org/d-eyes/internal/constant"
-	"github.com/m-sec-org/d-eyes/internal/utils"
-	"github.com/m-sec-org/d-eyes/pkg/color"
-	"github.com/m-sec-org/d-eyes/yaraRules"
-	"github.com/urfave/cli/v2"
-	"github.com/xuri/excelize/v2"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -22,6 +14,16 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/hillu/go-yara/v4"
+	"github.com/urfave/cli/v2"
+	"github.com/xuri/excelize/v2"
+
+	"github.com/m-sec-org/d-eyes/internal"
+	"github.com/m-sec-org/d-eyes/internal/constant"
+	"github.com/m-sec-org/d-eyes/internal/utils"
+	"github.com/m-sec-org/d-eyes/pkg/color"
+	"github.com/m-sec-org/d-eyes/yaraRules"
 )
 
 var fileCompiler *yara.Compiler
@@ -145,18 +147,20 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 		for i := 0; i < scan.Thread; i++ {
 			go scan.scanFile(AllFile, Wg, &result)
 		}
-		_ = filepath.Walk(dir, func(path string, info fs.FileInfo, _ error) error {
-			if !info.IsDir() {
-				// 不是目录
-				if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) && info.Name() != "D-Eyes.exe" {
-					// 添加文件到chan
-					AllFile <- path
-					Wg.Add(1)
-					scanTotal += 1
+		_ = filepath.Walk(
+			dir, func(path string, info fs.FileInfo, _ error) error {
+				if !info.IsDir() {
+					// 不是目录
+					if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) && info.Name() != "D-Eyes.exe" {
+						// 添加文件到chan
+						AllFile <- path
+						Wg.Add(1)
+						scanTotal += 1
+					}
 				}
-			}
-			return nil
-		})
+				return nil
+			},
+		)
 	}
 	// 扫描用户指定目录
 	if scan.Path != "" {
@@ -175,18 +179,20 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 					Wg.Add(1)
 					scanTotal += 1
 				} else {
-					_ = filepath.Walk(pathUse, func(path string, info fs.FileInfo, _ error) error {
-						if !info.IsDir() {
-							// 不是目录
-							if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) && info.Name() != "D-Eyes.exe" {
-								// 添加文件到chan
-								AllFile <- path
-								Wg.Add(1)
-								scanTotal += 1
+					_ = filepath.Walk(
+						pathUse, func(path string, info fs.FileInfo, _ error) error {
+							if !info.IsDir() {
+								// 不是目录
+								if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) && info.Name() != "D-Eyes.exe" {
+									// 添加文件到chan
+									AllFile <- path
+									Wg.Add(1)
+									scanTotal += 1
+								}
 							}
-						}
-						return nil
-					})
+							return nil
+						},
+					)
 				}
 			}
 		}
@@ -247,22 +253,24 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 	return nil
 }
 func (scan *YaraFileScanOptions) LoadBuiltRule() {
-	err := fs.WalkDir(yaraRules.RulesFS, ".", func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && strings.Contains(d.Name(), ".yar") {
-			ruleContent, err := yaraRules.RulesFS.ReadFile(path)
+	err := fs.WalkDir(
+		yaraRules.RulesFS, ".", func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			err = fileCompiler.AddString(string(ruleContent), "")
-			if err != nil {
-				return err
+			if !d.IsDir() && strings.Contains(d.Name(), ".yar") {
+				ruleContent, err := yaraRules.RulesFS.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				err = fileCompiler.AddString(string(ruleContent), "")
+				if err != nil {
+					return err
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		},
+	)
 	if err != nil {
 		//fmt.Println(color.Magenta.Sprintf("加载内置yara规则失败"))
 		fmt.Println(color.Magenta.Sprintf("Failed to load the built-in yara rule"))

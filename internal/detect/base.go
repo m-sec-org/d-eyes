@@ -4,11 +4,13 @@ package detect
 
 import (
 	"fmt"
-	"github.com/m-sec-org/d-eyes/internal"
-	"github.com/m-sec-org/d-eyes/pkg/color"
+	"os/user"
+
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/urfave/cli/v2"
-	"os/user"
+
+	"github.com/m-sec-org/d-eyes/internal"
+	"github.com/m-sec-org/d-eyes/pkg/color"
 )
 
 var HostOption *HostOptions
