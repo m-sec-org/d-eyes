@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"time"
+
 	"github.com/m-sec-org/d-eyes/internal"
 	_ "github.com/m-sec-org/d-eyes/internal"
 	_ "github.com/m-sec-org/d-eyes/internal/detect"
@@ -10,8 +13,6 @@ import (
 	"github.com/m-sec-org/d-eyes/pkg/color"
 	"github.com/m-sec-org/d-eyes/pkg/logo"
 	"github.com/m-sec-org/d-eyes/pkg/logs"
-	"os"
-	"time"
 )
 
 func init() {

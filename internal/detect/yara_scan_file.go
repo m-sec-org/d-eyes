@@ -1,4 +1,4 @@
-//go:build linux || windows
+//go:build linux || windows || darwin
 
 package detect
 
@@ -179,8 +179,11 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 					Wg.Add(1)
 					scanTotal += 1
 				} else {
-					_ = filepath.Walk(
-						pathUse, func(path string, info fs.FileInfo, _ error) error {
+					err = filepath.Walk(
+						pathUse, func(path string, info fs.FileInfo, err error) error {
+							if err != nil {
+								return nil
+							}
 							if !info.IsDir() {
 								// 不是目录
 								if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) && info.Name() != "D-Eyes.exe" {
@@ -193,6 +196,11 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 							return nil
 						},
 					)
+					if err != nil {
+						//fmt.Println(color.Magenta.Sprintf("扫描目录失败"))
+						fmt.Println(color.Magenta.Sprintf("Failed to scan the directory"))
+						continue
+					}
 				}
 			}
 		}
