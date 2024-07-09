@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hillu/go-yara/v4"
 	"github.com/urfave/cli/v2"
@@ -47,8 +48,12 @@ type YaraFileScanOptions struct {
 	RulesErr error
 	// 线程
 	Thread int
-	// 路径列表
-	PathList []string
+	// 超时时间
+	Timeout time.Duration
+	// 输出excel
+	EnableExcel bool
+	// 排除目录
+	ExcludeDir cli.StringSlice
 	internal.BaseOption
 }
 
@@ -59,7 +64,7 @@ func NewDetectPluginYaraFileScan() *YaraFileScanOptions {
 		Rules:    nil,
 		RulesErr: nil,
 		Thread:   0,
-		PathList: nil,
+		Timeout:  0,
 		BaseOption: internal.BaseOption{
 			Name:        "yara file scan",
 			Author:      "msec",
@@ -86,8 +91,9 @@ func (scan *YaraFileScanOptions) InitCommand() []*cli.Command {
 					Name:    "path",
 					Aliases: []string{"p"},
 					// 指定的文件或文件夹进行扫描
-					Usage:       "The specified file or folder is scanned\n                     example: --path C:\\ or -p C:\\,D:\\ \n                     Empty means scan all files, use with caution!\n",
+					Usage:       "The specified file or folder is scanned\n                     example: --path C:\\ or -p C:\\,D:\\ \n                     Empty means scan current dir\n",
 					Destination: &YaraFileScanOption.Path,
+					Value:       "./",
 				},
 				&cli.StringFlag{
 					Name:    "rule",
@@ -105,20 +111,42 @@ func (scan *YaraFileScanOptions) InitCommand() []*cli.Command {
 					// 默认线程数量
 					Value: 50,
 				},
+				&cli.DurationFlag{
+					Name:    "timeout",
+					Aliases: []string{"to"},
+					// 指定扫描超时时间
+					Usage:       "scan timeout for single file in seconds\n          example: --timeout 50 or -to 50",
+					Destination: &YaraFileScanOption.Timeout,
+					Value:       10,
+				},
+				&cli.BoolFlag{
+					Name:        "excel",
+					Usage:       "Output the scan results to an excel file",
+					Destination: &YaraFileScanOption.EnableExcel,
+					Value:       false,
+				},
+				&cli.StringSliceFlag{
+					Name:        "exclude",
+					Aliases:     []string{"e"},
+					Usage:       "Exclude directories",
+					Destination: &YaraFileScanOption.ExcludeDir,
+					Value:       cli.NewStringSlice(),
+				},
 			},
 		},
 	}
 }
 func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
-	var result []FileResult
-	var AllFile = make(chan string, 500)
-	var scanTotal int64
-	Wg := &sync.WaitGroup{}
-	dir, err := os.Getwd()
+	selfPath, err := os.Getwd()
 	if err != nil {
 		//fmt.Println(color.Magenta.Sprintf("获取当前目录失败"))
 		fmt.Println(color.Magenta.Sprintf("Failed to obtain the current directory. Procedure"))
 		// 获取目录失败就退出
+		os.Exit(1)
+	}
+	selfExecutable, err := os.Executable()
+	if err != nil {
+		fmt.Println(color.Magenta.Sprintf("Failed to obtain the current executable file. Procedure"))
 		os.Exit(1)
 	}
 	// 初始化 YARA
@@ -134,8 +162,7 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 			fmt.Println(color.Magenta.Sprint(scan.RulesErr.Error()))
 			os.Exit(1)
 		}
-	}
-	if scan.RulePath == "" {
+	} else {
 		scan.LoadBuiltRule()
 		if scan.RulesErr != nil {
 			fmt.Println(color.Magenta.Sprint(scan.RulesErr.Error()))
@@ -143,97 +170,19 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 		}
 	}
 	if scan.Path == "" {
-		// 扫描当前目录下的所有文件以及子文件
-		for i := 0; i < scan.Thread; i++ {
-			go scan.scanFile(AllFile, Wg, &result)
-		}
-		_ = filepath.Walk(
-			dir, func(path string, info fs.FileInfo, _ error) error {
-				if !info.IsDir() {
-					// 不是目录
-					if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) && info.Name() != "D-Eyes.exe" {
-						// 添加文件到chan
-						AllFile <- path
-						Wg.Add(1)
-						scanTotal += 1
-					}
-				}
-				return nil
-			},
-		)
+		scan.Path = "./"
 	}
-	// 扫描用户指定目录
-	if scan.Path != "" {
-		for i := 0; i < scan.Thread; i++ {
-			go scan.scanFile(AllFile, Wg, &result)
-		}
-		pathListTemp := strings.Split(scan.Path, ",")
-		for _, pathTemp := range pathListTemp {
-			pathUse, info, err := utils.CheckPath(pathTemp)
-			if err != nil {
-				// 输入的路径有问题
-			} else {
-				if !info.IsDir() {
-					// 不是目录
-					AllFile <- pathUse
-					Wg.Add(1)
-					scanTotal += 1
-				} else {
-					err = filepath.Walk(
-						pathUse, func(path string, info fs.FileInfo, err error) error {
-							if err != nil {
-								return nil
-							}
-							if !info.IsDir() {
-								// 不是目录
-								if !slices.Contains(constant.SkipSuffix, strings.ToLower(filepath.Ext(info.Name()))) && info.Name() != "D-Eyes.exe" {
-									// 添加文件到chan
-									AllFile <- path
-									Wg.Add(1)
-									scanTotal += 1
-								}
-							}
-							return nil
-						},
-					)
-					if err != nil {
-						//fmt.Println(color.Magenta.Sprintf("扫描目录失败"))
-						fmt.Println(color.Magenta.Sprintf("Failed to scan the directory"))
-						continue
-					}
-				}
-			}
-		}
-	}
-	Wg.Wait()
-	if len(result) > 0 {
-		length := len(result)
-		vulSumTmp := 0
-		categories := map[string]string{
-			"A1": "Risk Description", "B1": "Risk File Path",
-		}
-		var values = make(map[string]string)
-		for i := 0; i < length; i++ {
-			vulSumTmp++
-			fmt.Println(color.Magenta.Sprint("[ Risk ", vulSumTmp, " ]"))
-			fmt.Print("Risk Description: ")
-			fmt.Println(color.Magenta.Sprint(result[i].Risk))
-			fmt.Print("Risk File Path: ")
-			fmt.Println(color.Magenta.Sprint(result[i].RiskPath))
-			excelValueTmpA := "A" + strconv.Itoa(vulSumTmp+1)
-			excelValueTmpB := "B" + strconv.Itoa(vulSumTmp+1)
-			values[excelValueTmpA] = result[i].Risk
-			values[excelValueTmpB] = result[i].RiskPath
-		}
-		//output to a excel
-		f := excelize.NewFile()
-		FileExcelErr = f.SetColWidth("Sheet1", "A", "B", 50)
-		for k, v := range categories {
-			FileExcelErr = f.SetCellValue("Sheet1", k, v)
-		}
-		for k, v := range values {
-			FileExcelErr = f.SetCellValue("Sheet1", k, v)
-		}
+
+	var scanTotal int64
+	scanJobChan := make(chan string, 500)
+	scanResultChan := make(chan FileResult, 500)
+
+	// 结果输出协程
+	vulSumTmp := 0
+	f := excelize.NewFile()
+	if scan.EnableExcel {
+		_ = f.SetCellValue("Sheet1", "A1", "Risk Description")
+		_ = f.SetCellValue("Sheet1", "B1", "Risk File Path")
 		style, err := f.NewStyle(
 			&excelize.Style{
 				Font: &excelize.Font{
@@ -246,20 +195,86 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 		if err != nil {
 			fmt.Println(err)
 		}
-		FileExcelErr = f.SetCellStyle("Sheet1", "A1", "A1", style)
-		FileExcelErr = f.SetCellStyle("Sheet1", "B1", "B1", style)
-		// save the result to d-eyes.xlsx
-		if err := f.SaveAs(dir + "d-eyes.xlsx"); err != nil {
+		_ = f.SetCellStyle("Sheet1", "A1", "A1", style)
+		_ = f.SetCellStyle("Sheet1", "B1", "B1", style)
+	}
+	var wgRes sync.WaitGroup
+	wgRes.Add(1)
+	go func() {
+		wgRes.Done()
+		for res := range scanResultChan {
+			vulSumTmp++
+			fmt.Println(color.Magenta.Sprint("[ Risk ", vulSumTmp, " ]"))
+			fmt.Print("Risk Description: ")
+			fmt.Println(color.Magenta.Sprint(res.Risk))
+			fmt.Print("Risk File Path: ")
+			fmt.Println(color.Magenta.Sprint(res.RiskPath))
+			if scan.EnableExcel {
+				index := strconv.Itoa(vulSumTmp + 1)
+				cellA := "A" + index
+				cellB := "B" + index
+				_ = f.SetCellValue("Sheet1", cellA, res.Risk)
+				_ = f.SetCellValue("Sheet1", cellB, res.RiskPath)
+			}
+		}
+	}()
+
+	wgScan := sync.WaitGroup{}
+	wgScan.Add(scan.Thread)
+	// 启动文件扫描协程
+	for i := 0; i < scan.Thread; i++ {
+		go scan.scanFileWorker(scanJobChan, scanResultChan, &wgScan)
+	}
+
+	// 启动路径遍历生产者
+	pathListTemp := strings.Split(scan.Path, ",")
+	for i := range pathListTemp {
+		err := filepath.WalkDir(
+			pathListTemp[i], func(path string, d fs.DirEntry, err error) error {
+				for _, pattern := range scan.ExcludeDir.Value() {
+					ok, _ := filepath.Match(pattern, path)
+					if ok {
+						return filepath.SkipDir
+					}
+				}
+				if d.IsDir() {
+					return nil
+				}
+				// 跳过扫描白名单
+				if slices.Contains(constant.SkipSuffix, filepath.Ext(d.Name())) {
+					return nil
+				}
+				// 跳过扫描自身
+				if path == selfExecutable {
+					return nil
+				}
+				scanJobChan <- path
+				scanTotal += 1
+				return nil
+			},
+		)
+		if err != nil {
+			// todo 更详细的错误信息和等级
+			continue
+		}
+	}
+	close(scanJobChan)
+	wgScan.Wait()
+	close(scanResultChan)
+	wgRes.Wait()
+	if scan.EnableExcel {
+		err := f.SaveAs(filepath.Join(selfPath, "result.xlsx"))
+		if err != nil {
 			fmt.Println(err)
 		}
-	} else {
+	}
+	if vulSumTmp == 0 {
 		fmt.Println(color.Green.Sprint("No suspicious files found. Your computer is safe with the rules you choose."))
 	}
-	//
 	fmt.Println(color.Magenta.Sprintf("The scan is complete. %d files have been scanned", scanTotal))
-	close(AllFile)
 	return nil
 }
+
 func (scan *YaraFileScanOptions) LoadBuiltRule() {
 	err := fs.WalkDir(
 		yaraRules.RulesFS, ".", func(path string, d os.DirEntry, err error) error {
@@ -332,24 +347,25 @@ func (scan *YaraFileScanOptions) LoadOneRule(rulePath string) {
 	scan.Rules = nil
 	scan.RulesErr = errors.New("failed to obtain the built-in yara rule. Procedure")
 }
-func (scan *YaraFileScanOptions) scanFile(files chan string, wg *sync.WaitGroup, result *[]FileResult) {
-	for targetFile := range files {
+func (scan *YaraFileScanOptions) scanFileWorker(scanJobChan chan string, resultChan chan FileResult, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for targetFile := range scanJobChan {
 		//fmt.Printf("扫描文件： %s\n", targetFile)
 		var matches yara.MatchRules
-		err := scan.Rules.ScanFile(targetFile, 0, 0, &matches)
+		err := scan.Rules.ScanFile(targetFile, 0, time.Second*scan.Timeout, &matches)
 		if err != nil {
-			wg.Done()
+			//fmt.Println(color.Red.Sprint("扫描失败", targetFile, " ", err))
 			continue
 		}
-		if len(matches) != 0 {
-			data := matches[0].Metas[0]
-			dataType, _ := json.Marshal(data)
-			dataString := string(dataType)
-			meta := strings.Split(dataString, ":")[2]
-			metaTmp := strings.Trim(meta, "\"}")
-			resTmp := FileResult{Risk: metaTmp, RiskPath: targetFile}
-			*result = append(*result, resTmp)
+		for i := range matches {
+			for j := range matches[i].Metas {
+				data := matches[i].Metas[j]
+				dataType, _ := json.Marshal(data)
+				dataString := string(dataType)
+				meta := strings.Split(dataString, ":")[2]
+				metaTmp := strings.Trim(meta, "\"}")
+				resultChan <- FileResult{Risk: metaTmp, RiskPath: targetFile}
+			}
 		}
-		wg.Done()
 	}
 }
