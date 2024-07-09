@@ -4,10 +4,12 @@ package detect
 
 import (
 	"fmt"
+
+	"github.com/urfave/cli/v2"
+
 	"github.com/m-sec-org/d-eyes/internal"
 	"github.com/m-sec-org/d-eyes/internal/detect/check"
 	"github.com/m-sec-org/d-eyes/pkg/color"
-	"github.com/urfave/cli/v2"
 )
 
 var CheckOption *CheckOptions
