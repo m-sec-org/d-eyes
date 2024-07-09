@@ -229,8 +229,14 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 	// 启动路径遍历生产者
 	pathListTemp := strings.Split(scan.Path, ",")
 	for i := range pathListTemp {
-		err := filepath.WalkDir(
-			pathListTemp[i], func(path string, d fs.DirEntry, err error) error {
+		// get abs path
+		pathAbs, err := filepath.Abs(pathListTemp[i])
+		if err != nil {
+			fmt.Println(color.Red.Sprintf("Failed to get the absolute path of the specified file or folder. Procedure"))
+			continue
+		}
+		err = filepath.WalkDir(
+			pathAbs, func(path string, d fs.DirEntry, err error) error {
 				for _, pattern := range scan.ExcludeDir.Value() {
 					ok, _ := filepath.Match(pattern, path)
 					if ok {
