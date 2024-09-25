@@ -154,10 +154,18 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 		fmt.Println(color.Magenta.Sprintf("Failed to create the YARA compiler"))
 		os.Exit(1)
 	}
-	if scan.RulePath != "" {
-		scan.LoadYaraRule(os.DirFS(scan.RulePath))
+	if scan.RulePath == "" {
+		scan.LoadYaraRulesDir(yaraRules.RulesFS)
 	} else {
-		scan.LoadYaraRule(yaraRules.RulesFS)
+		info, err := os.Stat(scan.RulePath)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			scan.LoadYaraRulesDir(os.DirFS(scan.RulePath))
+		} else {
+			scan.LoadYaraRuleFile(scan.RulePath)
+		}
 	}
 	if scan.RulesErr != nil {
 		fmt.Println(color.Magenta.Sprint(scan.RulesErr.Error()))
@@ -268,20 +276,23 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 			fmt.Println(err)
 		}
 	}
-	if vulSumTmp == 0 {
+	if vulSumTmp == 0 && scan.Rules != nil {
 		fmt.Println(color.Green.Sprint("No suspicious files found. Your computer is safe with the rules you choose."))
 	}
 	fmt.Println(color.Magenta.Sprintf("The scan is complete. %d files have been scanned", scanTotal))
 	return nil
 }
 
-func (scan *YaraFileScanOptions) LoadYaraRule(ruleFs fs.FS) {
+func (scan *YaraFileScanOptions) LoadYaraRulesDir(ruleFs fs.FS) {
 	err := fs.WalkDir(
 		ruleFs, ".", func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			if !d.IsDir() && strings.Contains(d.Name(), ".yar") {
+			if d.IsDir() {
+				return nil
+			}
+			if strings.Contains(d.Name(), ".yar") {
 				ruleContent, err := yaraRules.RulesFS.ReadFile(path)
 				if err != nil {
 					return err
@@ -296,22 +307,44 @@ func (scan *YaraFileScanOptions) LoadYaraRule(ruleFs fs.FS) {
 	)
 	if err != nil {
 		//fmt.Println(color.Magenta.Sprintf("加载内置yara规则失败"))
-		fmt.Println(color.Magenta.Sprintf("Failed to load the built-in yara rule"))
+		fmt.Println(color.Red.Sprintf("Failed to load the yara rule"))
 		scan.Rules = nil
 		scan.RulesErr = err
-
+		return
 	}
 	// 获取编译后的规则
 	rules, err := fileCompiler.GetRules()
 	if err != nil {
 		//fmt.Println(color.Magenta.Sprintf("获取内置yara规则失败"))
-		fmt.Println(color.Magenta.Sprintf("Failed to obtain the built-in yara rule. Procedure"))
+		fmt.Println(color.Magenta.Sprintf("Failed to compiler the yara rule. Procedure"))
 		scan.Rules = nil
 		scan.RulesErr = err
-
+		return
 	}
 	scan.Rules = rules
 	scan.RulesErr = nil
+}
+
+func (scan *YaraFileScanOptions) LoadYaraRuleFile(path string) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		scan.Rules = nil
+		scan.RulesErr = err
+		return
+	}
+	file, err := os.Open(absPath)
+	if err != nil {
+		scan.Rules = nil
+		scan.RulesErr = err
+		return
+	}
+	err = fileCompiler.AddFile(file, "")
+	if err != nil {
+		scan.Rules = nil
+		scan.RulesErr = err
+		return
+	}
+	scan.Rules, scan.RulesErr = fileCompiler.GetRules()
 }
 
 func (scan *YaraFileScanOptions) scanFileWorker(scanJobChan chan string, resultChan chan FileResult, wg *sync.WaitGroup) {
