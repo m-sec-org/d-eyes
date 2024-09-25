@@ -20,7 +20,7 @@ func init() {
 			Aliases: []string{"v"},
 			Usage:   "Show the version of d-eyes",
 			Action: func(c *cli.Context) error {
-				fmt.Println(color.Green.Sprint("v1.3.0"))
+				fmt.Println(color.Green.Sprint("v1.3.1"))
 				return nil
 			},
 		},

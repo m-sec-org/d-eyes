@@ -5,7 +5,6 @@ package detect
 import (
 	//_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -22,7 +21,6 @@ import (
 
 	"github.com/m-sec-org/d-eyes/internal"
 	"github.com/m-sec-org/d-eyes/internal/constant"
-	"github.com/m-sec-org/d-eyes/internal/utils"
 	"github.com/m-sec-org/d-eyes/pkg/color"
 	"github.com/m-sec-org/d-eyes/yaraRules"
 )
@@ -157,17 +155,13 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 		os.Exit(1)
 	}
 	if scan.RulePath != "" {
-		scan.LoadOneRule(scan.RulePath)
-		if scan.RulesErr != nil {
-			fmt.Println(color.Magenta.Sprint(scan.RulesErr.Error()))
-			os.Exit(1)
-		}
+		scan.LoadYaraRule(os.DirFS(scan.RulePath))
 	} else {
-		scan.LoadBuiltRule()
-		if scan.RulesErr != nil {
-			fmt.Println(color.Magenta.Sprint(scan.RulesErr.Error()))
-			os.Exit(1)
-		}
+		scan.LoadYaraRule(yaraRules.RulesFS)
+	}
+	if scan.RulesErr != nil {
+		fmt.Println(color.Magenta.Sprint(scan.RulesErr.Error()))
+		os.Exit(1)
 	}
 	if scan.Path == "" {
 		scan.Path = "./"
@@ -281,9 +275,9 @@ func (scan *YaraFileScanOptions) Action(c *cli.Context) error {
 	return nil
 }
 
-func (scan *YaraFileScanOptions) LoadBuiltRule() {
+func (scan *YaraFileScanOptions) LoadYaraRule(ruleFs fs.FS) {
 	err := fs.WalkDir(
-		yaraRules.RulesFS, ".", func(path string, d os.DirEntry, err error) error {
+		ruleFs, ".", func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -319,40 +313,7 @@ func (scan *YaraFileScanOptions) LoadBuiltRule() {
 	scan.Rules = rules
 	scan.RulesErr = nil
 }
-func (scan *YaraFileScanOptions) LoadOneRule(rulePath string) {
-	path, info, err := utils.CheckPath(rulePath)
-	if err != nil {
-		scan.Rules = nil
-		scan.RulesErr = errors.New("failed to obtain the built-in yara rule. Procedure")
-	}
-	if path != "" && info != nil {
-		if !info.IsDir() {
-			//open the yara rule
-			file, err := os.OpenFile(path, os.O_RDONLY, 0666)
-			if err != nil {
-				scan.Rules = nil
-				scan.RulesErr = fmt.Errorf("could not open rules file \"%s\", reason: %w", path, err)
 
-			}
-			defer func(file *os.File) {
-				err := file.Close()
-				if err != nil {
-
-				}
-			}(file)
-
-			errRet := fileCompiler.AddFile(file, "")
-			if errRet != nil {
-				scan.Rules = nil
-				scan.RulesErr = fmt.Errorf("could not compile rules file \"%s\", reason: %w", path, err)
-
-			}
-			scan.Rules, scan.RulesErr = fileCompiler.GetRules()
-		}
-	}
-	scan.Rules = nil
-	scan.RulesErr = errors.New("failed to obtain the built-in yara rule. Procedure")
-}
 func (scan *YaraFileScanOptions) scanFileWorker(scanJobChan chan string, resultChan chan FileResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for targetFile := range scanJobChan {
