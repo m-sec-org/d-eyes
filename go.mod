@@ -5,8 +5,11 @@ go 1.22.1
 require (
 	github.com/fatih/color v1.17.0
 	github.com/hillu/go-yara/v4 v4.3.2
+	github.com/pkg/errors v0.9.1
 	github.com/shirou/gopsutil/v4 v4.24.5
 	github.com/urfave/cli/v2 v2.27.2
+	golang.org/x/term v0.17.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -39,7 +42,7 @@ require (
 	github.com/xuri/nfp v0.0.0-20230919160717-d98342af3f05 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4
 	golang.org/x/crypto v0.19.0 // indirect
-	golang.org/x/net v0.21.0 // indirect
+	golang.org/x/net v0.21.0
 	golang.org/x/sys v0.20.0
 	golang.org/x/text v0.14.0 // indirect
 )
