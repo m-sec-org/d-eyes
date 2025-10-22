@@ -8,6 +8,7 @@ var (
 	Magenta *color.Color
 	Red     *color.Color
 	Blue    *color.Color
+	Cyan    *color.Color = color.New(color.FgCyan, color.Bold)
 )
 
 func init() {
