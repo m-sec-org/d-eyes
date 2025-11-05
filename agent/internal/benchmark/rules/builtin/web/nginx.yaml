@@ -1,0 +1,54 @@
+rules:
+  - id: web_nginx_server_tokens
+    title: "Ensure Nginx server_tokens is disabled"
+    description: "CIS Nginx - hide version information"
+    severity: MEDIUM
+    remediation: |
+      Configure server_tokens off; in nginx.conf and reload nginx.
+    references:
+      - "CIS Nginx Benchmark"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "server_tokens"
+        command: "grep"
+        args: ["-R", "server_tokens", "/etc/nginx/nginx.conf"]
+        expect:
+          operator: contains
+          value: "off"
+        fail_on_error: false
+
+  - id: web_nginx_https_redirect
+    title: "Ensure HTTP to HTTPS redirection is configured"
+    description: "CIS Nginx - enforce secure transport"
+    severity: HIGH
+    remediation: |
+      Configure server { if ($scheme = http) { return 301 https://$host$request_uri; } }
+    references:
+      - "CIS Nginx Benchmark"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "https_redirect"
+        command: "grep"
+        args: ["-R", "return 301 https", "/etc/nginx/sites-enabled"]
+        expect:
+          operator: contains
+          value: "return 301 https"
+        fail_on_error: false
+
+  - id: web_nginx_ssl_protocols
+    title: "Ensure Nginx uses strong TLS versions"
+    description: "OpenSCAP Nginx hardening"
+    severity: HIGH
+    remediation: |
+      Configure ssl_protocols TLSv1.2 TLSv1.3; in nginx.conf and reload nginx.
+    references:
+      - "OpenSCAP Nginx Hardening"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "ssl_protocols"
+        command: "grep"
+        args: ["-R", "ssl_protocols", "/etc/nginx/nginx.conf"]
+        expect:
+          operator: contains
+          value: "TLSv1.2"
+        fail_on_error: false

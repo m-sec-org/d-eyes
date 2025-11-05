@@ -1,0 +1,36 @@
+rules:
+  - id: app_weblogic_console_secure
+    title: "Ensure WebLogic console access is restricted"
+    description: "OpenSCAP WebLogic hardening - admin console must require authentication"
+    severity: HIGH
+    remediation: |
+      Configure WebLogic admin console to require SSL and strong authentication.
+    references:
+      - "OpenSCAP WebLogic Hardening"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "console_secure_mode"
+        command: "wlst.sh"
+        args: ["checkConsoleSecure.py"]
+        expect:
+          operator: contains
+          value: "SECURE"
+        fail_on_error: false
+
+  - id: app_weblogic_ssl
+    title: "Ensure WebLogic SSL is enabled"
+    description: "CIS WebLogic - Admin channel should use TLS"
+    severity: MEDIUM
+    remediation: |
+      Configure administration channel with SSL and disable plaintext ports.
+    references:
+      - "CIS Oracle WebLogic Benchmark"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "ssl_enabled"
+        command: "wlst.sh"
+        args: ["checkSSL.py"]
+        expect:
+          operator: contains
+          value: "ENABLED"
+        fail_on_error: false

@@ -1,0 +1,54 @@
+rules:
+  - id: os_windows_admin_account
+    title: "Ensure default Administrator account is renamed or disabled"
+    description: "CIS Windows Server benchmark - rename or disable built-in Administrator"
+    severity: HIGH
+    remediation: |
+      Use the Local Security Policy or Group Policy to rename and disable the built-in Administrator account.
+    references:
+      - "CIS Microsoft Windows Server Benchmark 1.1"
+    platforms: ["windows"]
+    checks:
+      - name: "administrator_status"
+        command: "powershell"
+        args: ["-Command", "(Get-LocalUser -Name 'Administrator').Enabled"]
+        expect:
+          operator: equals
+          value: "False"
+        fail_on_error: false
+
+  - id: os_windows_auto_update
+    title: "Ensure Windows Update is enabled"
+    description: "Verify Windows Update service startup is not disabled"
+    severity: MEDIUM
+    remediation: |
+      Configure Windows Update service startup type to Automatic and ensure it is running.
+    references:
+      - "CIS Microsoft Windows Server Benchmark 18.9"
+    platforms: ["windows"]
+    checks:
+      - name: "windows_update_service"
+        command: "powershell"
+        args: ["-Command", "(Get-Service -Name wuauserv).StartType"]
+        expect:
+          operator: contains
+          value: "Automatic"
+        fail_on_error: false
+
+  - id: os_windows_firewall
+    title: "Ensure Windows Firewall is enabled"
+    description: "Check that all profiles of Windows Firewall are enabled"
+    severity: HIGH
+    remediation: |
+      Use PowerShell: Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True.
+    references:
+      - "CIS Microsoft Windows Server Benchmark 9.1"
+    platforms: ["windows"]
+    checks:
+      - name: "firewall_state"
+        command: "powershell"
+        args: ["-Command", "(Get-NetFirewallProfile | Where-Object {$_.Enabled -eq 0}).Count"]
+        expect:
+          operator: equals
+          value: "0"
+        fail_on_error: false

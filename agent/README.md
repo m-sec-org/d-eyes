@@ -1,0 +1,312 @@
+# D-Eyes Agent —— 多场景安全检测与响应工具
+
+D-Eyes Agent 是 D-Eyes 安全平台的核心执行组件，由 M-SEC 社区驱动，提供面向安全响应、合规审计、资产梳理以及供应链安全的多场景检测能力。项目采用 Go 语言实现，关注可移植性与可扩展性，通过统一的任务式命令行体验帮助安全工程师快速落地各类检查流程。Agent 既可独立运行执行单机检测任务，也可与 D-Eyes Server 协同工作，支持分布式任务调度与管理。
+
+## 功能概述
+
+Agent 作为 D-Eyes 平台的执行引擎，负责安全检测任务的实际运行与结果收集，具备以下核心能力：
+
+- **多场景安全检测**：提供应急响应、基线检查、合规审计、资产梳理、供应链安全、入侵和攻击模拟(BAS)六大类任务场景
+- **统一的任务执行框架**：所有任务共享配置加载、报告生成、风险评估等基础设施
+- **插件化架构**：支持通过插件机制扩展检测能力，如自定义 YARA 规则和检测模块
+- **分布式执行支持**：可与 Server 端协同，支持大规模环境下的任务分发与集中管理
+- **离线工作能力**：支持断线重连和结果缓存，保证任务可靠执行
+
+## 能力特性
+
+### 1. 应急响应 (respond)
+
+应急响应模块提供面向安全事件的快速排查能力，帮助用户在安全事件发生时快速定位问题。
+
+- **主机概要分析**：收集主机基本信息、运行进程、启动项等数据
+- **文件扫描**：基于 YARA 规则扫描可疑文件，支持常见恶意软件检测
+- **网络连接分析**：检测异常网络连接、可疑端口和未授权通信
+- **用户会话审计**：检查异常登录和可疑用户活动
+
+支持多种检测模式，包括快速检查、勒索软件检测和持久化检查。
+
+### 2. 基线检查 (baseline)
+
+基线检查模块用于评估系统配置是否符合安全最佳实践，识别潜在的安全漏洞和配置缺陷。
+
+- **操作系统基线**：检查系统安全配置、用户权限、密码策略等
+- **数据库基线**：评估数据库安全配置、访问控制和审计设置
+- **中间件基线**：检查 Web 服务器、应用服务器等中间件的安全配置
+
+可按范围选择检查内容，支持操作系统、数据库或全量基线检查。
+
+### 3. 合规审计 (audit)
+
+合规审计模块整合基线检查结果、主机信息和用户会话数据，生成全面的合规审计报告。
+
+- **自动基线执行**：自动运行相关基线检查项
+- **主机信息汇总**：收集和整理主机关键信息
+- **用户会话分析**：识别异常用户活动和权限问题
+- **合规报告生成**：提供符合合规要求的详细报告和整改建议
+
+### 4. 资产梳理 (inventory)
+
+资产梳理模块用于发现和管理网络环境中的各类资产，帮助用户全面了解网络资产情况。
+
+- **主机发现**：基于 ICMP、ARP、TCP SYN 等多种方式探测主机存活状态
+- **端口扫描**：扫描目标主机的开放端口，支持自定义端口范围
+- **服务识别**：识别开放端口上运行的服务及其版本信息
+- **操作系统指纹识别**：通过多种特征推断目标主机的操作系统类型
+- **网络自动发现**：自动识别本地网络并探测周边主机
+
+支持快速模式、深度模式和隐蔽模式三种扫描策略。
+
+### 5. 供应链安全 (supplychain)
+
+供应链安全模块用于生成软件物料清单(SBOM)，分析第三方组件依赖风险。
+
+- **多语言支持**：识别常见编程语言的依赖文件（package.json、requirements.txt、go.mod、pom.xml 等）
+- **SBOM 生成**：生成符合 CycloneDX 标准的软件物料清单
+- **环境捕获**：捕获当前运行环境中的已安装包信息
+- **多格式输出**：支持 JSON、XML 等多种格式的 SBOM 输出
+
+支持从源代码生成 SBOM 和捕获当前环境两种运行模式。
+
+### 6. 检测插件系统
+
+检测插件系统采用插件化架构设计，支持灵活扩展检测能力。
+
+- **插件接口标准化**：提供统一的插件接口，便于开发自定义检测插件
+- **子命令注册机制**：支持向 detect 命令注册子命令
+- **多样检测能力**：可扩展支持各种检测场景，如恶意代码检测、异常行为分析等
+
+### 6. BAS（入侵和攻击模拟）
+
+入侵和攻击模拟(Breach and Attack Simulation)模块用于模拟各类网络攻击场景，评估系统安全防御能力，帮助用户主动发现安全漏洞和防御盲点。
+
+- **攻击链模拟**：模拟完整攻击链的各个阶段，包括初始访问、权限提升、横向移动、数据窃取等
+- **常见漏洞利用**：模拟 CVE 漏洞利用、弱密码攻击、SQL 注入等常见攻击手法
+- **红队战术演练**：基于 MITRE ATT&CK 框架的红队战术模拟
+- **防御有效性评估**：评估现有安全控制措施的有效性
+- **安全意识提升**：通过模拟攻击提高安全团队的应急响应能力
+
+支持多种模拟模式，包括自动化模拟、可控手动模拟和针对性渗透测试。
+
+### 7. 分布式管理能力
+
+Agent 可与 D-Eyes Server 协同工作，支持分布式任务执行与管理。
+
+- **自动注册与心跳**：向 Server 自动注册并保持心跳连接
+- **任务自动拉取**：定期从 Server 拉取待执行任务
+- **结果回传**：将任务执行结果上传至 Server
+- **离线缓存**：支持断线重连和结果缓存，保证任务可靠执行
+
+## 运行要求
+
+- **Windows**：以管理员身份运行命令提示符 / PowerShell
+- **Linux**：建议 root 或具备等效权限的账号
+- **macOS**：执行基线检查时需管理员权限
+
+## 全局配置
+
+默认配置文件位于 `~/.d-eyes/config.yaml`（亦可通过 `--config` 或环境变量 `D_EYES_CONFIG` 指定）。示例：
+
+```yaml
+output:
+  dir: ~/d-eyes/reports
+  format: json
+ui:
+  color: true
+logging:
+  verbose: false
+policy:
+  fail_on: high
+  severity_min: medium
+performance:
+  timeout: 600s
+  rate: 200
+```
+
+命令行参数优先级高于配置文件，配置用于提供默认值以及策略控制（例如风险超阈值时的退出码）。
+
+## 命令概览
+
+| 命令 | 场景 | 默认 profile | 主要能力 |
+|------|------|--------------|----------|
+| `respond` | 应急响应 / 入侵排查 | `quick` | 主机概要、文件扫描、网络连接、会话审计等组合模块 |
+| `baseline` | 基线检查 | `all` | 系统、数据库、中间件等基线项评估 |
+| `audit` | 合规审计 | `compliance` | 基线结果 + 主机信息 + 账号会话汇总 |
+| `inventory` | 资产梳理 | `fast` | 主机发现、端口扫描、服务识别 |
+| `supplychain` | 供应链安全 | `generate` | 目录/清单 SBOM 生成或运行环境采集 |
+| `bas` | 入侵和攻击模拟 | `auto` | 攻击链模拟、漏洞利用测试、防御有效性评估 |
+| `remote` | 远程模式 | - | 连接 Server、任务拉取、结果回传 |
+
+### 远程模式
+
+`remote` 命令会根据 `config.yaml` 中的 `remote` 配置连接 D-Eyes Server，自动完成注册、心跳、任务拉取和结果回传：
+
+```bash
+d-eyes remote
+```
+
+核心配置示例：
+
+```yaml
+remote:
+  enabled: true
+  server_grpc_addr: 127.0.0.1:9090
+  agent_token: changeme
+  agent_name: edge-node-01
+  heartbeat_interval: 10s
+  task_poll_interval: 2s
+  cache_dir: ~/.d-eyes/cache
+```
+
+远程模式会将待回传结果写入本地缓存目录（默认 `~/.d-eyes/cache`），断线后自动重试，任务执行仍复用 CLI 的 `TaskRunner` 体系。
+
+所有任务命令共享以下 Flags：
+
+- `--profile`：选择预设流程（默认为 `default`）
+- `--output-dir`：报告输出目录
+- `--format`：报告格式（如 `json`、`html` 等）
+- `--name`：自定义任务名称前缀
+- `--timeout`：任务超时时间
+- `--json`：在终端输出任务摘要的 JSON 结构
+- `--quiet`：静默模式，仅生成报告文件
+
+## 应急响应 `respond`
+
+```bash
+# 快速排查常见异常
+ d-eyes respond --profile quick --targets /var/log,/tmp
+
+# 勒索软件场景，含文件扫描与网络分析
+ d-eyes respond --profile ransomware --targets /opt/app --json
+```
+
+Profile 说明：
+- `quick`/`default`：主机概要 + 网络连接
+- `ransomware`：文件扫描 + 网络分析 + 主机概要
+- `persistence`：网络连接 + 用户会话 + 主机概要
+
+输出文件示例：
+- `respond/host-summary.json`
+- `respond/filescan.json`
+- `respond/network.json`
+
+## 基线检查 `baseline`
+
+```bash
+# 针对操作系统维度
+ d-eyes baseline --scope os --format html
+
+# 全量基线并启用 JSON 摘要
+ d-eyes baseline --scope all --baseline-config ./benchmark.yaml --json
+```
+
+执行结束会在 `baseline/` 目录生成基线报告，并依据 `policy.fail_on` 判断退出码。
+
+## 合规审计 `audit`
+
+```bash
+# 标准合规流程
+ d-eyes audit --profile compliance --output-dir ./reports
+
+# 静默生成审计报告
+ d-eyes audit --quiet --profile compliance
+```
+
+审计任务会自动运行基线检查并汇总主机信息、用户会话等内容，输出 `audit/*-summary.json`。
+
+## 资产梳理 `inventory`
+
+```bash
+# 快速发现内网主机
+ d-eyes inventory --profile fast --targets 10.0.0.0/24
+
+# 深度扫描并识别服务
+ d-eyes inventory --profile deep --targets 192.168.1.10,192.168.1.11 --service-detect --os-detect
+```
+
+Profile 说明：
+- `fast`：常见端口扫描，适合快速盘点
+- `deep`：全端口扫描 + 服务指纹
+- `stealth`：低速扫描，降低嗅探风险
+
+每个目标会生成独立报告，`inventory/*-summary.json` 给出总体统计。
+
+## 供应链安全 `supplychain`
+
+```bash
+# 扫描目录生成 SBOM
+ d-eyes supplychain --mode generate --path ./service --type json
+
+# 捕获当前环境（pip list）
+ d-eyes supplychain --mode capture --json
+```
+
+支持识别常见依赖清单（`package.json`、`requirements.txt`、`go.mod`、`pom.xml` 等），输出组件列表与计数。
+
+## 入侵和攻击模拟 `bas`
+
+```bash
+# 自动化攻击链模拟
+ d-eyes bas --profile auto --target 192.168.1.0/24
+
+# 针对性漏洞利用测试
+ d-eyes bas --profile vuln-exploit --target web-server.example.com --scenario cve-2022-1234
+
+# 防御有效性评估
+ d-eyes bas --profile defense-eval --target 10.0.0.0/16 --report-format html
+```
+
+Profile 说明：
+- `auto`：自动化攻击链模拟，覆盖常见攻击阶段
+- `vuln-exploit`：针对性漏洞利用测试，支持指定特定漏洞
+- `defense-eval`：防御有效性评估，重点关注防御措施绕过测试
+- `manual`：手动可控测试，提供交互式控制界面
+
+执行结果包含详细的攻击路径、检测到的漏洞、防御绕过情况以及安全建议。
+
+## 退出码约定
+
+| 退出码 | 含义 |
+|--------|------|
+| 0 | 成功完成 |
+| 1 | 满足策略阈值（如 `policy.fail_on`） |
+| 2 | 任务执行失败（参数错误、模块错误等） |
+| 3 | 上下文取消或未知错误 |
+
+## 代码结构
+
+Agent 采用清晰的模块化结构设计，代码组织如下：
+
+- **cmd/agent/**：Agent 命令行入口
+- **internal/**：内部实现，不对外暴露 API
+  - **agent/**：Agent 核心实现
+  - **app.go**：主应用程序入口和命令注册
+  - **assets/**：资产探测模块
+  - **benchmark/**：基准测试相关代码
+  - **detect/**：检测模块实现
+  - **model/**：数据模型定义
+  - **sbom/**：SBOM 生成模块
+  - **tasks/**：任务执行框架
+  - **utils/**：工具函数
+- **pkg/**：公共包，可被外部使用
+  - **color/**：控制台颜色输出
+  - **config/**：配置管理
+  - **logs/**：日志功能
+  - **reporting/**：报告生成
+- **yaraRules/**：YARA 规则文件，用于恶意软件检测
+
+## 开发与贡献
+
+- 代码位于 `internal/` 和 `pkg/` 目录，任务逻辑集中在 `internal/tasks/`
+- 插件开发指南：参见 `docs/PLUGIN_GUIDE.md`，了解如何注册自定义命令/Runner，并与远程模式联动
+- 欢迎通过 Issue / PR 反馈需求或贡献模块
+- 参考 `docs/` 目录中的设计文档与指南
+
+## 相关文档
+
+- [插件开发指南](docs/PLUGIN_GUIDE.md)：了解如何开发自定义检测插件
+- [编译指南](/docs/编译指南.md)：Agent 编译和部署说明
+- [应急响应插件编写](/docs/应急响应-插件编写.md)：应急响应插件开发指南
+
+## 许可证
+
+项目采用开源许可证，详见 [LICENSE](./LICENSE)。

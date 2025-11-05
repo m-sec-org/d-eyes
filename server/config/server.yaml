@@ -1,0 +1,24 @@
+server:
+  http_addr: ":8080"
+  grpc_addr: ":9090"
+  tls:
+    enabled: false
+security:
+  agent_token: "changeme"
+  api_keys:
+    - "changeme"
+database:
+  in_memory: true
+redis:
+  enabled: false
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+  queue_key: "d-eyes:task-queue"
+scheduler:
+  lease_ttl: 120s
+  max_retries: 3
+  heartbeat_timeout: 15s
+metrics:
+  enabled: true
+  path: /metrics

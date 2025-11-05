@@ -1,0 +1,54 @@
+rules:
+  - id: web_apache_server_tokens
+    title: "Ensure Apache ServerTokens is set to Prod"
+    description: "OpenSCAP HTTPD hardening - hide version information"
+    severity: MEDIUM
+    remediation: |
+      Set ServerTokens Prod in httpd.conf and reload Apache.
+    references:
+      - "OpenSCAP httpd hardening"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "server_tokens"
+        command: "grep"
+        args: ["-i", "^ServerTokens", "/etc/httpd/conf/httpd.conf"]
+        expect:
+          operator: contains
+          value: "Prod"
+        fail_on_error: false
+
+  - id: web_apache_directory_listing
+    title: "Ensure Apache directory listing is disabled"
+    description: "CIS Apache - Options -Indexes should be configured"
+    severity: MEDIUM
+    remediation: |
+      Set Options -Indexes for relevant directories in Apache configuration.
+    references:
+      - "CIS Apache HTTP Server Benchmark"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "directory_listing"
+        command: "grep"
+        args: ["-R", "Options -Indexes", "/etc/httpd/conf"]
+        expect:
+          operator: contains
+          value: "Options -Indexes"
+        fail_on_error: false
+
+  - id: web_apache_ssl_protocols
+    title: "Ensure Apache SSL Protocols are strong"
+    description: "Disable TLS1.0/1.1 as per CIS recommendations"
+    severity: HIGH
+    remediation: |
+      Configure SSLProtocol -all +TLSv1.2 +TLSv1.3 in ssl.conf.
+    references:
+      - "CIS Apache HTTP Server Benchmark"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "ssl_protocol"
+        command: "grep"
+        args: ["-i", "^SSLProtocol", "/etc/httpd/conf.d/ssl.conf"]
+        expect:
+          operator: contains
+          value: "+TLSv1.2"
+        fail_on_error: false

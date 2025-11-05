@@ -1,0 +1,36 @@
+rules:
+  - id: web_iis_version_disclosure
+    title: "Ensure IIS version disclosure is disabled"
+    description: "CIS IIS - Remove X-Powered-By header"
+    severity: MEDIUM
+    remediation: |
+      Use Remove-WebConfigurationProperty to remove X-Powered-By header from IIS.
+    references:
+      - "CIS Microsoft IIS Benchmark"
+    platforms: ["windows"]
+    checks:
+      - name: "x_powered_by"
+        command: "powershell"
+        args: ["-Command", "(Get-WebConfigurationProperty -Filter system.webServer/httpProtocol/customHeaders/add -name . | Where-Object {$_.name -eq 'X-Powered-By'}).value"]
+        expect:
+          operator: equals
+          value: ""
+        fail_on_error: false
+
+  - id: web_iis_request_filtering
+    title: "Ensure IIS request filtering is enabled"
+    description: "OpenSCAP IIS hardening"
+    severity: MEDIUM
+    remediation: |
+      Enable requestFiltering feature and configure deny sequences for dangerous patterns.
+    references:
+      - "OpenSCAP IIS Hardening"
+    platforms: ["windows"]
+    checks:
+      - name: "request_filtering"
+        command: "powershell"
+        args: ["-Command", "(Get-WebConfigurationProperty -Filter system.webServer/security/requestFiltering -name .).allowDoubleEscaping"]
+        expect:
+          operator: equals
+          value: "False"
+        fail_on_error: false

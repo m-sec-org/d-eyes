@@ -1,0 +1,55 @@
+rules:
+  - id: db_mysql_password_policy
+    title: "Ensure MySQL password policy is enforced"
+    description: "CIS MySQL 1.1 - validate_password policy should not be LOW"
+    severity: HIGH
+    remediation: |
+      Configure validate_password component with policy MEDIUM or STRONG.
+      Example: SET GLOBAL validate_password.policy = 'MEDIUM';
+    references:
+      - "CIS MySQL Server Benchmark 1.1"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "password_policy"
+        command: "mysql"
+        args: ["-NBe", "SHOW VARIABLES LIKE 'validate_password.policy';"]
+        expect:
+          operator: notContains
+          value: "LOW"
+        fail_on_error: false
+
+  - id: db_mysql_remote_root
+    title: "Ensure MySQL root remote login is disabled"
+    description: "CIS MySQL 2.1 - root should only connect locally"
+    severity: HIGH
+    remediation: |
+      Remove remote root entries from mysql.user and flush privileges.
+    references:
+      - "CIS MySQL Server Benchmark 2.1"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "root_hosts"
+        command: "mysql"
+        args: ["-NBe", "SELECT Host FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost','127.0.0.1','::1');"]
+        expect:
+          operator: equals
+          value: ""
+        fail_on_error: false
+
+  - id: db_mysql_tls_config
+    title: "Ensure MySQL requires TLS"
+    description: "CIS MySQL 2.2 - require_secure_transport should be ON"
+    severity: MEDIUM
+    remediation: |
+      Configure require_secure_transport=ON in my.cnf and restart MySQL.
+    references:
+      - "CIS MySQL Server Benchmark 2.2"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "require_secure_transport"
+        command: "mysql"
+        args: ["-NBe", "SHOW VARIABLES LIKE 'require_secure_transport';"]
+        expect:
+          operator: contains
+          value: "ON"
+        fail_on_error: false

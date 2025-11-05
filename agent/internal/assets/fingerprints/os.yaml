@@ -1,0 +1,117 @@
+metadata:
+  version: "1.0.0"
+  description: "Operating system fingerprinting heuristics"
+
+fingerprints:
+  - os: "Windows"
+    heuristics:
+      ttl_range: [110, 130]
+      tcp_window_sizes: [8192, 16384, 65535]
+      tcp_options:
+        - "MSS"
+        - "NOP"
+        - "WScale"
+      services:
+        - port: 445
+          service: "smb"
+        - port: 3389
+          service: "rdp"
+
+  - os: "Linux"
+    heuristics:
+      ttl_range: [60, 70]
+      tcp_window_sizes: [5840, 14600, 29200]
+      tcp_options:
+        - "MSS"
+        - "SAck"
+        - "Timestamp"
+      services:
+        - port: 22
+          service: "ssh"
+        - port: 80
+          service: "http"
+
+  - os: "Linux (Ubuntu)"
+    heuristics:
+      ttl_range: [60, 65]
+      tcp_window_sizes: [29200, 5840]
+      banners:
+        - service: "ssh"
+          contains: "Ubuntu"
+
+  - os: "Linux (CentOS/RHEL)"
+    heuristics:
+      ttl_range: [60, 65]
+      tcp_window_sizes: [29200]
+      banners:
+        - service: "ssh"
+          contains: "CentOS"
+        - service: "ssh"
+          contains: "Red Hat"
+
+  - os: "Linux (Debian)"
+    heuristics:
+      ttl_range: [60, 65]
+      banners:
+        - service: "ssh"
+          contains: "Debian"
+
+  - os: "Linux (Kali)"
+    heuristics:
+      ttl_range: [60, 65]
+      banners:
+        - service: "ssh"
+          contains: "Kali"
+
+  - os: "FreeBSD"
+    heuristics:
+      ttl_range: [60, 65]
+      tcp_window_sizes: [65535, 65535]
+      tcp_options:
+        - "MSS"
+        - "SAck"
+        - "Timestamp"
+      banners:
+        - service: "ssh"
+          contains: "FreeBSD"
+
+  - os: "macOS"
+    heuristics:
+      ttl_range: [60, 65]
+      banners:
+        - service: "ssh"
+          contains: "Darwin"
+
+  - os: "Cisco IOS"
+    heuristics:
+      ttl_range: [240, 255]
+      tcp_window_sizes: [4128, 8192]
+      services:
+        - port: 23
+          service: "telnet"
+      banners:
+        - service: "telnet"
+          contains: "Cisco IOS"
+
+  - os: "HP iLO"
+    heuristics:
+      ttl_range: [60, 65]
+      services:
+        - port: 443
+          service: "https"
+      banners:
+        - service: "https"
+          contains: "HP-iLO"
+
+  - os: "VMware ESXi"
+    heuristics:
+      ttl_range: [60, 65]
+      services:
+        - port: 902
+          service: "vmware"
+        - port: 443
+          service: "https"
+      banners:
+        - service: "https"
+          contains: "VMware"
+

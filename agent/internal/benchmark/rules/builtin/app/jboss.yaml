@@ -1,0 +1,36 @@
+rules:
+  - id: app_jboss_admin_console
+    title: "Ensure JBoss management console is secured"
+    description: "OpenSCAP JBoss - management interface should require authentication"
+    severity: HIGH
+    remediation: |
+      Configure management security realms and enforce strong credentials for the console.
+    references:
+      - "OpenSCAP JBoss EAP Hardening"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "management_console"
+        command: "jboss-cli.sh"
+        args: ["--connect", "--command=:read-attribute(name=security-realm)"]
+        expect:
+          operator: notContains
+          value: "undefined"
+        fail_on_error: false
+
+  - id: app_jboss_ssl_enabled
+    title: "Ensure JBoss HTTPS listeners are configured"
+    description: "CIS JBoss - enable HTTPS listeners for public services"
+    severity: MEDIUM
+    remediation: |
+      Configure HTTPS listener with TLSv1.2+, disable HTTP or redirect to HTTPS.
+    references:
+      - "CIS JBoss Benchmark"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "https_listener"
+        command: "jboss-cli.sh"
+        args: ["--connect", "--command=/subsystem=undertow/server=default-server/https-listener=https:read-resource()"]
+        expect:
+          operator: notContains
+          value: "not found"
+        fail_on_error: false

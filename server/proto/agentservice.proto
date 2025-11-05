@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package agentservice.v1;
+
+option go_package = "github.com/m-sec-org/d-eyes/server/proto/agentservicepb";
+
+message RegisterRequest {
+  string token = 1;
+  AgentMetadata metadata = 2;
+}
+
+message AgentMetadata {
+  string name = 1;
+  string platform = 2;
+  string version = 3;
+  repeated string capabilities = 4;
+  map<string, string> labels = 5;
+}
+
+message RegisterResponse {
+  string agent_id = 1;
+  int64 heartbeat_interval_seconds = 2;
+}
+
+message HeartbeatRequest {
+  string agent_id = 1;
+  double load = 2;
+  repeated string running_tasks = 3;
+  int64 timestamp = 4;
+}
+
+message HeartbeatResponse {
+  bool should_shutdown = 1;
+}
+
+message PullTaskRequest {
+  string agent_id = 1;
+  repeated string capabilities = 2;
+  int32 max_tasks = 3;
+}
+
+message TaskLease {
+  string task_id = 1;
+  string lease_id = 2;
+  string task_type = 3;
+  bytes payload = 4;
+  int64 lease_timeout_seconds = 5;
+}
+
+message PullTaskResponse {
+  repeated TaskLease leases = 1;
+}
+
+message Artifact {
+  string name = 1;
+  string content_type = 2;
+  bytes data = 3;
+}
+
+message ReportResultRequest {
+  string agent_id = 1;
+  string task_id = 2;
+  string lease_id = 3;
+  string status = 4;
+  string error_message = 5;
+  bytes summary_json = 6;
+  repeated Artifact artifacts = 7;
+}
+
+message ReportResultResponse {
+  bool accepted = 1;
+}
+
+service AgentService {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Heartbeat(stream HeartbeatRequest) returns (stream HeartbeatResponse);
+  rpc PullTasks(PullTaskRequest) returns (PullTaskResponse);
+  rpc ReportResult(ReportResultRequest) returns (ReportResultResponse);
+}

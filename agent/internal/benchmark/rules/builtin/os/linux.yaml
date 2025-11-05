@@ -1,0 +1,55 @@
+rules:
+  - id: os_linux_password_policy
+    title: "Ensure PASS_MAX_DAYS is set to 90 or less"
+    description: "CIS 5.4.1.1 - Verify PASS_MAX_DAYS is configured with a maximum of 90 days"
+    severity: HIGH
+    remediation: |
+      Edit /etc/login.defs and set PASS_MAX_DAYS to 90 or less.
+      Force users with higher values to change their passwords using chage.
+    references:
+      - "CIS Debian Linux 11 Benchmark 5.4.1.1"
+    platforms: ["linux"]
+    checks:
+      - name: "pass_max_days"
+        command: "grep"
+        args: ["PASS_MAX_DAYS", "/etc/login.defs"]
+        expect:
+          operator: contains
+          value: "PASS_MAX_DAYS"
+
+  - id: os_linux_sshd_root_login
+    title: "Ensure SSH root login is disabled"
+    description: "CIS 5.3.3 - PermitRootLogin should be disabled"
+    severity: HIGH
+    remediation: |
+      Edit /etc/ssh/sshd_config and set PermitRootLogin no.
+      Then restart the sshd service.
+    references:
+      - "CIS Debian Linux 11 Benchmark 5.3.3"
+    platforms: ["linux"]
+    checks:
+      - name: "permit_root_login"
+        command: "sshd"
+        args: ["-T"]
+        expect:
+          operator: contains
+          value: "permitrootlogin no"
+        fail_on_error: false
+
+  - id: os_linux_firewall_active
+    title: "Ensure a firewall is active"
+    description: "Verify firewalld or ufw is running"
+    severity: MEDIUM
+    remediation: |
+      Enable and start firewalld (systemctl enable --now firewalld) or ufw (ufw enable).
+    references:
+      - "CIS Debian Linux 11 Benchmark 3.5"
+    platforms: ["linux"]
+    checks:
+      - name: "firewalld_active"
+        command: "systemctl"
+        args: ["is-active", "firewalld"]
+        expect:
+          operator: equals
+          value: "active"
+        fail_on_error: false

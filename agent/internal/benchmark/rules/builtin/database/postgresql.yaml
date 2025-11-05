@@ -1,0 +1,36 @@
+rules:
+  - id: db_postgresql_auth_method
+    title: "Ensure pg_hba.conf does not use trust authentication"
+    description: "OpenSCAP PostgreSQL STIG V-214121"
+    severity: HIGH
+    remediation: |
+      Edit pg_hba.conf and replace trust entries with md5 or scram-sha-256.
+    references:
+      - "DISA STIG for PostgreSQL V-214121"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "auth_method"
+        command: "grep"
+        args: ["-i", "trust", "/var/lib/pgsql/data/pg_hba.conf"]
+        expect:
+          operator: equals
+          value: ""
+        fail_on_error: false
+
+  - id: db_postgresql_ssl
+    title: "Ensure SSL is enabled"
+    description: "CIS PostgreSQL 1.2 - ssl parameter should be on"
+    severity: MEDIUM
+    remediation: |
+      Set ssl = on in postgresql.conf and restart PostgreSQL.
+    references:
+      - "CIS PostgreSQL Benchmark 1.2"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "ssl_config"
+        command: "psql"
+        args: ["-tAc", "SHOW ssl;"]
+        expect:
+          operator: equals
+          value: "on"
+        fail_on_error: false

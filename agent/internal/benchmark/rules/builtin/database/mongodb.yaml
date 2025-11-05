@@ -1,0 +1,36 @@
+rules:
+  - id: db_mongodb_auth
+    title: "Ensure MongoDB authorization is enabled"
+    description: "CIS MongoDB 1.2 - Authorization should be enabled"
+    severity: CRITICAL
+    remediation: |
+      Set security.authorization to enabled in mongod.conf and restart mongod.
+    references:
+      - "CIS MongoDB Benchmark 1.2"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "authorization"
+        command: "mongo"
+        args: ["--quiet", "--eval", "db.adminCommand({getParameter:1, authenticationMechanisms:1}).authenticationMechanisms"]
+        expect:
+          operator: contains
+          value: "SCRAM"
+        fail_on_error: false
+
+  - id: db_mongodb_bind_ip
+    title: "Ensure MongoDB is bound to trusted interfaces"
+    description: "CIS MongoDB 1.1 - BindIP should not be 0.0.0.0"
+    severity: HIGH
+    remediation: |
+      Configure net.bindIp in mongod.conf to specific trusted addresses.
+    references:
+      - "CIS MongoDB Benchmark 1.1"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "bind_ip"
+        command: "mongo"
+        args: ["--quiet", "--eval", "db.adminCommand({getCmdLineOpts:1}).parsed.net.bindIp"]
+        expect:
+          operator: notContains
+          value: "0.0.0.0"
+        fail_on_error: false

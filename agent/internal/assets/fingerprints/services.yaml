@@ -1,0 +1,186 @@
+metadata:
+  version: "1.0.0"
+  description: "Service banner fingerprints derived from Nmap lists and community rules"
+
+services:
+  - name: "http"
+    match:
+      protocol: "tcp"
+      ports: [80, 8080, 8000, 8888]
+      patterns:
+        - type: "regex"
+          value: "^HTTP/1\\.[01]"
+    extract:
+      - type: "header"
+        name: "Server"
+
+  - name: "https"
+    match:
+      protocol: "tcp"
+      ports: [443, 8443]
+      patterns:
+        - type: "tls_cn"
+          value: ".+"
+    extract:
+      - type: "header"
+        name: "Server"
+
+  - name: "ssh"
+    match:
+      protocol: "tcp"
+      ports: [22, 2222]
+      patterns:
+        - type: "prefix"
+          value: "SSH-"
+    extract:
+      - type: "banner"
+
+  - name: "ftp"
+    match:
+      protocol: "tcp"
+      ports: [21]
+      patterns:
+        - type: "regex"
+          value: "^220-?"
+    extract:
+      - type: "banner"
+
+  - name: "smtp"
+    match:
+      protocol: "tcp"
+      ports: [25, 465, 587]
+      patterns:
+        - type: "regex"
+          value: "^220"
+    extract:
+      - type: "banner"
+
+  - name: "pop3"
+    match:
+      protocol: "tcp"
+      ports: [110, 995]
+      patterns:
+        - type: "prefix"
+          value: "+OK"
+
+  - name: "imap"
+    match:
+      protocol: "tcp"
+      ports: [143, 993]
+      patterns:
+        - type: "regex"
+          value: "^\* OK"
+
+  - name: "mysql"
+    match:
+      protocol: "tcp"
+      ports: [3306]
+      patterns:
+        - type: "binary_prefix"
+          value: "\\x0a"
+    extract:
+      - type: "mysql_greeting"
+
+  - name: "postgresql"
+    match:
+      protocol: "tcp"
+      ports: [5432]
+      patterns:
+        - type: "binary_prefix"
+          value: "\\x00\\x0d\\x00"
+
+  - name: "mssql"
+    match:
+      protocol: "tcp"
+      ports: [1433]
+      patterns:
+        - type: "binary_contains"
+          value: "MSSQLServer"
+
+  - name: "mongodb"
+    match:
+      protocol: "tcp"
+      ports: [27017]
+      patterns:
+        - type: "banner_contains"
+          value: "MongoDB"
+
+  - name: "redis"
+    match:
+      protocol: "tcp"
+      ports: [6379]
+      patterns:
+        - type: "banner_prefix"
+          value: "-ERR"
+
+  - name: "rdp"
+    match:
+      protocol: "tcp"
+      ports: [3389]
+      patterns:
+        - type: "binary_prefix"
+          value: "\\x03\\x00"
+
+  - name: "vnc"
+    match:
+      protocol: "tcp"
+      ports: [5900,5901,5902,5903]
+      patterns:
+        - type: "prefix"
+          value: "RFB"
+
+  - name: "elastic"
+    match:
+      protocol: "tcp"
+      ports: [9200, 9201]
+      patterns:
+        - type: "json_field"
+          value: "cluster_name"
+
+  - name: "rabbitmq"
+    match:
+      protocol: "tcp"
+      ports: [5672]
+      patterns:
+        - type: "binary_contains"
+          value: "AMQP"
+
+  - name: "kafka"
+    match:
+      protocol: "tcp"
+      ports: [9092]
+      patterns:
+        - type: "binary_contains"
+          value: "\x00\x10org.apache.kafka"
+
+  - name: "ldap"
+    match:
+      protocol: "tcp"
+      ports: [389, 636]
+      patterns:
+        - type: "binary_prefix"
+          value: "\\x30"
+
+  - name: "dns"
+    match:
+      protocol: "udp"
+      ports: [53]
+      patterns:
+        - type: "dns_response"
+          value: "SOA"
+
+  - name: "ntp"
+    match:
+      protocol: "udp"
+      ports: [123]
+      patterns:
+        - type: "ntp_response"
+          value: ""
+
+  - name: "smb"
+    match:
+      protocol: "tcp"
+      ports: [445]
+      patterns:
+        - type: "binary_contains"
+          value: "\xFFSMB"

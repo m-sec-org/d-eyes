@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: d-eyes
+      POSTGRES_PASSWORD: d-eyes
+      POSTGRES_DB: d-eyes
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U d-eyes"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: d-eyes/server:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      D_EYES_SERVER_DSN: postgresql://d-eyes:d-eyes@postgres:5432/d-eyes?sslmode=disable
+      D_EYES_SERVER_REDIS_ADDR: redis:6379
+      D_EYES_SERVER_HTTP_ADDR: ":8080"
+      D_EYES_SERVER_GRPC_ADDR: ":9090"
+      D_EYES_SERVER_AGENT_TOKEN: changeme
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    restart: unless-stopped
+    volumes:
+      - ../config:/etc/d-eyes/config:ro
+
+volumes:
+  pgdata:

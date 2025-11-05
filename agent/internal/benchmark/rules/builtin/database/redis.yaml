@@ -1,0 +1,36 @@
+rules:
+  - id: db_redis_requirepass
+    title: "Ensure Redis requires authentication"
+    description: "CIS Redis - requirepass should be configured"
+    severity: HIGH
+    remediation: |
+      Set requirepass directive in redis.conf and reload the server.
+    references:
+      - "CIS Redis Benchmark"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "requirepass"
+        command: "redis-cli"
+        args: ["CONFIG", "GET", "requirepass"]
+        expect:
+          operator: contains
+          value: "requirepass"
+        fail_on_error: false
+
+  - id: db_redis_protected_mode
+    title: "Ensure Redis protected mode is enabled"
+    description: "CIS Redis - protected-mode should be yes"
+    severity: MEDIUM
+    remediation: |
+      Set protected-mode yes in redis.conf and restart redis.
+    references:
+      - "CIS Redis Benchmark"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "protected_mode"
+        command: "redis-cli"
+        args: ["CONFIG", "GET", "protected-mode"]
+        expect:
+          operator: contains
+          value: "yes"
+        fail_on_error: false

@@ -1,0 +1,36 @@
+rules:
+  - id: app_tomcat_default_accounts
+    title: "Ensure Tomcat default accounts are removed"
+    description: "CIS Tomcat Benchmark 8.4"
+    severity: CRITICAL
+    remediation: |
+      Remove default admin/manager accounts from $CATALINA_BASE/conf/tomcat-users.xml.
+    references:
+      - "CIS Apache Tomcat 9 Benchmark"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "default_accounts"
+        command: "grep"
+        args: ["-E", "role=\"(manager-gui|admin-gui)\"", "$CATALINA_BASE/conf/tomcat-users.xml"]
+        expect:
+          operator: equals
+          value: ""
+        fail_on_error: false
+
+  - id: app_tomcat_ssl
+    title: "Ensure Tomcat connectors enforce strong TLS"
+    description: "CIS Tomcat TLS configuration"
+    severity: HIGH
+    remediation: |
+      Configure connector with sslEnabledProtocols="TLSv1.2+" and secure cipher suites.
+    references:
+      - "CIS Apache Tomcat 9 Benchmark"
+    platforms: ["linux", "windows"]
+    checks:
+      - name: "ssl_protocols"
+        command: "grep"
+        args: ["-R", "sslEnabledProtocols", "$CATALINA_BASE/conf/server.xml"]
+        expect:
+          operator: contains
+          value: "TLSv1.2"
+        fail_on_error: false
