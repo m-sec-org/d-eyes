@@ -32,11 +32,27 @@ func NewApp() *cli.App {
 	app.Name = "d-eyes"
 	app.Usage = "The Eyes of Darkness from Nsfocus spy on everything."
 	app.Description = "D-Eyes 是一款综合性安全扫描工具，用于发现和识别潜在的安全风险。"
+	app.CustomAppHelpTemplate = `NAME:
+   {{.HelpName}} - {{if .Usage}}{{.Usage}}{{else}}{{.Description}}{{end}}
+
+USAGE:
+   {{if .VisibleFlags}}{{.HelpName}} [global options]{{end}} command [command options] [arguments...]
+
+COMMANDS:
+{{range .VisibleCategories}}{{if .Name}}{{.Name}}:
+{{end}}{{range .VisibleCommands}}   {{join .Names ", "}}{{"\t"}}{{.Usage}}
+{{end}}
+{{end}}{{if .VisibleFlags}}
+GLOBAL OPTIONS:
+{{range .VisibleFlags}}{{"\t"}}{{.}}
+{{end}}{{end}}`
+
 	app.Commands = []*cli.Command{
 		{
-			Name:    "version",
-			Aliases: []string{"v"},
-			Usage:   "Show the version of d-eyes",
+			Name:     "version",
+			Aliases:  []string{"v"},
+			Usage:    "Show the version of d-eyes",
+			Category: "Integration",
 			Action: func(c *cli.Context) error {
 				fmt.Printf("D-Eyes %s\n", version)
 				fmt.Printf("操作系统: %s\n", runtime.GOOS)
@@ -57,6 +73,34 @@ func NewApp() *cli.App {
 			Usage:       "指定配置文件路径，默认为 ~/.d-eyes/config.yaml",
 			Destination: &configPath,
 			EnvVars:     []string{"D_EYES_CONFIG"},
+		},
+		&cli.StringFlag{
+			Name:  "profile",
+			Usage: "指定任务配置档案，共享于所有操作类命令",
+		},
+		&cli.StringFlag{
+			Name:  "output-dir",
+			Usage: "指定报告输出目录，所有任务默认写入该目录",
+		},
+		&cli.StringFlag{
+			Name:  "format",
+			Usage: "指定报告格式，例如 json、html",
+		},
+		&cli.StringFlag{
+			Name:  "name",
+			Usage: "自定义任务名称，用于报告命名与摘要展示",
+		},
+		&cli.DurationFlag{
+			Name:  "timeout",
+			Usage: "任务超时时间，支持 30s、5m 等格式",
+		},
+		&cli.BoolFlag{
+			Name:  "json",
+			Usage: "以 JSON 格式输出任务摘要，便于自动化处理",
+		},
+		&cli.BoolFlag{
+			Name:  "quiet",
+			Usage: "启用静默模式，仅生成报告文件，不在终端输出摘要",
 		},
 	}
 	app.Before = func(c *cli.Context) error {
@@ -84,8 +128,9 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 	return []taskCommandDefinition{
 		{
 			Name:        "respond",
-			Usage:       "执行应急响应任务",
+			Usage:       "综合各模块能力执行综合安全分析任务",
 			Description: "面向安全事件的快速排查流程，包含恶意文件扫描、网络连接分析等子任务组合。",
+			Category:    "Operations",
 			Runner:      tasks.RespondRunner(),
 			Flags: []cli.Flag{
 				&cli.StringFlag{
@@ -98,12 +143,14 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 			Name:        "audit",
 			Usage:       "执行合规审计任务",
 			Description: "聚焦操作系统、账号和配置的基线审计流程，输出整改建议。",
+			Category:    "Operations",
 			Runner:      tasks.AuditRunner(),
 		},
 		{
 			Name:        "inventory",
 			Usage:       "执行资产梳理任务",
 			Description: "对网络范围进行主机与端口巡检，生成资产清单。",
+			Category:    "Operations",
 			Runner:      tasks.InventoryRunner(),
 			Flags: []cli.Flag{
 				&cli.StringFlag{
@@ -132,6 +179,7 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 			Name:        "supplychain",
 			Usage:       "执行供应链安全任务",
 			Description: "生成或采集 SBOM 清单，分析依赖风险。",
+			Category:    "Operations",
 			Runner:      tasks.SupplyChainRunner(),
 			Flags: []cli.Flag{
 				&cli.StringFlag{
@@ -160,6 +208,7 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 			Name:        "baseline",
 			Usage:       "执行基线检查任务",
 			Description: "调度系统安全基线检查，输出风险统计与修复建议。",
+			Category:    "Operations",
 			Runner:      tasks.BaselineRunner(),
 			Flags: []cli.Flag{
 				&cli.StringFlag{
@@ -169,6 +218,39 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 				&cli.StringFlag{
 					Name:  "baseline-config",
 					Usage: "基线检查配置文件路径",
+				},
+			},
+		},
+		{
+			Name:        "bas",
+			Usage:       "执行 BAS（攻击模拟）任务",
+			Description: "运行预定义或自定义的攻击场景，验证防御与响应能力。",
+			Category:    "Operations",
+			Runner:      tasks.BASRunner(),
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:  "scenario",
+					Usage: "内置场景 ID 或 JSON 定义，覆盖默认配置",
+				},
+				&cli.StringFlag{
+					Name:  "scenario-id",
+					Usage: "指定内置 BAS 场景 ID（如 initial-access）",
+				},
+				&cli.StringFlag{
+					Name:  "scenario-file",
+					Usage: "指定包含场景描述的 JSON/YAML 文件路径",
+				},
+				&cli.BoolFlag{
+					Name:  "sandbox",
+					Usage: "强制启用沙箱执行（覆盖配置）",
+				},
+				&cli.BoolFlag{
+					Name:  "no-sandbox",
+					Usage: "禁用沙箱执行，仅用于调试场景",
+				},
+				&cli.BoolFlag{
+					Name:  "sandbox-approve",
+					Usage: "显式批准沙箱执行，适用于需要审批的环境",
 				},
 			},
 		},
@@ -223,17 +305,18 @@ type taskCommandDefinition struct {
 	Name        string
 	Usage       string
 	Description string
+	Category    string
 	Runner      tasks.TaskRunner
 	Flags       []cli.Flag
 }
 
 func newTaskCommand(def taskCommandDefinition) *cli.Command {
-	flags := append(baseTaskFlags(), def.Flags...)
 	return &cli.Command{
 		Name:        def.Name,
 		Usage:       def.Usage,
 		Description: def.Description,
-		Flags:       flags,
+		Category:    def.Category,
+		Flags:       def.Flags,
 		Action: func(c *cli.Context) error {
 			cfg := GetGlobalConfig()
 			req := tasks.TaskRequest{
@@ -248,6 +331,9 @@ func newTaskCommand(def taskCommandDefinition) *cli.Command {
 				JSONOutput: c.Bool("json"),
 			}
 			req.ApplyDefaults(def.Name)
+			if err := tasks.ValidateRequest(def.Name, &req); err != nil {
+				return err
+			}
 
 			manager := GetReportManager()
 			if req.OutputDir != "" && req.OutputDir != cfg.Output.Dir {
@@ -257,39 +343,6 @@ func newTaskCommand(def taskCommandDefinition) *cli.Command {
 			}
 			SetQuietMode(req.Quiet)
 			return tasks.Execute(c.Context, def.Name, def.Runner, req, manager)
-		},
-	}
-}
-
-func baseTaskFlags() []cli.Flag {
-	return []cli.Flag{
-		&cli.StringFlag{
-			Name:  "profile",
-			Usage: "指定任务配置档案",
-		},
-		&cli.StringFlag{
-			Name:  "output-dir",
-			Usage: "指定报告输出目录",
-		},
-		&cli.StringFlag{
-			Name:  "format",
-			Usage: "指定报告格式",
-		},
-		&cli.StringFlag{
-			Name:  "name",
-			Usage: "自定义任务名称",
-		},
-		&cli.DurationFlag{
-			Name:  "timeout",
-			Usage: "任务超时时间",
-		},
-		&cli.BoolFlag{
-			Name:  "json",
-			Usage: "以 JSON 格式输出任务摘要",
-		},
-		&cli.BoolFlag{
-			Name:  "quiet",
-			Usage: "仅生成报告文件，终端静默输出",
 		},
 	}
 }

@@ -83,6 +83,11 @@ func ExecuteWithResult(ctx context.Context, name string, runner TaskRunner, req 
 		_ = encoder.Encode(jsonSummary)
 	}
 
+	if !req.Quiet && len(req.Notices) > 0 {
+		for _, notice := range req.Notices {
+			fmt.Fprintf(os.Stderr, "[NOTICE] %s\n", notice)
+		}
+	}
 	if !req.Quiet {
 		manager.PrintSummary(summary)
 	}
@@ -106,14 +111,24 @@ func ToExecutionResult(summary reporting.Summary, result TaskResult, err error) 
 		status = "succeeded"
 	}
 	errorMessage := ""
+	errorCode := ""
+	exitCode := int32(0)
 	if err != nil {
 		status = "failed"
 		errorMessage = err.Error()
+		var exitErr exit.ExitCoder
+		if errors.As(err, &exitErr) {
+			exitCode = int32(exitErr.ExitCode())
+		}
+	}
+	if code, ok := result.Metadata["error_code"]; ok {
+		errorCode = code
 	}
 	outputs := make([]model.OutputRecord, 0, len(result.Outputs))
 	for _, out := range result.Outputs {
 		outputs = append(outputs, model.OutputRecord{
-			Path: out.Path,
+			Path:  out.Path,
+			Label: out.Label,
 		})
 	}
 	return model.ExecutionResult{
@@ -129,6 +144,20 @@ func ToExecutionResult(summary reporting.Summary, result TaskResult, err error) 
 		},
 		Artifacts:  outputs,
 		Error:      errorMessage,
+		Metadata:   cloneStringMap(result.Metadata),
+		ExitCode:   exitCode,
+		ErrorCode:  errorCode,
 		ReportedAt: time.Now().UTC(),
 	}
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }

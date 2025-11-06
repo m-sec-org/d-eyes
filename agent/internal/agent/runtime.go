@@ -65,8 +65,9 @@ func ensureRemoteCommand(app *cli.App) {
 
 func remoteCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "remote",
-		Usage: "以远程模式连接 D-Eyes Server 并执行任务",
+		Name:     "remote",
+		Usage:    "以远程模式连接 D-Eyes Server 并执行任务",
+		Category: "Integration",
 		Action: func(c *cli.Context) error {
 			cfg := internal.GetGlobalConfig()
 			if err := RunRemote(c.Context, cfg.Remote); err != nil {

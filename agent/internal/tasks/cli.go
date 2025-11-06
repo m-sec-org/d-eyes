@@ -9,6 +9,9 @@ func ExtractFlags(c *cli.Context) map[string]any {
 		return flags
 	}
 	for _, name := range c.FlagNames() {
+		if _, exists := flags[name]; exists {
+			continue
+		}
 		flags[name] = c.Value(name)
 	}
 	return flags

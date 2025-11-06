@@ -28,6 +28,7 @@ type Agent struct {
 type Task struct {
 	ID         uuid.UUID         `json:"id"`
 	Type       TaskType          `json:"type"`
+	Profile    string            `json:"profile"`
 	Priority   int               `json:"priority"`
 	Payload    []byte            `json:"payload"` // JSON blob
 	Status     TaskStatus        `json:"status"`
@@ -39,17 +40,22 @@ type Task struct {
 }
 
 type TaskRun struct {
-	ID            uuid.UUID  `json:"id"`
-	TaskID        uuid.UUID  `json:"taskId"`
-	AgentID       uuid.UUID  `json:"agentId"`
-	LeaseID       uuid.UUID  `json:"leaseId"`
-	LeaseExpires  time.Time  `json:"leaseExpires"`
-	StartedAt     *time.Time `json:"startedAt"`
-	FinishedAt    *time.Time `json:"finishedAt"`
-	Status        TaskStatus `json:"status"`
-	ErrorMessage  string     `json:"errorMessage"`
-	Summary       []byte     `json:"summary"`
-	RetrySequence int        `json:"retrySequence"`
+	ID            uuid.UUID         `json:"id"`
+	TaskID        uuid.UUID         `json:"taskId"`
+	TaskType      TaskType          `json:"taskType"`
+	AgentID       uuid.UUID         `json:"agentId"`
+	LeaseID       uuid.UUID         `json:"leaseId"`
+	LeaseExpires  time.Time         `json:"leaseExpires"`
+	StartedAt     *time.Time        `json:"startedAt"`
+	FinishedAt    *time.Time        `json:"finishedAt"`
+	Status        TaskStatus        `json:"status"`
+	ErrorMessage  string            `json:"errorMessage"`
+	Summary       []byte            `json:"summary"`
+	Metadata      map[string]string `json:"metadata"`
+	ExitCode      int32             `json:"exitCode"`
+	ErrorCode     string            `json:"errorCode"`
+	ExpiresAt     time.Time         `json:"expiresAt"`
+	RetrySequence int               `json:"retrySequence"`
 }
 
 type Artifact struct {
@@ -58,6 +64,25 @@ type Artifact struct {
 	Name      string    `json:"name"`
 	MIMEType  string    `json:"mimeType"`
 	Blob      []byte    `json:"blob"`
+}
+
+type TaskResult struct {
+	ID           uuid.UUID         `json:"id"`
+	TaskID       uuid.UUID         `json:"taskId"`
+	TaskType     TaskType          `json:"taskType"`
+	Profile      string            `json:"profile"`
+	RunID        uuid.UUID         `json:"runId"`
+	AgentID      uuid.UUID         `json:"agentId"`
+	Status       TaskStatus        `json:"status"`
+	Metadata     map[string]string `json:"metadata"`
+	Summary      []byte            `json:"summary"`
+	ErrorMessage string            `json:"errorMessage"`
+	ExitCode     int32             `json:"exitCode"`
+	ErrorCode    string            `json:"errorCode"`
+	ScenarioID   string            `json:"scenarioId"`
+	ScenarioName string            `json:"scenarioName"`
+	CompletedAt  time.Time         `json:"completedAt"`
+	CreatedAt    time.Time         `json:"createdAt"`
 }
 
 const (

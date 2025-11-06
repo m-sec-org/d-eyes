@@ -58,6 +58,7 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS tasks (
             id UUID PRIMARY KEY,
             type TEXT NOT NULL,
+            profile TEXT,
             priority INT NOT NULL,
             payload JSONB,
             status TEXT NOT NULL,
@@ -70,6 +71,7 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS task_runs (
             id UUID PRIMARY KEY,
             task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            task_type TEXT NOT NULL,
             agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
             lease_id UUID UNIQUE NOT NULL,
             lease_expires TIMESTAMPTZ NOT NULL,
@@ -78,6 +80,10 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
             status TEXT NOT NULL,
             error_message TEXT,
             summary JSONB,
+            result_metadata JSONB,
+            exit_code INT,
+            error_code TEXT,
+            expires_at TIMESTAMPTZ,
             retry_sequence INT NOT NULL DEFAULT 0
         )`,
 		`CREATE TABLE IF NOT EXISTS artifacts (
@@ -86,6 +92,24 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
             name TEXT NOT NULL,
             mime_type TEXT,
             blob BYTEA
+        )`,
+		`CREATE TABLE IF NOT EXISTS task_results (
+            id UUID PRIMARY KEY,
+            task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            task_type TEXT NOT NULL,
+            profile TEXT,
+            run_id UUID NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+            agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+            status TEXT NOT NULL,
+            metadata JSONB,
+            summary JSONB,
+            error_message TEXT,
+            exit_code INT,
+            error_code TEXT,
+            scenario_id TEXT,
+            scenario_name TEXT,
+            completed_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL
         )`,
 	}
 	for _, stmt := range stmts {
@@ -151,9 +175,9 @@ func (p *PostgresStore) CreateTask(ctx context.Context, task *model.Task) error 
 	now := time.Now()
 	metadataJSON, _ := json.Marshal(task.Metadata)
 	payloadJSON := json.RawMessage(task.Payload)
-	_, err := p.pool.Exec(ctx, `INSERT INTO tasks (id, type, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		task.ID, string(task.Type), task.Priority, payloadJSON, string(task.Status), task.RetryCount, metadataJSON, task.CreatedBy, now, now)
+	_, err := p.pool.Exec(ctx, `INSERT INTO tasks (id, type, profile, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		task.ID, string(task.Type), task.Profile, task.Priority, payloadJSON, string(task.Status), task.RetryCount, metadataJSON, task.CreatedBy, now, now)
 	if err != nil {
 		return fmt.Errorf("create task: %w", err)
 	}
@@ -177,11 +201,11 @@ func (p *PostgresStore) IncrementTaskRetry(ctx context.Context, taskID uuid.UUID
 }
 
 func (p *PostgresStore) GetTask(ctx context.Context, id uuid.UUID) (*model.Task, error) {
-	row := p.pool.QueryRow(ctx, `SELECT id, type, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks WHERE id=$1`, id)
+	row := p.pool.QueryRow(ctx, `SELECT id, type, profile, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks WHERE id=$1`, id)
 	var task model.Task
 	var payload []byte
 	var metadata []byte
-	if err := row.Scan(&task.ID, &task.Type, &task.Priority, &payload, &task.Status, &task.RetryCount, &metadata, &task.CreatedBy, &task.CreatedAt, &task.UpdatedAt); err != nil {
+	if err := row.Scan(&task.ID, &task.Type, &task.Profile, &task.Priority, &payload, &task.Status, &task.RetryCount, &metadata, &task.CreatedBy, &task.CreatedAt, &task.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
@@ -195,7 +219,7 @@ func (p *PostgresStore) GetTask(ctx context.Context, id uuid.UUID) (*model.Task,
 }
 
 func (p *PostgresStore) ListPendingTasks(ctx context.Context, limit int) ([]*model.Task, error) {
-	rows, err := p.pool.Query(ctx, `SELECT id, type, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks WHERE status='pending' ORDER BY priority ASC, created_at ASC LIMIT $1`, limit)
+	rows, err := p.pool.Query(ctx, `SELECT id, type, profile, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks WHERE status='pending' ORDER BY priority ASC, created_at ASC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list pending tasks: %w", err)
 	}
@@ -205,7 +229,7 @@ func (p *PostgresStore) ListPendingTasks(ctx context.Context, limit int) ([]*mod
 		var task model.Task
 		var payload []byte
 		var metadata []byte
-		if err := rows.Scan(&task.ID, &task.Type, &task.Priority, &payload, &task.Status, &task.RetryCount, &metadata, &task.CreatedBy, &task.CreatedAt, &task.UpdatedAt); err != nil {
+		if err := rows.Scan(&task.ID, &task.Type, &task.Profile, &task.Priority, &payload, &task.Status, &task.RetryCount, &metadata, &task.CreatedBy, &task.CreatedAt, &task.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan pending task: %w", err)
 		}
 		task.Payload = append([]byte(nil), payload...)
@@ -226,14 +250,14 @@ func (p *PostgresStore) ListTasks(ctx context.Context, statuses []model.TaskStat
 		err  error
 	)
 	if len(statuses) == 0 {
-		query := `SELECT id, type, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks ORDER BY created_at DESC LIMIT $1`
+		query := `SELECT id, type, profile, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks ORDER BY created_at DESC LIMIT $1`
 		rows, err = p.pool.Query(ctx, query, limit)
 	} else {
 		statusVals := make([]string, len(statuses))
 		for i, st := range statuses {
 			statusVals[i] = string(st)
 		}
-		query := `SELECT id, type, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks WHERE status = ANY($1) ORDER BY created_at DESC LIMIT $2`
+		query := `SELECT id, type, profile, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks WHERE status = ANY($1) ORDER BY created_at DESC LIMIT $2`
 		rows, err = p.pool.Query(ctx, query, statusVals, limit)
 	}
 	if err != nil {
@@ -245,7 +269,7 @@ func (p *PostgresStore) ListTasks(ctx context.Context, statuses []model.TaskStat
 		var task model.Task
 		var payload []byte
 		var metadata []byte
-		if err := rows.Scan(&task.ID, &task.Type, &task.Priority, &payload, &task.Status, &task.RetryCount, &metadata, &task.CreatedBy, &task.CreatedAt, &task.UpdatedAt); err != nil {
+		if err := rows.Scan(&task.ID, &task.Type, &task.Profile, &task.Priority, &payload, &task.Status, &task.RetryCount, &metadata, &task.CreatedBy, &task.CreatedAt, &task.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan task: %w", err)
 		}
 		task.Payload = append([]byte(nil), payload...)
@@ -282,17 +306,27 @@ func (p *PostgresStore) CreateTaskRun(ctx context.Context, run *model.TaskRun) e
 	if run.LeaseID == uuid.Nil {
 		run.LeaseID = uuid.New()
 	}
-	_, err := p.pool.Exec(ctx, `INSERT INTO task_runs (id, task_id, agent_id, lease_id, lease_expires, started_at, finished_at, status, error_message, summary, retry_sequence)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		run.ID, run.TaskID, run.AgentID, run.LeaseID, run.LeaseExpires, run.StartedAt, run.FinishedAt, string(run.Status), run.ErrorMessage, run.Summary, run.RetrySequence)
+	meta := run.Metadata
+	if meta == nil {
+		meta = map[string]string{}
+	}
+	metadataJSON, _ := json.Marshal(meta)
+	_, err := p.pool.Exec(ctx, `INSERT INTO task_runs (id, task_id, task_type, agent_id, lease_id, lease_expires, started_at, finished_at, status, error_message, summary, result_metadata, exit_code, error_code, expires_at, retry_sequence)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		run.ID, run.TaskID, string(run.TaskType), run.AgentID, run.LeaseID, run.LeaseExpires, run.StartedAt, run.FinishedAt, string(run.Status), run.ErrorMessage, run.Summary, metadataJSON, run.ExitCode, run.ErrorCode, run.ExpiresAt, run.RetrySequence)
 	if err != nil {
 		return fmt.Errorf("create task run: %w", err)
 	}
 	return nil
 }
 
-func (p *PostgresStore) UpdateTaskRunCompletion(ctx context.Context, runID uuid.UUID, status model.TaskStatus, finished time.Time, summary []byte, errMsg string) error {
-	_, err := p.pool.Exec(ctx, `UPDATE task_runs SET status=$2, finished_at=$3, summary=$4, error_message=$5 WHERE id=$1`, runID, string(status), finished, summary, errMsg)
+func (p *PostgresStore) UpdateTaskRunCompletion(ctx context.Context, runID uuid.UUID, status model.TaskStatus, finished time.Time, summary []byte, errMsg string, metadata map[string]string, exitCode int32, errorCode string, expiresAt time.Time) error {
+	meta := metadata
+	if meta == nil {
+		meta = map[string]string{}
+	}
+	metadataJSON, _ := json.Marshal(meta)
+	_, err := p.pool.Exec(ctx, `UPDATE task_runs SET status=$2, finished_at=$3, summary=$4, error_message=$5, result_metadata=$6, exit_code=$7, error_code=$8, expires_at=$9 WHERE id=$1`, runID, string(status), finished, summary, errMsg, metadataJSON, exitCode, errorCode, expiresAt)
 	if err != nil {
 		return fmt.Errorf("update task run: %w", err)
 	}
@@ -308,13 +342,17 @@ func (p *PostgresStore) UpdateTaskRunStatusByLease(ctx context.Context, leaseID 
 }
 
 func (p *PostgresStore) GetTaskRunByLease(ctx context.Context, leaseID uuid.UUID) (*model.TaskRun, error) {
-	row := p.pool.QueryRow(ctx, `SELECT id, task_id, agent_id, lease_id, lease_expires, started_at, finished_at, status, error_message, summary, retry_sequence FROM task_runs WHERE lease_id=$1`, leaseID)
+	row := p.pool.QueryRow(ctx, `SELECT id, task_id, task_type, agent_id, lease_id, lease_expires, started_at, finished_at, status, error_message, summary, result_metadata, exit_code, error_code, expires_at, retry_sequence FROM task_runs WHERE lease_id=$1`, leaseID)
 	var run model.TaskRun
-	if err := row.Scan(&run.ID, &run.TaskID, &run.AgentID, &run.LeaseID, &run.LeaseExpires, &run.StartedAt, &run.FinishedAt, &run.Status, &run.ErrorMessage, &run.Summary, &run.RetrySequence); err != nil {
+	var metadata []byte
+	if err := row.Scan(&run.ID, &run.TaskID, &run.TaskType, &run.AgentID, &run.LeaseID, &run.LeaseExpires, &run.StartedAt, &run.FinishedAt, &run.Status, &run.ErrorMessage, &run.Summary, &metadata, &run.ExitCode, &run.ErrorCode, &run.ExpiresAt, &run.RetrySequence); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan task run: %w", err)
+	}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &run.Metadata)
 	}
 	return &run, nil
 }
@@ -343,18 +381,22 @@ func (p *PostgresStore) SaveArtifacts(ctx context.Context, artifacts []model.Art
 }
 
 func (p *PostgresStore) GetLatestTaskRun(ctx context.Context, taskID uuid.UUID) (*model.TaskRun, error) {
-	query := `SELECT id, task_id, agent_id, lease_id, lease_expires, started_at, finished_at, status, error_message, summary, retry_sequence
+	query := `SELECT id, task_id, task_type, agent_id, lease_id, lease_expires, started_at, finished_at, status, error_message, summary, result_metadata, exit_code, error_code, expires_at, retry_sequence
 FROM task_runs
 WHERE task_id=$1
 ORDER BY COALESCE(finished_at, started_at, lease_expires) DESC, id DESC
 LIMIT 1`
 	row := p.pool.QueryRow(ctx, query, taskID)
 	var run model.TaskRun
-	if err := row.Scan(&run.ID, &run.TaskID, &run.AgentID, &run.LeaseID, &run.LeaseExpires, &run.StartedAt, &run.FinishedAt, &run.Status, &run.ErrorMessage, &run.Summary, &run.RetrySequence); err != nil {
+	var metadata []byte
+	if err := row.Scan(&run.ID, &run.TaskID, &run.TaskType, &run.AgentID, &run.LeaseID, &run.LeaseExpires, &run.StartedAt, &run.FinishedAt, &run.Status, &run.ErrorMessage, &run.Summary, &metadata, &run.ExitCode, &run.ErrorCode, &run.ExpiresAt, &run.RetrySequence); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan latest run: %w", err)
+	}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &run.Metadata)
 	}
 	return &run, nil
 }

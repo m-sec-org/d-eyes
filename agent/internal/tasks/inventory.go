@@ -35,6 +35,12 @@ func (r *inventoryRunner) Run(ctx context.Context, req TaskRequest) (TaskResult,
 	results := make([]inventoryReport, 0, len(targets))
 	outputs := make([]reporting.OutputRecord, 0, len(targets)+1)
 	riskTotals := make(map[string]int)
+	resultMetadata := map[string]string{
+		"profile":      profile,
+		"target_count": fmt.Sprintf("%d", len(targets)),
+		"targets":      strings.Join(targets, ","),
+		"scan_scope":   profile,
+	}
 
 	for _, target := range targets {
 		select {
@@ -51,13 +57,17 @@ func (r *inventoryRunner) Run(ctx context.Context, req TaskRequest) (TaskResult,
 		accumulateRisk(riskTotals, report.Risks)
 	}
 
-	if summaryRecord, err := writeInventorySummary(req, results, riskTotals); err == nil && summaryRecord.Path != "" {
+	if summaryRecord, summaryMeta, err := writeInventorySummary(req, results, riskTotals, targets); err == nil && summaryRecord.Path != "" {
 		outputs = append(outputs, summaryRecord)
+		for k, v := range summaryMeta {
+			resultMetadata[k] = v
+		}
 	}
 
 	return TaskResult{
-		Outputs: outputs,
-		Risks:   riskTotals,
+		Outputs:  outputs,
+		Risks:    riskTotals,
+		Metadata: resultMetadata,
 	}, nil
 }
 
@@ -199,10 +209,10 @@ func buildInventoryOptions(profile string, flags map[string]any) assets.ScanOpti
 	return options
 }
 
-func writeInventorySummary(req TaskRequest, reports []inventoryReport, risks map[string]int) (reporting.OutputRecord, error) {
+func writeInventorySummary(req TaskRequest, reports []inventoryReport, risks map[string]int, targets []string) (reporting.OutputRecord, map[string]string, error) {
 	file, path, err := req.Manager.CreateFile("inventory", req.Name+"-summary", "json")
 	if err != nil {
-		return reporting.OutputRecord{}, err
+		return reporting.OutputRecord{}, nil, err
 	}
 	defer file.Close()
 
@@ -254,9 +264,16 @@ func writeInventorySummary(req TaskRequest, reports []inventoryReport, risks map
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(summary); err != nil {
-		return reporting.OutputRecord{}, err
+		return reporting.OutputRecord{}, nil, err
 	}
-	return reporting.OutputRecord{Label: "资产扫描汇总", Path: path}, nil
+	meta := map[string]string{
+		"summary_path": path,
+		"total_hosts":  fmt.Sprintf("%d", totalHosts),
+		"total_ports":  fmt.Sprintf("%d", totalPorts),
+		"targets":      strings.Join(targets, ","),
+		"target_count": fmt.Sprintf("%d", len(targets)),
+	}
+	return reporting.OutputRecord{Label: "资产扫描汇总", Path: path}, meta, nil
 }
 
 func evaluateInventoryRisk(ports []assets.PortInfo) map[string]int {

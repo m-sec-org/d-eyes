@@ -71,7 +71,7 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 
 	outputType := normalizeOutputType(getStringFlag(req.Flags, "type", "json"))
 
-	record, err := writeSupplyChainReport(req, "generate", outputType, components, notes)
+	record, metadata, err := writeSupplyChainReport(req, "generate", outputType, components, notes)
 	if err != nil {
 		return TaskResult{}, err
 	}
@@ -82,9 +82,10 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 	}
 
 	return TaskResult{
-		Outputs: []reporting.OutputRecord{record},
-		Risks:   risks,
-		Notes:   notes,
+		Outputs:  []reporting.OutputRecord{record},
+		Risks:    risks,
+		Notes:    notes,
+		Metadata: metadata,
 	}, nil
 }
 
@@ -98,7 +99,7 @@ func (s *supplyChainRunner) captureEnvironment(ctx context.Context, req TaskRequ
 	components := parseRequirements(string(out), "pip-list")
 	outputType := normalizeOutputType(getStringFlag(req.Flags, "type", "json"))
 
-	record, err := writeSupplyChainReport(req, "capture", outputType, components, nil)
+	record, metadata, err := writeSupplyChainReport(req, "capture", outputType, components, nil)
 	if err != nil {
 		return TaskResult{}, err
 	}
@@ -107,8 +108,9 @@ func (s *supplyChainRunner) captureEnvironment(ctx context.Context, req TaskRequ
 		risks["medium"] = len(components)
 	}
 	return TaskResult{
-		Outputs: []reporting.OutputRecord{record},
-		Risks:   risks,
+		Outputs:  []reporting.OutputRecord{record},
+		Risks:    risks,
+		Metadata: metadata,
 	}, nil
 }
 
@@ -309,10 +311,10 @@ func extractTagValue(line, tag string) string {
 	return strings.TrimSpace(line)
 }
 
-func writeSupplyChainReport(req TaskRequest, mode, format string, components []componentRecord, notes []string) (reporting.OutputRecord, error) {
+func writeSupplyChainReport(req TaskRequest, mode, format string, components []componentRecord, notes []string) (reporting.OutputRecord, map[string]string, error) {
 	file, path, err := req.Manager.CreateFile("supplychain", req.Name+"-"+mode, format)
 	if err != nil {
-		return reporting.OutputRecord{}, err
+		return reporting.OutputRecord{}, nil, err
 	}
 	defer file.Close()
 	summary := struct {
@@ -333,9 +335,35 @@ func writeSupplyChainReport(req TaskRequest, mode, format string, components []c
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(summary); err != nil {
-		return reporting.OutputRecord{}, err
+		return reporting.OutputRecord{}, nil, err
 	}
-	return reporting.OutputRecord{Label: "供应链报告", Path: path}, nil
+
+	meta := map[string]string{
+		"mode":            mode,
+		"profile":         req.Profile,
+		"component_count": fmt.Sprintf("%d", len(components)),
+		"report_path":     path,
+	}
+	if len(notes) > 0 {
+		meta["notes_count"] = fmt.Sprintf("%d", len(notes))
+	}
+	sources := make(map[string]struct{})
+	for _, c := range components {
+		if c.Source != "" {
+			sources[c.Source] = struct{}{}
+		}
+	}
+	if len(sources) > 0 {
+		list := make([]string, 0, len(sources))
+		for src := range sources {
+			list = append(list, src)
+		}
+		meta["sources"] = strings.Join(list, ",")
+	}
+	if len(components) > 0 && components[0].Type != "" {
+		meta["primary_type"] = components[0].Type
+	}
+	return reporting.OutputRecord{Label: "供应链报告", Path: path}, meta, nil
 }
 
 func splitList(value string) []string {

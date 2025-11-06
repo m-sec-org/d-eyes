@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -186,28 +187,26 @@ func (r *remoteRunner) pollOnce(ctx context.Context, hbCh chan<- remote.Heartbea
 func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLease) error {
 	runner, ok := internal.TaskRunnerByName(lease.GetTaskType())
 	if !ok {
-		return r.reportFailure(ctx, lease, fmt.Sprintf("unsupported task type %q", lease.GetTaskType()))
+		return r.reportFailure(ctx, lease, fmt.Errorf("unsupported task type %q", lease.GetTaskType()))
 	}
 
 	cfg := internal.GetGlobalConfig()
 	req := tasks.TaskRequest{
 		Config:     cfg,
-		Flags:      map[string]any{},
+		Flags:      make(map[string]any),
+		Metadata:   cloneStringMap(lease.GetMetadata()),
 		Quiet:      true,
 		JSONOutput: false,
+	}
+	if prof := strings.TrimSpace(lease.GetProfile()); prof != "" {
+		req.Profile = prof
 	}
 	if len(lease.GetPayload()) > 0 {
 		var payload map[string]any
 		if err := json.Unmarshal(lease.GetPayload(), &payload); err != nil {
 			log.Printf("[remote] invalid payload for task %s: %v", lease.GetTaskId(), err)
 		} else {
-			req.Flags = payload
-			if profile, ok := payload["profile"].(string); ok {
-				req.Profile = profile
-			}
-			if name, ok := payload["name"].(string); ok {
-				req.Name = name
-			}
+			applyRemotePayload(&req, payload)
 		}
 	}
 	if req.Name == "" {
@@ -215,6 +214,14 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 	}
 
 	req.ApplyDefaults(lease.GetTaskType())
+	req.Config.Sandbox = mergeSandboxConfig(req.Config.Sandbox, r.cfg.Sandbox)
+	if r.cfg.Sandbox.Enabled {
+		req.Config.Tasks.BAS.SandboxEnabled = true
+	}
+	if err := tasks.ValidateRequest(lease.GetTaskType(), &req); err != nil {
+		return r.reportFailure(ctx, lease, err)
+	}
+
 	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = cfg.Performance.Timeout
@@ -238,6 +245,9 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 		Status:       execModel.Status,
 		ErrorMessage: execModel.Error,
 		SummaryJson:  payloadBytes,
+		Metadata:     cloneStringMap(execModel.Metadata),
+		ExitCode:     execModel.ExitCode,
+		ErrorCode:    execModel.ErrorCode,
 	}
 
 	if err := r.store.Save(reqProto); err != nil {
@@ -252,7 +262,11 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 	return nil
 }
 
-func (r *remoteRunner) reportFailure(ctx context.Context, lease *serverpb.TaskLease, message string) error {
+func (r *remoteRunner) reportFailure(ctx context.Context, lease *serverpb.TaskLease, execErr error) error {
+	if execErr == nil {
+		execErr = errors.New("unknown execution error")
+	}
+	message := execErr.Error()
 	summary := model.ExecutionResult{
 		Status: "failed",
 		Summary: model.ExecutionSummary{
@@ -272,6 +286,9 @@ func (r *remoteRunner) reportFailure(ctx context.Context, lease *serverpb.TaskLe
 		Status:       "failed",
 		ErrorMessage: message,
 		SummaryJson:  payload,
+		Metadata:     cloneStringMap(lease.GetMetadata()),
+		ExitCode:     1,
+		ErrorCode:    "agent.remote_execution_failed",
 	}
 	if err := r.store.Save(req); err != nil {
 		log.Printf("[remote] save failure cache error: %v", err)
@@ -297,4 +314,180 @@ func (r *remoteRunner) flushPending(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func applyRemotePayload(req *tasks.TaskRequest, payload map[string]any) {
+	if req == nil || payload == nil {
+		return
+	}
+	flags := extractFlagMap(payload)
+	if req.Flags == nil {
+		req.Flags = make(map[string]any)
+	}
+	for k, v := range flags {
+		req.Flags[k] = v
+	}
+	if v, ok := anyToString(payload["profile"]); ok && v != "" {
+		req.Profile = v
+	}
+	if v, ok := anyToString(flags["profile"]); ok && v != "" {
+		req.Profile = v
+	}
+	if v, ok := anyToString(payload["name"]); ok && v != "" {
+		req.Name = v
+	}
+	if v, ok := anyToString(flags["name"]); ok && v != "" {
+		req.Name = v
+	}
+	if v, ok := anyToString(flags["output-dir"]); ok && v != "" {
+		req.OutputDir = v
+	} else if v, ok := anyToString(payload["output-dir"]); ok && v != "" {
+		req.OutputDir = v
+	}
+	if v, ok := anyToString(flags["format"]); ok && v != "" {
+		req.Format = v
+	} else if v, ok := anyToString(payload["format"]); ok && v != "" {
+		req.Format = v
+	}
+	if v, ok := anyToBool(payload["quiet"]); ok {
+		req.Quiet = v
+	}
+	if v, ok := anyToBool(flags["quiet"]); ok {
+		req.Quiet = v
+	}
+	if v, ok := anyToBool(payload["json"]); ok {
+		req.JSONOutput = v
+	}
+	if v, ok := anyToBool(flags["json"]); ok {
+		req.JSONOutput = v
+	}
+	if d, ok := anyToDuration(payload["timeout"]); ok && d > 0 {
+		req.Timeout = d
+	}
+	if d, ok := anyToDuration(flags["timeout"]); ok && d > 0 {
+		req.Timeout = d
+	}
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func extractFlagMap(payload map[string]any) map[string]any {
+	flags := make(map[string]any)
+	if payload == nil {
+		return flags
+	}
+	if nested, ok := payload["flags"]; ok {
+		if m, ok := nested.(map[string]any); ok {
+			for k, v := range m {
+				flags[k] = v
+			}
+			return flags
+		}
+	}
+	reserved := map[string]struct{}{
+		"profile":    {},
+		"name":       {},
+		"timeout":    {},
+		"quiet":      {},
+		"json":       {},
+		"output-dir": {},
+		"format":     {},
+		"flags":      {},
+	}
+	for k, v := range payload {
+		if _, blocked := reserved[k]; blocked {
+			continue
+		}
+		flags[k] = v
+	}
+	return flags
+}
+
+func anyToString(v any) (string, bool) {
+	switch val := v.(type) {
+	case string:
+		return val, true
+	case fmt.Stringer:
+		return val.String(), true
+	}
+	return "", false
+}
+
+func anyToBool(v any) (bool, bool) {
+	switch val := v.(type) {
+	case bool:
+		return val, true
+	case string:
+		s := strings.TrimSpace(strings.ToLower(val))
+		switch s {
+		case "true", "1", "yes", "y", "on":
+			return true, true
+		case "false", "0", "no", "n", "off":
+			return false, true
+		}
+	case float64:
+		return val != 0, true
+	case int:
+		return val != 0, true
+	}
+	return false, false
+}
+
+func anyToDuration(v any) (time.Duration, bool) {
+	switch val := v.(type) {
+	case string:
+		d, err := time.ParseDuration(strings.TrimSpace(val))
+		if err == nil {
+			return d, true
+		}
+	case float64:
+		return time.Duration(val * float64(time.Second)), true
+	case int:
+		return time.Duration(val) * time.Second, true
+	}
+	return 0, false
+}
+
+func mergeSandboxConfig(base config.SandboxConfig, override config.SandboxConfig) config.SandboxConfig {
+	result := base
+	if override.Enabled {
+		result.Enabled = true
+	}
+	if override.Runtime != "" {
+		result.Runtime = override.Runtime
+	}
+	if len(override.SharedPaths) > 0 {
+		result.SharedPaths = append([]string(nil), override.SharedPaths...)
+	}
+	if override.TempDir != "" {
+		result.TempDir = override.TempDir
+	}
+	if override.RuntimeBinary != "" {
+		result.RuntimeBinary = override.RuntimeBinary
+	}
+	if len(override.AllowedCommands) > 0 {
+		result.AllowedCommands = append([]string(nil), override.AllowedCommands...)
+	}
+	if len(override.DeniedCommands) > 0 {
+		result.DeniedCommands = append([]string(nil), override.DeniedCommands...)
+	}
+	if override.RequireApproval {
+		result.RequireApproval = true
+	}
+	if override.LogPath != "" {
+		result.LogPath = override.LogPath
+	}
+	if !override.FallbackToHost {
+		result.FallbackToHost = false
+	}
+	return result
 }

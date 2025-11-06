@@ -19,6 +19,7 @@ type memoryStore struct {
 	taskRuns     map[uuid.UUID]*model.TaskRun
 	leases       map[uuid.UUID]uuid.UUID
 	artifacts    map[uuid.UUID]model.Artifact
+	taskResults  map[uuid.UUID]*model.TaskResult
 }
 
 func newMemoryStore() Store {
@@ -29,6 +30,7 @@ func newMemoryStore() Store {
 		taskRuns:     make(map[uuid.UUID]*model.TaskRun),
 		leases:       make(map[uuid.UUID]uuid.UUID),
 		artifacts:    make(map[uuid.UUID]model.Artifact),
+		taskResults:  make(map[uuid.UUID]*model.TaskResult),
 	}
 }
 
@@ -99,6 +101,9 @@ func (m *memoryStore) CreateTask(_ context.Context, task *model.Task) error {
 	taskCopy := *task
 	taskCopy.CreatedAt = now
 	taskCopy.UpdatedAt = now
+	if taskCopy.Metadata != nil {
+		taskCopy.Metadata = copyMap(task.Metadata)
+	}
 	m.tasks[taskCopy.ID] = &taskCopy
 	return nil
 }
@@ -112,6 +117,9 @@ func (m *memoryStore) UpdateTaskStatus(_ context.Context, taskID uuid.UUID, stat
 	}
 	task.Status = status
 	task.UpdatedAt = time.Now()
+	if task.Metadata != nil {
+		task.Metadata = copyMap(task.Metadata)
+	}
 	return nil
 }
 
@@ -136,6 +144,7 @@ func (m *memoryStore) GetTask(_ context.Context, id uuid.UUID) (*model.Task, err
 	}
 	cp := *task
 	cp.Metadata = copyMap(task.Metadata)
+	cp.Profile = task.Profile
 	cp.Payload = append([]byte(nil), task.Payload...)
 	return &cp, nil
 }
@@ -174,6 +183,7 @@ func (m *memoryStore) ListTasks(_ context.Context, statuses []model.TaskStatus, 
 		}
 		cp := *task
 		cp.Metadata = copyMap(task.Metadata)
+		cp.Profile = task.Profile
 		cp.Payload = append([]byte(nil), task.Payload...)
 		res = append(res, &cp)
 	}
@@ -200,6 +210,16 @@ func (m *memoryStore) CreateTaskRun(_ context.Context, run *model.TaskRun) error
 	if runCopy.StartedAt == nil {
 		runCopy.StartedAt = ptrTime(now)
 	}
+	if runCopy.TaskType == "" {
+		runCopy.TaskType = model.TaskType("generic")
+	}
+	if runCopy.Metadata != nil {
+		metaCopy := make(map[string]string, len(runCopy.Metadata))
+		for k, v := range runCopy.Metadata {
+			metaCopy[k] = v
+		}
+		runCopy.Metadata = metaCopy
+	}
 	m.taskRuns[runCopy.ID] = &runCopy
 	m.leases[runCopy.LeaseID] = runCopy.ID
 	return nil
@@ -220,7 +240,7 @@ func (m *memoryStore) UpdateTaskRunStatusByLease(_ context.Context, leaseID uuid
 	return nil
 }
 
-func (m *memoryStore) UpdateTaskRunCompletion(_ context.Context, runID uuid.UUID, status model.TaskStatus, finished time.Time, summary []byte, errMsg string) error {
+func (m *memoryStore) UpdateTaskRunCompletion(_ context.Context, runID uuid.UUID, status model.TaskStatus, finished time.Time, summary []byte, errMsg string, metadata map[string]string, exitCode int32, errorCode string, expiresAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	run, ok := m.taskRuns[runID]
@@ -231,6 +251,20 @@ func (m *memoryStore) UpdateTaskRunCompletion(_ context.Context, runID uuid.UUID
 	run.FinishedAt = ptrTime(finished)
 	run.Summary = append([]byte(nil), summary...)
 	run.ErrorMessage = errMsg
+	if metadata != nil {
+		metaCopy := make(map[string]string, len(metadata))
+		for k, v := range metadata {
+			metaCopy[k] = v
+		}
+		run.Metadata = metaCopy
+	} else {
+		run.Metadata = nil
+	}
+	run.ExitCode = exitCode
+	run.ErrorCode = errorCode
+	if !expiresAt.IsZero() {
+		run.ExpiresAt = expiresAt
+	}
 	if run.LeaseID != uuid.Nil {
 		delete(m.leases, run.LeaseID)
 	}
@@ -249,6 +283,13 @@ func (m *memoryStore) GetTaskRunByLease(_ context.Context, leaseID uuid.UUID) (*
 		return nil, ErrNotFound
 	}
 	cp := *run
+	if run.Metadata != nil {
+		cp.Metadata = copyMap(run.Metadata)
+	}
+	cp.TaskType = run.TaskType
+	if !run.ExpiresAt.IsZero() {
+		cp.ExpiresAt = run.ExpiresAt
+	}
 	return &cp, nil
 }
 
@@ -268,6 +309,10 @@ func (m *memoryStore) GetLatestTaskRun(_ context.Context, taskID uuid.UUID) (*mo
 	if latest == nil {
 		return nil, ErrNotFound
 	}
+	if latest.Metadata != nil {
+		meta := copyMap(latest.Metadata)
+		latest.Metadata = meta
+	}
 	return latest, nil
 }
 
@@ -286,6 +331,72 @@ func (m *memoryStore) SaveArtifacts(_ context.Context, artifacts []model.Artifac
 		m.artifacts[id] = art
 	}
 	return nil
+}
+
+func (m *memoryStore) InsertTaskResult(ctx context.Context, result *model.TaskResult) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if result == nil {
+		return nil
+	}
+	if result.ID == uuid.Nil {
+		result.ID = uuid.New()
+	}
+	cp := *result
+	if cp.Metadata != nil {
+		meta := make(map[string]string, len(cp.Metadata))
+		for k, v := range cp.Metadata {
+			meta[k] = v
+		}
+		cp.Metadata = meta
+	}
+	m.taskResults[cp.ID] = &cp
+	return nil
+}
+
+func (m *memoryStore) ArchiveTaskResults(ctx context.Context, before time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if before.IsZero() {
+		return 0, nil
+	}
+	removed := 0
+	for id, res := range m.taskResults {
+		if res.CompletedAt.Before(before) {
+			delete(m.taskResults, id)
+			removed++
+		}
+	}
+	return removed, nil
+}
+
+func (m *memoryStore) ListTaskResults(_ context.Context, taskType model.TaskType, limit int) ([]*model.TaskResult, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	results := make([]*model.TaskResult, 0, len(m.taskResults))
+	for _, res := range m.taskResults {
+		if taskType != "" && res.TaskType != taskType {
+			continue
+		}
+		cp := *res
+		if res.Metadata != nil {
+			cp.Metadata = copyMap(res.Metadata)
+		}
+		if res.Summary != nil {
+			cp.Summary = append([]byte(nil), res.Summary...)
+		}
+		results = append(results, &cp)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].CompletedAt.Equal(results[j].CompletedAt) {
+			return results[i].ID.String() > results[j].ID.String()
+		}
+		return results[i].CompletedAt.After(results[j].CompletedAt)
+	})
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
 }
 
 func copyMap(in map[string]string) map[string]string {

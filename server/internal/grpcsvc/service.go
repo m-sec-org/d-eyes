@@ -120,7 +120,7 @@ func (s *Service) PullTasks(ctx context.Context, req *pb.PullTaskRequest) (*pb.P
 	}
 	for i := 0; i < max; i++ {
 		task, run, err := s.sched.LeaseTask(ctx, agent)
-		if errors.Is(err, scheduler.ErrNoTaskAvailable) {
+		if errors.Is(err, scheduler.ErrNoTaskAvailable) || errors.Is(err, scheduler.ErrAgentAtCapacity) {
 			break
 		}
 		if err != nil {
@@ -129,12 +129,18 @@ func (s *Service) PullTasks(ctx context.Context, req *pb.PullTaskRequest) (*pb.P
 		if err := s.sched.MarkRunStarted(ctx, run.LeaseID); err != nil {
 			return nil, err
 		}
+		md := make(map[string]string, len(task.Metadata))
+		for k, v := range task.Metadata {
+			md[k] = v
+		}
 		leases = append(leases, &pb.TaskLease{
 			TaskId:              task.ID.String(),
 			LeaseId:             run.LeaseID.String(),
 			TaskType:            string(task.Type),
 			Payload:             append([]byte(nil), task.Payload...),
 			LeaseTimeoutSeconds: int64(s.cfg.Scheduler.LeaseTTL / time.Second),
+			Profile:             task.Profile,
+			Metadata:            md,
 		})
 		if s.metrics != nil {
 			s.metrics.TasksLeased.Inc()
@@ -169,14 +175,8 @@ func (s *Service) ReportResult(ctx context.Context, req *pb.ReportResultRequest)
 			Blob:      append([]byte(nil), art.GetData()...),
 		})
 	}
-	if err := s.sched.CompleteTask(ctx, run.ID, run.TaskID, status, req.GetSummaryJson(), req.GetErrorMessage(), artifacts); err != nil {
+	if err := s.sched.CompleteTask(ctx, run, status, req.GetSummaryJson(), req.GetErrorMessage(), req.GetMetadata(), req.GetExitCode(), req.GetErrorCode(), artifacts); err != nil {
 		return nil, err
-	}
-	if s.metrics != nil {
-		s.metrics.TasksCompleted.WithLabelValues(string(status)).Inc()
-		if run.StartedAt != nil && !run.StartedAt.IsZero() {
-			s.metrics.TaskRunDuration.Observe(time.Since(*run.StartedAt).Seconds())
-		}
 	}
 	return &pb.ReportResultResponse{Accepted: true}, nil
 }

@@ -14,8 +14,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"github.com/m-sec-org/d-eyes/server/internal/alerts"
 	"github.com/m-sec-org/d-eyes/server/internal/api"
 	v1 "github.com/m-sec-org/d-eyes/server/internal/api/v1"
+	"github.com/m-sec-org/d-eyes/server/internal/audit"
 	"github.com/m-sec-org/d-eyes/server/internal/config"
 	"github.com/m-sec-org/d-eyes/server/internal/grpcsvc"
 	"github.com/m-sec-org/d-eyes/server/internal/logger"
@@ -25,6 +27,8 @@ import (
 	"github.com/m-sec-org/d-eyes/server/internal/scheduler"
 	"github.com/m-sec-org/d-eyes/server/internal/store"
 	"github.com/m-sec-org/d-eyes/server/internal/storeprovider"
+	"github.com/m-sec-org/d-eyes/server/internal/streams"
+	"github.com/m-sec-org/d-eyes/server/internal/templates"
 	pb "github.com/m-sec-org/d-eyes/server/proto/agentservicepb"
 )
 
@@ -56,8 +60,33 @@ func Run(ctx context.Context, cfg config.Config) error {
 	sched.SetMetrics(metricsCollector)
 	metricsHandler := metrics.Handler(reg)
 
+	if cfg.Audit.Enabled && cfg.Audit.LogPath != "" {
+		auditLogger, err := audit.NewLogger(cfg.Audit.LogPath)
+		if err != nil {
+			return fmt.Errorf("init audit logger: %w", err)
+		}
+		sched.SetAudit(auditLogger)
+	}
+	var notifier alerts.Notifier = alerts.NopNotifier{}
+	if cfg.Alerts.Enabled {
+		notifier = alerts.NewLoggerNotifier(log, true, cfg.Alerts.NotifyBASFailure, cfg.Alerts.NotifyFallback)
+	}
+	sched.SetAlerts(notifier)
+
+	templateManager, err := templates.NewManager(templates.Config{PersistPath: cfg.Templates.PersistPath}, st, sched, log)
+	if err != nil {
+		return fmt.Errorf("init template manager: %w", err)
+	}
+	defer templateManager.Close()
+
+	taskStream := streams.NewTaskHub()
+	sched.SetTaskHub(taskStream)
+	taskStreamHandler := streams.SSEHandler(taskStream)
+
 	taskHandler := &v1.TaskHandler{Store: st, Sched: sched}
-	router := api.NewRouter(cfg, taskHandler, metricsHandler)
+	templateHandler := &v1.TemplateHandler{Manager: templateManager}
+	reportHandler := &v1.ReportHandler{Store: st}
+	router := api.NewRouter(cfg, taskHandler, templateHandler, reportHandler, metricsHandler, taskStreamHandler)
 
 	grpcServer, err := newGRPCServer(cfg, st, sched, log, metricsCollector)
 	if err != nil {
@@ -93,6 +122,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	_ = httpSrv.Shutdown(context.Background())
 	grpcServer.GracefulStop()
+	taskStream.Close()
 	return nil
 }
 

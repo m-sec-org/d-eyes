@@ -89,10 +89,23 @@ func (b *baselineRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, 
 		return TaskResult{}, err
 	}
 
+	metadata := map[string]string{
+		"scope":          scope,
+		"profile":        profile,
+		"format":         format,
+		"report_path":    path,
+		"checks_total":   fmt.Sprintf("%d", len(result.Checks)),
+		"baseline_scope": scope,
+	}
+	if benchReq.ConfigPath != "" {
+		metadata["baseline_config"] = benchReq.ConfigPath
+	}
+
 	return TaskResult{
-		Outputs: []reporting.OutputRecord{{Label: "基线检查", Path: path}},
-		Risks:   result.SeverityCount,
-		Notes:   result.Warnings,
+		Outputs:  []reporting.OutputRecord{{Label: "基线检查", Path: path}},
+		Risks:    result.SeverityCount,
+		Notes:    result.Warnings,
+		Metadata: metadata,
 	}, nil
 }
 

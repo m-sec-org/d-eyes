@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -17,7 +18,11 @@ type Config struct {
 	Database  DatabaseConfig  `yaml:"database"`
 	Redis     RedisConfig     `yaml:"redis"`
 	Scheduler SchedulerConfig `yaml:"scheduler"`
+	Search    SearchConfig    `yaml:"search"`
 	Metrics   MetricsConfig   `yaml:"metrics"`
+	Audit     AuditConfig     `yaml:"audit"`
+	Alerts    AlertsConfig    `yaml:"alerts"`
+	Templates TemplateConfig  `yaml:"templates"`
 }
 
 type ServerConfig struct {
@@ -56,16 +61,45 @@ type RedisConfig struct {
 }
 
 type SchedulerConfig struct {
-	LeaseTTL          time.Duration `yaml:"lease_ttl"`
-	MaxRetries        int           `yaml:"max_retries"`
-	HeartbeatTimeout  time.Duration `yaml:"heartbeat_timeout"`
-	QueueCapacity     int           `yaml:"queue_capacity"`
-	LeasePollInterval time.Duration `yaml:"lease_poll_interval"`
+	LeaseTTL             time.Duration `yaml:"lease_ttl"`
+	MaxRetries           int           `yaml:"max_retries"`
+	HeartbeatTimeout     time.Duration `yaml:"heartbeat_timeout"`
+	QueueCapacity        int           `yaml:"queue_capacity"`
+	LeasePollInterval    time.Duration `yaml:"lease_poll_interval"`
+	MaxAgentConcurrency  int           `yaml:"max_agent_concurrency"`
+	GlobalMaxConcurrency int           `yaml:"global_max_concurrency"`
+	ResultRetention      time.Duration `yaml:"result_retention"`
+	BASMaxConcurrency    int           `yaml:"bas_max_concurrency"`
 }
 
 type MetricsConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Path    string `yaml:"path"`
+}
+
+type AuditConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	LogPath string `yaml:"log_path"`
+}
+
+type AlertsConfig struct {
+	Enabled          bool   `yaml:"enabled"`
+	Channel          string `yaml:"channel"`
+	NotifyBASFailure bool   `yaml:"notify_bas_failure"`
+	NotifyFallback   bool   `yaml:"notify_sandbox_fallback"`
+}
+
+type TemplateConfig struct {
+	PersistPath string `yaml:"persist_path"`
+}
+
+type SearchConfig struct {
+	Enabled   bool          `yaml:"enabled"`
+	Addresses []string      `yaml:"addresses"`
+	Username  string        `yaml:"username"`
+	Password  string        `yaml:"password"`
+	Index     string        `yaml:"index"`
+	Timeout   time.Duration `yaml:"timeout"`
 }
 
 // Default returns a Config populated with sensible defaults.
@@ -100,15 +134,38 @@ func Default() Config {
 			WriteTimeout: 5 * time.Second,
 		},
 		Scheduler: SchedulerConfig{
-			LeaseTTL:          2 * time.Minute,
-			MaxRetries:        3,
-			HeartbeatTimeout:  15 * time.Second,
-			QueueCapacity:     1024,
-			LeasePollInterval: 5 * time.Second,
+			LeaseTTL:             2 * time.Minute,
+			MaxRetries:           3,
+			HeartbeatTimeout:     15 * time.Second,
+			QueueCapacity:        1024,
+			LeasePollInterval:    5 * time.Second,
+			MaxAgentConcurrency:  2,
+			GlobalMaxConcurrency: 0,
+			ResultRetention:      24 * time.Hour,
+			BASMaxConcurrency:    1,
 		},
 		Metrics: MetricsConfig{
 			Enabled: true,
 			Path:    "/metrics",
+		},
+		Audit: AuditConfig{
+			Enabled: false,
+			LogPath: "",
+		},
+		Alerts: AlertsConfig{
+			Enabled:          false,
+			Channel:          "log",
+			NotifyBASFailure: true,
+			NotifyFallback:   true,
+		},
+		Templates: TemplateConfig{
+			PersistPath: "",
+		},
+		Search: SearchConfig{
+			Enabled:   false,
+			Addresses: []string{"http://127.0.0.1:9200"},
+			Index:     "d-eyes-task-results",
+			Timeout:   5 * time.Second,
 		},
 	}
 }
@@ -160,6 +217,29 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("D_EYES_SERVER_REDIS_QUEUE"); v != "" {
 		cfg.Redis.QueueKey = v
 	}
+	if v := os.Getenv("D_EYES_SERVER_SEARCH_ADDR"); v != "" {
+		cfg.Search.Enabled = true
+		cfg.Search.Addresses = []string{v}
+	}
+	if v := os.Getenv("D_EYES_SERVER_SEARCH_INDEX"); v != "" {
+		cfg.Search.Index = v
+	}
+	if v := os.Getenv("D_EYES_SERVER_BAS_MAX_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.Scheduler.BASMaxConcurrency = n
+		}
+	}
+	if v := os.Getenv("D_EYES_SERVER_AUDIT_LOG"); v != "" {
+		cfg.Audit.Enabled = true
+		cfg.Audit.LogPath = v
+	}
+	if v := os.Getenv("D_EYES_SERVER_ALERTS_CHANNEL"); v != "" {
+		cfg.Alerts.Enabled = true
+		cfg.Alerts.Channel = v
+	}
+	if v := os.Getenv("D_EYES_SERVER_TEMPLATES_PATH"); v != "" {
+		cfg.Templates.PersistPath = v
+	}
 }
 
 // Validate ensures required fields are present.
@@ -169,6 +249,9 @@ func (c Config) Validate() error {
 	}
 	if !c.Database.InMemory && c.Database.DSN == "" {
 		return errors.New("database.dsn must be set when in_memory=false")
+	}
+	if c.Audit.Enabled && strings.TrimSpace(c.Audit.LogPath) == "" {
+		return errors.New("audit.log_path must be set when audit enabled")
 	}
 	return nil
 }

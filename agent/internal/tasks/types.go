@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
@@ -15,29 +16,33 @@ type TaskRunner interface {
 
 // TaskRequest 表示任务执行所需的上下文
 type TaskRequest struct {
-	Profile    string
-	OutputDir  string
-	Format     string
-	Name       string
-	Timeout    time.Duration
-	Flags      map[string]any
-	Config     config.Config
-	Manager    *reporting.Manager
-	Quiet      bool
-	JSONOutput bool
+	Profile         string
+	OutputDir       string
+	Format          string
+	Name            string
+	Timeout         time.Duration
+	Flags           map[string]any
+	Metadata        map[string]string
+	Config          config.Config
+	Manager         *reporting.Manager
+	Quiet           bool
+	JSONOutput      bool
+	Notices         []string
+	SandboxApproved bool
 }
 
 // TaskResult 表示任务执行后的返回数据
 type TaskResult struct {
-	Outputs []reporting.OutputRecord
-	Risks   map[string]int
-	Notes   []string
+	Outputs  []reporting.OutputRecord
+	Risks    map[string]int
+	Notes    []string
+	Metadata map[string]string
 }
 
 // ApplyDefaults 根据全局配置补充缺省值
 func (r *TaskRequest) ApplyDefaults(fallbackName string) {
 	cfg := r.Config
-	if cfg == (config.Config{}) {
+	if cfg.Output.Dir == "" && cfg.Output.Format == "" {
 		cfg = config.Default()
 	}
 	if r.Profile == "" {
@@ -45,6 +50,9 @@ func (r *TaskRequest) ApplyDefaults(fallbackName string) {
 	}
 	if r.Flags == nil {
 		r.Flags = make(map[string]any)
+	}
+	if r.Metadata == nil {
+		r.Metadata = make(map[string]string)
 	}
 	if r.OutputDir == "" {
 		r.OutputDir = cfg.Output.Dir
@@ -68,5 +76,16 @@ func (r *TaskRequest) ApplyDefaults(fallbackName string) {
 	}
 	if r.Manager == nil {
 		r.Manager = reporting.NewManager(cfg)
+	}
+	if r.Notices == nil {
+		r.Notices = make([]string, 0)
+	}
+	r.Config = cfg
+	if r.Config.Sandbox.RequireApproval {
+		if val, ok := r.Metadata["sandbox_approved"]; ok && strings.EqualFold(strings.TrimSpace(val), "true") {
+			r.SandboxApproved = true
+		}
+	} else if !r.SandboxApproved {
+		r.SandboxApproved = true
 	}
 }

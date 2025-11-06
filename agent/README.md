@@ -6,7 +6,7 @@ D-Eyes Agent 是 D-Eyes 安全平台的核心执行组件，由 M-SEC 社区驱�
 
 Agent 作为 D-Eyes 平台的执行引擎，负责安全检测任务的实际运行与结果收集，具备以下核心能力：
 
-- **多场景安全检测**：提供应急响应、基线检查、合规审计、资产梳理、供应链安全、入侵和攻击模拟(BAS)六大类任务场景
+- **多场景安全检测**：提供应急响应、基线检查、合规审计、资产梳理、供应链安全五大核心任务场景
 - **统一的任务执行框架**：所有任务共享配置加载、报告生成、风险评估等基础设施
 - **插件化架构**：支持通过插件机制扩展检测能力，如自定义 YARA 规则和检测模块
 - **分布式执行支持**：可与 Server 端协同，支持大规模环境下的任务分发与集中管理
@@ -75,19 +75,7 @@ Agent 作为 D-Eyes 平台的执行引擎，负责安全检测任务的实际运
 - **子命令注册机制**：支持向 detect 命令注册子命令
 - **多样检测能力**：可扩展支持各种检测场景，如恶意代码检测、异常行为分析等
 
-### 6. BAS（入侵和攻击模拟）
-
-入侵和攻击模拟(Breach and Attack Simulation)模块用于模拟各类网络攻击场景，评估系统安全防御能力，帮助用户主动发现安全漏洞和防御盲点。
-
-- **攻击链模拟**：模拟完整攻击链的各个阶段，包括初始访问、权限提升、横向移动、数据窃取等
-- **常见漏洞利用**：模拟 CVE 漏洞利用、弱密码攻击、SQL 注入等常见攻击手法
-- **红队战术演练**：基于 MITRE ATT&CK 框架的红队战术模拟
-- **防御有效性评估**：评估现有安全控制措施的有效性
-- **安全意识提升**：通过模拟攻击提高安全团队的应急响应能力
-
-支持多种模拟模式，包括自动化模拟、可控手动模拟和针对性渗透测试。
-
-### 7. 分布式管理能力
+### 6. 分布式管理能力
 
 Agent 可与 D-Eyes Server 协同工作，支持分布式任务执行与管理。
 
@@ -126,15 +114,15 @@ performance:
 
 ## 命令概览
 
-| 命令 | 场景 | 默认 profile | 主要能力 |
-|------|------|--------------|----------|
-| `respond` | 应急响应 / 入侵排查 | `quick` | 主机概要、文件扫描、网络连接、会话审计等组合模块 |
-| `baseline` | 基线检查 | `all` | 系统、数据库、中间件等基线项评估 |
-| `audit` | 合规审计 | `compliance` | 基线结果 + 主机信息 + 账号会话汇总 |
-| `inventory` | 资产梳理 | `fast` | 主机发现、端口扫描、服务识别 |
-| `supplychain` | 供应链安全 | `generate` | 目录/清单 SBOM 生成或运行环境采集 |
-| `bas` | 入侵和攻击模拟 | `auto` | 攻击链模拟、漏洞利用测试、防御有效性评估 |
-| `remote` | 远程模式 | - | 连接 Server、任务拉取、结果回传 |
+| 命令 | 分类 | 必填参数（无默认时） | 默认 profile | 主要能力 |
+|------|------|----------------------|--------------|----------|
+| `respond` | Operations | `--targets` 或 `config.tasks.respond.targets` | 来自 `config.tasks.respond.profile`（默认 `default/quick`） | 主机概要、文件扫描、网络连接、用户会话等组合模块 |
+| `audit` | Operations | 无（可通过 `config.tasks.audit.*` 设定范围） | `config.tasks.audit.scope`（默认 `system`） | 合规审计：基线结果 + 主机信息 + 账号会话汇总 |
+| `inventory` | Operations | `--targets`, `config.tasks.inventory.targets` 或 `config.discovery.targets` | `config.tasks.inventory.profile`（默认 `fast`/`deep`） | 主机发现、端口扫描、服务识别、OS 指纹 |
+| `supplychain` | Operations | `--path` / `--file` 或 `config.tasks.supplychain.paths|file` | `config.tasks.supplychain.mode`（默认 `generate`） | SBOM 生成或运行环境采集 |
+| `baseline` | Operations | `--baseline-config` 或 `config.tasks.baseline.config` | `config.tasks.baseline.scope`（默认 `all`） | 系统/数据库/中间件基线评估 |
+| `remote` | Integration | `remote.enabled=true` 且 Server 参数完整 | - | 连接 Server、任务拉取、结果回传，自动静默执行 |
+| `version` | Integration | 无 | - | 输出版本号与运行平台信息 |
 
 ### 远程模式
 
@@ -154,10 +142,13 @@ remote:
   agent_name: edge-node-01
   heartbeat_interval: 10s
   task_poll_interval: 2s
-  cache_dir: ~/.d-eyes/cache
+ cache_dir: ~/.d-eyes/cache
 ```
 
-远程模式会将待回传结果写入本地缓存目录（默认 `~/.d-eyes/cache`），断线后自动重试，任务执行仍复用 CLI 的 `TaskRunner` 体系。
+远程模式会将待回传结果写入本地缓存目录（默认 `~/.d-eyes/cache`），断线后自动重试。执行链路与 CLI 完全复用同一套 `TaskRunner`/`TaskRequest` 规范，区别在于：
+
+- 默认启用静默模式（`--quiet`）并强制输出 JSON 摘要，方便 Server 解析。
+- 任务参数映射与 CLI Flag 一致，Server 只需在 `payload.flags.*` 中填入对应的命令行参数即可。
 
 所有任务命令共享以下 Flags：
 
@@ -168,6 +159,8 @@ remote:
 - `--timeout`：任务超时时间
 - `--json`：在终端输出任务摘要的 JSON 结构
 - `--quiet`：静默模式，仅生成报告文件
+
+> **提示**：全局 Flags 在 v1.4 之后统一提升到顶层命令。若某 Flag 未在 CLI 中显式传入，会从 `config.yaml` 的对应字段（如 `config.tasks.*`、`config.output` 等）回落获取默认值。
 
 ## 应急响应 `respond`
 
@@ -242,27 +235,6 @@ Profile 说明：
 
 支持识别常见依赖清单（`package.json`、`requirements.txt`、`go.mod`、`pom.xml` 等），输出组件列表与计数。
 
-## 入侵和攻击模拟 `bas`
-
-```bash
-# 自动化攻击链模拟
- d-eyes bas --profile auto --target 192.168.1.0/24
-
-# 针对性漏洞利用测试
- d-eyes bas --profile vuln-exploit --target web-server.example.com --scenario cve-2022-1234
-
-# 防御有效性评估
- d-eyes bas --profile defense-eval --target 10.0.0.0/16 --report-format html
-```
-
-Profile 说明：
-- `auto`：自动化攻击链模拟，覆盖常见攻击阶段
-- `vuln-exploit`：针对性漏洞利用测试，支持指定特定漏洞
-- `defense-eval`：防御有效性评估，重点关注防御措施绕过测试
-- `manual`：手动可控测试，提供交互式控制界面
-
-执行结果包含详细的攻击路径、检测到的漏洞、防御绕过情况以及安全建议。
-
 ## 退出码约定
 
 | 退出码 | 含义 |
@@ -271,6 +243,20 @@ Profile 说明：
 | 1 | 满足策略阈值（如 `policy.fail_on`） |
 | 2 | 任务执行失败（参数错误、模块错误等） |
 | 3 | 上下文取消或未知错误 |
+
+## 迁移说明（v1.3 → v1.4 CLI）
+
+为便于旧版本用户升级，以下变更需要重点关注：
+
+- **全局 Flag 位置调整**：`--profile`、`--output-dir`、`--format`、`--name`、`--timeout`、`--json`、`--quiet` 等参数均提升为顶层全局 Flag，命令行语法统一为 `d-eyes [global] <command> [command options]`。
+- **参数校验更严格**：各模块会在执行前校验必填参数（如 `inventory` 的 `--targets`、`supplychain` 的 `--path/--file`、`baseline` 的配置文件）。如遗漏参数将返回退出码 `64` 并提示对应配置项。
+- **配置回落能力增强**：`config.tasks.*` 与 `config.discovery.targets` 提供 CLI 缺省值；当命令行未显式传参时，将自动填写并在非静默模式下打印 Notice。
+- **远程模式输出统一**：Server 下发任务使用与 CLI 相同的 Flag 名称，Agent 默认启用静默模式并强制输出 JSON 摘要，便于 Server 侧收集。
+
+升级步骤建议：
+1. 按新格式更新 `config.yaml` 中的 `tasks.*` 与 `discovery.targets`，为常用命令提供缺省值。
+2. 若存在自动化脚本，确认是否需要将旧的子命令级别 Flag 调整到全局位置。
+3. 使用 `d-eyes --help` 查看新的命令矩阵，确认远程任务配置与 CLI 一致。
 
 ## 代码结构
 

@@ -30,9 +30,13 @@ type Store interface {
 
 	CreateTaskRun(ctx context.Context, run *model.TaskRun) error
 	UpdateTaskRunStatusByLease(ctx context.Context, leaseID uuid.UUID, status model.TaskStatus) error
-	UpdateTaskRunCompletion(ctx context.Context, runID uuid.UUID, status model.TaskStatus, finished time.Time, summary []byte, errMsg string) error
+	UpdateTaskRunCompletion(ctx context.Context, runID uuid.UUID, status model.TaskStatus, finished time.Time, summary []byte, errMsg string, metadata map[string]string, exitCode int32, errorCode string, expiresAt time.Time) error
 	GetTaskRunByLease(ctx context.Context, leaseID uuid.UUID) (*model.TaskRun, error)
 	GetLatestTaskRun(ctx context.Context, taskID uuid.UUID) (*model.TaskRun, error)
 
 	SaveArtifacts(ctx context.Context, artifacts []model.Artifact) error
+
+	InsertTaskResult(ctx context.Context, result *model.TaskResult) error
+	ArchiveTaskResults(ctx context.Context, before time.Time) (int, error)
+	ListTaskResults(ctx context.Context, taskType model.TaskType, limit int) ([]*model.TaskResult, error)
 }

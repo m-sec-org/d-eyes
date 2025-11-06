@@ -1,0 +1,37 @@
+{
+  "id": "initial-access",
+  "name": "初始访问与持久化模拟",
+  "description": "通过钓鱼载荷落地并注册持久化入口，用于验证初始访问与持久化环节的安全防护。",
+  "tags": [
+    "initial-access",
+    "persistence"
+  ],
+  "steps": [
+    {
+      "id": "download-dropper",
+      "name": "下载钓鱼载荷",
+      "description": "模拟从攻击者控制的地址下载初始载荷。",
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "echo '模拟下载钓鱼载荷到受害主机'"
+      ],
+      "timeout_seconds": 60,
+      "use_sandbox": true,
+      "severity": "medium"
+    },
+    {
+      "id": "establish-persistence",
+      "name": "注册持久化执行",
+      "description": "模拟向系统计划任务写入持久化脚本。",
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "echo '模拟写入计划任务持久化脚本'"
+      ],
+      "timeout_seconds": 60,
+      "use_sandbox": true,
+      "severity": "high"
+    }
+  ]
+}

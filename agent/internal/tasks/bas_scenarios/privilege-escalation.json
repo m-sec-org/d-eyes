@@ -1,0 +1,50 @@
+{
+  "id": "privilege-escalation",
+  "name": "提权验证与回滚模拟",
+  "description": "执行敏感信息枚举、提权漏洞验证与清理流程，验证防守方对提权尝试的检测能力。",
+  "tags": [
+    "execution",
+    "privilege-escalation"
+  ],
+  "steps": [
+    {
+      "id": "enumerate-environment",
+      "name": "枚举系统环境",
+      "description": "采集内核与进程信息，为后续提权做准备。",
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "echo '模拟枚举内核与活跃进程信息'"
+      ],
+      "timeout_seconds": 60,
+      "use_sandbox": false,
+      "severity": "low"
+    },
+    {
+      "id": "exploit-attempt",
+      "name": "执行提权验证",
+      "description": "模拟执行高危提权漏洞，预期会失败并触发回退。",
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "echo '模拟提权尝试失败' && exit 1"
+      ],
+      "timeout_seconds": 60,
+      "use_sandbox": true,
+      "severity": "critical"
+    },
+    {
+      "id": "cleanup-artifacts",
+      "name": "清理临时文件",
+      "description": "恢复环境，删除临时提权脚本及日志。",
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "echo '模拟清理提权残留文件'"
+      ],
+      "timeout_seconds": 60,
+      "use_sandbox": true,
+      "severity": "medium"
+    }
+  ]
+}

@@ -8,10 +8,10 @@ var DetectCommand *cli.Command
 
 func init() {
 	DetectCommand = &cli.Command{
-		Name:    "detect",
-		Aliases: []string{"de"},
+		Name: "detect",
+		//Aliases: []string{"de"},
 		// 应急响应模块，入侵检测
-		Usage:       "Emergency response module, intrusion detection",
+		Usage:       "执行入侵分析检测任务",
 		Subcommands: make([]*cli.Command, 0),
 	}
 	// 注册到App中

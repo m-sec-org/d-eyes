@@ -9,7 +9,7 @@ import (
 	"github.com/m-sec-org/d-eyes/server/internal/config"
 )
 
-func NewRouter(cfg config.Config, taskHandler *v1.TaskHandler, metricsHandler gin.HandlerFunc) *gin.Engine {
+func NewRouter(cfg config.Config, taskHandler *v1.TaskHandler, templateHandler *v1.TemplateHandler, reportHandler *v1.ReportHandler, metricsHandler gin.HandlerFunc, taskStreamHandler gin.HandlerFunc) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -26,6 +26,15 @@ func NewRouter(cfg config.Config, taskHandler *v1.TaskHandler, metricsHandler gi
 		apiGroup.Use(apiKeyMiddleware(cfg.Security.APIKeys))
 	}
 	taskHandler.RegisterRoutes(apiGroup)
+	if templateHandler != nil {
+		templateHandler.RegisterRoutes(apiGroup)
+	}
+	if reportHandler != nil {
+		reportHandler.RegisterRoutes(apiGroup)
+	}
+	if taskStreamHandler != nil {
+		apiGroup.GET("/tasks/stream", taskStreamHandler)
+	}
 
 	return r
 }

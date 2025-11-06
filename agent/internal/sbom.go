@@ -3,6 +3,11 @@ package internal
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"slices"
+
 	cdx "github.com/CycloneDX/cyclonedx-go"
 	"github.com/m-sec-org/d-eyes/agent/internal/constant"
 	"github.com/m-sec-org/d-eyes/agent/internal/sbom"
@@ -10,10 +15,6 @@ import (
 	"github.com/m-sec-org/d-eyes/agent/pkg/color"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 	"github.com/urfave/cli/v2"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"slices"
 )
 
 type SbomOptions struct {
@@ -43,8 +44,8 @@ func init() {
 	SbomOption = NewSbomOptions()
 	// 获取组件依赖关系表，和组件版本范围内最新的组件版本，请对接msec sbom分析接口
 	SbomCommand = &cli.Command{
-		Name:    "sbom",
-		Aliases: []string{"sm"},
+		Name: "sbom",
+		//Aliases: []string{"sm"},
 		// 读取依赖文件生成sbom清单
 		Usage: "Read the dependency file to generate the sbom list",
 		Flags: []cli.Flag{

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -64,6 +65,7 @@ type RemoteConfig struct {
 	TaskPollInterval  time.Duration
 	CacheDir          string
 	TLS               RemoteTLSConfig
+	Sandbox           SandboxConfig
 }
 
 type RemoteTLSConfig struct {
@@ -71,6 +73,72 @@ type RemoteTLSConfig struct {
 	CertFile string
 	KeyFile  string
 	CAFile   string
+}
+
+type SandboxConfig struct {
+	Enabled         bool
+	Runtime         string
+	SharedPaths     []string
+	TempDir         string
+	RuntimeBinary   string
+	AllowedCommands []string
+	DeniedCommands  []string
+	RequireApproval bool
+	LogPath         string
+	FallbackToHost  bool
+}
+
+type DiscoveryConfig struct {
+	Targets []string
+}
+
+// TaskConfig groups module-level defaults shared by CLI & remote执行.
+type TaskConfig struct {
+	Respond     RespondTaskConfig
+	Audit       AuditTaskConfig
+	Inventory   InventoryTaskConfig
+	SupplyChain SupplyChainTaskConfig
+	Baseline    BaselineTaskConfig
+	BAS         BASTaskConfig
+}
+
+// RespondTaskConfig provides defaults for respond 命令.
+type RespondTaskConfig struct {
+	Profile string
+	Targets []string
+}
+
+// AuditTaskConfig provides defaults for audit 命令.
+type AuditTaskConfig struct {
+	Scope   string
+	Targets []string
+}
+
+// InventoryTaskConfig provides defaults for inventory 命令.
+type InventoryTaskConfig struct {
+	Targets []string
+	Ports   string
+	Profile string
+}
+
+// SupplyChainTaskConfig provides defaults for supplychain 命令.
+type SupplyChainTaskConfig struct {
+	Mode  string
+	Paths []string
+	File  string
+	Type  string
+}
+
+// BaselineTaskConfig provides defaults for baseline 命令.
+type BaselineTaskConfig struct {
+	Scope  string
+	Config string
+}
+
+// BASTaskConfig provides defaults for BAS 子任务。
+type BASTaskConfig struct {
+	SandboxEnabled bool
+	ScenarioDir    string
 }
 
 // Config contains global defaults for D-Eyes.
@@ -83,6 +151,9 @@ type Config struct {
 	Resources   ResourcesConfig
 	Network     NetworkConfig
 	Remote      RemoteConfig
+	Sandbox     SandboxConfig
+	Discovery   DiscoveryConfig
+	Tasks       TaskConfig
 }
 
 // Default returns a Config populated with built-in defaults.
@@ -132,6 +203,62 @@ func Default() Config {
 			HeartbeatInterval: 10 * time.Second,
 			TaskPollInterval:  2 * time.Second,
 			CacheDir:          filepath.Join(os.TempDir(), "d-eyes", "remote-cache"),
+			Sandbox: SandboxConfig{
+				Enabled:         false,
+				Runtime:         "gvisor",
+				SharedPaths:     nil,
+				TempDir:         filepath.Join(os.TempDir(), "d-eyes", "sandbox"),
+				RuntimeBinary:   "runsc",
+				AllowedCommands: nil,
+				DeniedCommands:  nil,
+				RequireApproval: false,
+				LogPath:         "",
+				FallbackToHost:  true,
+			},
+		},
+		Sandbox: SandboxConfig{
+			Enabled:         false,
+			Runtime:         "gvisor",
+			SharedPaths:     nil,
+			TempDir:         filepath.Join(os.TempDir(), "d-eyes", "sandbox"),
+			RuntimeBinary:   "runsc",
+			AllowedCommands: nil,
+			DeniedCommands:  nil,
+			RequireApproval: false,
+			LogPath:         "",
+			FallbackToHost:  true,
+		},
+		Discovery: DiscoveryConfig{
+			Targets: nil,
+		},
+		Tasks: TaskConfig{
+			Respond: RespondTaskConfig{
+				Profile: "default",
+				Targets: nil,
+			},
+			Audit: AuditTaskConfig{
+				Scope:   "system",
+				Targets: nil,
+			},
+			Inventory: InventoryTaskConfig{
+				Targets: nil,
+				Ports:   "",
+				Profile: "fast",
+			},
+			SupplyChain: SupplyChainTaskConfig{
+				Mode:  "generate",
+				Paths: nil,
+				File:  "",
+				Type:  "json",
+			},
+			Baseline: BaselineTaskConfig{
+				Scope:  "all",
+				Config: "",
+			},
+			BAS: BASTaskConfig{
+				SandboxEnabled: true,
+				ScenarioDir:    "",
+			},
 		},
 	}
 }
@@ -166,6 +293,9 @@ type fileConfig struct {
 	Resources   *fileResourcesConfig   `yaml:"resources"`
 	Network     *fileNetworkConfig     `yaml:"network"`
 	Remote      *fileRemoteConfig      `yaml:"remote"`
+	Sandbox     *fileSandboxConfig     `yaml:"sandbox"`
+	Discovery   *fileDiscoveryConfig   `yaml:"discovery"`
+	Tasks       *fileTaskConfig        `yaml:"tasks"`
 }
 
 type fileOutputConfig struct {
@@ -205,14 +335,15 @@ type fileNetworkConfig struct {
 }
 
 type fileRemoteConfig struct {
-	Enabled           *bool          `yaml:"enabled"`
-	ServerGRPCAddr    *string        `yaml:"server_grpc_addr"`
-	AgentToken        *string        `yaml:"agent_token"`
-	AgentName         *string        `yaml:"agent_name"`
-	HeartbeatInterval *time.Duration `yaml:"heartbeat_interval"`
-	TaskPollInterval  *time.Duration `yaml:"task_poll_interval"`
-	CacheDir          *string        `yaml:"cache_dir"`
-	TLS               *fileRemoteTLS `yaml:"tls"`
+	Enabled           *bool              `yaml:"enabled"`
+	ServerGRPCAddr    *string            `yaml:"server_grpc_addr"`
+	AgentToken        *string            `yaml:"agent_token"`
+	AgentName         *string            `yaml:"agent_name"`
+	HeartbeatInterval *time.Duration     `yaml:"heartbeat_interval"`
+	TaskPollInterval  *time.Duration     `yaml:"task_poll_interval"`
+	CacheDir          *string            `yaml:"cache_dir"`
+	TLS               *fileRemoteTLS     `yaml:"tls"`
+	Sandbox           *fileSandboxConfig `yaml:"sandbox"`
 }
 
 type fileRemoteTLS struct {
@@ -220,6 +351,65 @@ type fileRemoteTLS struct {
 	CertFile *string `yaml:"cert_file"`
 	KeyFile  *string `yaml:"key_file"`
 	CAFile   *string `yaml:"ca_file"`
+}
+
+type fileDiscoveryConfig struct {
+	Targets []string `yaml:"targets"`
+}
+
+type fileTaskConfig struct {
+	Respond     *fileRespondTaskConfig     `yaml:"respond"`
+	Audit       *fileAuditTaskConfig       `yaml:"audit"`
+	Inventory   *fileInventoryTaskConfig   `yaml:"inventory"`
+	SupplyChain *fileSupplyChainTaskConfig `yaml:"supplychain"`
+	Baseline    *fileBaselineTaskConfig    `yaml:"baseline"`
+	BAS         *fileBASTaskConfig         `yaml:"bas"`
+}
+
+type fileRespondTaskConfig struct {
+	Profile *string  `yaml:"profile"`
+	Targets []string `yaml:"targets"`
+}
+
+type fileAuditTaskConfig struct {
+	Scope   *string  `yaml:"scope"`
+	Targets []string `yaml:"targets"`
+}
+
+type fileInventoryTaskConfig struct {
+	Targets []string `yaml:"targets"`
+	Ports   *string  `yaml:"ports"`
+	Profile *string  `yaml:"profile"`
+}
+
+type fileSupplyChainTaskConfig struct {
+	Mode  *string  `yaml:"mode"`
+	Paths []string `yaml:"paths"`
+	File  *string  `yaml:"file"`
+	Type  *string  `yaml:"type"`
+}
+
+type fileBaselineTaskConfig struct {
+	Scope  *string `yaml:"scope"`
+	Config *string `yaml:"config"`
+}
+
+type fileBASTaskConfig struct {
+	SandboxEnabled *bool   `yaml:"sandbox_enabled"`
+	ScenarioDir    *string `yaml:"scenario_dir"`
+}
+
+type fileSandboxConfig struct {
+	Enabled         *bool    `yaml:"enabled"`
+	Runtime         *string  `yaml:"runtime"`
+	SharedPaths     []string `yaml:"shared_paths"`
+	TempDir         *string  `yaml:"temp_dir"`
+	RuntimeBinary   *string  `yaml:"runtime_binary"`
+	AllowedCommands []string `yaml:"allowed_commands"`
+	DeniedCommands  []string `yaml:"denied_commands"`
+	RequireApproval *bool    `yaml:"require_approval"`
+	LogPath         *string  `yaml:"log_path"`
+	FallbackToHost  *bool    `yaml:"fallback_to_host"`
 }
 
 func mergeConfig(base Config, overrides fileConfig) Config {
@@ -282,6 +472,43 @@ func mergeConfig(base Config, overrides fileConfig) Config {
 			base.Network.ResolveHost = *overrides.Network.ResolveHost
 		}
 	}
+	if overrides.Sandbox != nil {
+		if overrides.Sandbox.Enabled != nil {
+			base.Sandbox.Enabled = *overrides.Sandbox.Enabled
+		}
+		if overrides.Sandbox.Runtime != nil && strings.TrimSpace(*overrides.Sandbox.Runtime) != "" {
+			base.Sandbox.Runtime = *overrides.Sandbox.Runtime
+		}
+		if overrides.Sandbox.SharedPaths != nil {
+			base.Sandbox.SharedPaths = append([]string(nil), overrides.Sandbox.SharedPaths...)
+		}
+		if overrides.Sandbox.TempDir != nil && strings.TrimSpace(*overrides.Sandbox.TempDir) != "" {
+			base.Sandbox.TempDir = *overrides.Sandbox.TempDir
+		}
+		if overrides.Sandbox.RuntimeBinary != nil && strings.TrimSpace(*overrides.Sandbox.RuntimeBinary) != "" {
+			base.Sandbox.RuntimeBinary = *overrides.Sandbox.RuntimeBinary
+		}
+		if overrides.Sandbox.AllowedCommands != nil {
+			base.Sandbox.AllowedCommands = append([]string(nil), overrides.Sandbox.AllowedCommands...)
+		}
+		if overrides.Sandbox.DeniedCommands != nil {
+			base.Sandbox.DeniedCommands = append([]string(nil), overrides.Sandbox.DeniedCommands...)
+		}
+		if overrides.Sandbox.RequireApproval != nil {
+			base.Sandbox.RequireApproval = *overrides.Sandbox.RequireApproval
+		}
+		if overrides.Sandbox.LogPath != nil && strings.TrimSpace(*overrides.Sandbox.LogPath) != "" {
+			base.Sandbox.LogPath = *overrides.Sandbox.LogPath
+		}
+		if overrides.Sandbox.FallbackToHost != nil {
+			base.Sandbox.FallbackToHost = *overrides.Sandbox.FallbackToHost
+		}
+	}
+	if overrides.Discovery != nil {
+		if overrides.Discovery.Targets != nil {
+			base.Discovery.Targets = append([]string(nil), overrides.Discovery.Targets...)
+		}
+	}
 	if overrides.Remote != nil {
 		if overrides.Remote.Enabled != nil {
 			base.Remote.Enabled = *overrides.Remote.Enabled
@@ -316,6 +543,97 @@ func mergeConfig(base Config, overrides fileConfig) Config {
 			}
 			if overrides.Remote.TLS.CAFile != nil {
 				base.Remote.TLS.CAFile = *overrides.Remote.TLS.CAFile
+			}
+		}
+		if overrides.Remote.Sandbox != nil {
+			if overrides.Remote.Sandbox.Enabled != nil {
+				base.Remote.Sandbox.Enabled = *overrides.Remote.Sandbox.Enabled
+			}
+			if overrides.Remote.Sandbox.Runtime != nil && strings.TrimSpace(*overrides.Remote.Sandbox.Runtime) != "" {
+				base.Remote.Sandbox.Runtime = *overrides.Remote.Sandbox.Runtime
+			}
+			if overrides.Remote.Sandbox.SharedPaths != nil {
+				base.Remote.Sandbox.SharedPaths = append([]string(nil), overrides.Remote.Sandbox.SharedPaths...)
+			}
+			if overrides.Remote.Sandbox.TempDir != nil && strings.TrimSpace(*overrides.Remote.Sandbox.TempDir) != "" {
+				base.Remote.Sandbox.TempDir = *overrides.Remote.Sandbox.TempDir
+			}
+			if overrides.Remote.Sandbox.RuntimeBinary != nil && strings.TrimSpace(*overrides.Remote.Sandbox.RuntimeBinary) != "" {
+				base.Remote.Sandbox.RuntimeBinary = *overrides.Remote.Sandbox.RuntimeBinary
+			}
+			if overrides.Remote.Sandbox.AllowedCommands != nil {
+				base.Remote.Sandbox.AllowedCommands = append([]string(nil), overrides.Remote.Sandbox.AllowedCommands...)
+			}
+			if overrides.Remote.Sandbox.DeniedCommands != nil {
+				base.Remote.Sandbox.DeniedCommands = append([]string(nil), overrides.Remote.Sandbox.DeniedCommands...)
+			}
+			if overrides.Remote.Sandbox.RequireApproval != nil {
+				base.Remote.Sandbox.RequireApproval = *overrides.Remote.Sandbox.RequireApproval
+			}
+			if overrides.Remote.Sandbox.LogPath != nil && strings.TrimSpace(*overrides.Remote.Sandbox.LogPath) != "" {
+				base.Remote.Sandbox.LogPath = *overrides.Remote.Sandbox.LogPath
+			}
+			if overrides.Remote.Sandbox.FallbackToHost != nil {
+				base.Remote.Sandbox.FallbackToHost = *overrides.Remote.Sandbox.FallbackToHost
+			}
+		}
+	}
+	if overrides.Tasks != nil {
+		if overrides.Tasks.Respond != nil {
+			if overrides.Tasks.Respond.Profile != nil {
+				base.Tasks.Respond.Profile = *overrides.Tasks.Respond.Profile
+			}
+			if overrides.Tasks.Respond.Targets != nil {
+				base.Tasks.Respond.Targets = append([]string(nil), overrides.Tasks.Respond.Targets...)
+			}
+		}
+		if overrides.Tasks.Audit != nil {
+			if overrides.Tasks.Audit.Scope != nil {
+				base.Tasks.Audit.Scope = *overrides.Tasks.Audit.Scope
+			}
+			if overrides.Tasks.Audit.Targets != nil {
+				base.Tasks.Audit.Targets = append([]string(nil), overrides.Tasks.Audit.Targets...)
+			}
+		}
+		if overrides.Tasks.Inventory != nil {
+			if overrides.Tasks.Inventory.Targets != nil {
+				base.Tasks.Inventory.Targets = append([]string(nil), overrides.Tasks.Inventory.Targets...)
+			}
+			if overrides.Tasks.Inventory.Ports != nil {
+				base.Tasks.Inventory.Ports = *overrides.Tasks.Inventory.Ports
+			}
+			if overrides.Tasks.Inventory.Profile != nil {
+				base.Tasks.Inventory.Profile = *overrides.Tasks.Inventory.Profile
+			}
+		}
+		if overrides.Tasks.SupplyChain != nil {
+			if overrides.Tasks.SupplyChain.Mode != nil {
+				base.Tasks.SupplyChain.Mode = *overrides.Tasks.SupplyChain.Mode
+			}
+			if overrides.Tasks.SupplyChain.Paths != nil {
+				base.Tasks.SupplyChain.Paths = append([]string(nil), overrides.Tasks.SupplyChain.Paths...)
+			}
+			if overrides.Tasks.SupplyChain.File != nil {
+				base.Tasks.SupplyChain.File = *overrides.Tasks.SupplyChain.File
+			}
+			if overrides.Tasks.SupplyChain.Type != nil {
+				base.Tasks.SupplyChain.Type = *overrides.Tasks.SupplyChain.Type
+			}
+		}
+		if overrides.Tasks.Baseline != nil {
+			if overrides.Tasks.Baseline.Scope != nil {
+				base.Tasks.Baseline.Scope = *overrides.Tasks.Baseline.Scope
+			}
+			if overrides.Tasks.Baseline.Config != nil {
+				base.Tasks.Baseline.Config = *overrides.Tasks.Baseline.Config
+			}
+		}
+		if overrides.Tasks.BAS != nil {
+			if overrides.Tasks.BAS.SandboxEnabled != nil {
+				base.Tasks.BAS.SandboxEnabled = *overrides.Tasks.BAS.SandboxEnabled
+			}
+			if overrides.Tasks.BAS.ScenarioDir != nil && strings.TrimSpace(*overrides.Tasks.BAS.ScenarioDir) != "" {
+				base.Tasks.BAS.ScenarioDir = *overrides.Tasks.BAS.ScenarioDir
 			}
 		}
 	}

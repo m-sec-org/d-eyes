@@ -1,0 +1,7 @@
+ALTER TABLE tasks
+    ADD COLUMN IF NOT EXISTS profile TEXT DEFAULT '';
+
+ALTER TABLE task_runs
+    ADD COLUMN IF NOT EXISTS result_metadata JSONB DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS exit_code INT DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS error_code TEXT DEFAULT '';

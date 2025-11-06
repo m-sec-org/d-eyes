@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,8 @@ func setupTestRouter(t *testing.T) (*gin.Engine, store.Store, *scheduler.Schedul
 	}
 	sched := scheduler.New(st, queue, cfg.Scheduler)
 	handler := &v1.TaskHandler{Store: st, Sched: sched}
-	router := api.NewRouter(cfg, handler, nil)
+	reportHandler := &v1.ReportHandler{Store: st}
+	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, reportHandler, nil, nil)
 	return router, st, sched
 }
 
@@ -59,6 +61,7 @@ func TestTaskLifecycle(t *testing.T) {
 	payload := map[string]any{"targets": []string{"/tmp"}}
 	body, _ := json.Marshal(map[string]any{
 		"type":       "respond",
+		"profile":    "quick",
 		"priority":   2,
 		"payload":    payload,
 		"metadata":   map[string]string{"required_capabilities": "respond"},
@@ -92,7 +95,9 @@ func TestTaskLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, taskID, leasedTask.ID)
 	require.NoError(t, sched.MarkRunStarted(ctx, run.LeaseID))
-	require.NoError(t, sched.CompleteTask(ctx, run.ID, run.TaskID, model.TaskStatusSucceeded, []byte(`{"ok":true}`), "", nil))
+	runStored, err := st.GetTaskRunByLease(ctx, run.LeaseID)
+	require.NoError(t, err)
+	require.NoError(t, sched.CompleteTask(ctx, runStored, model.TaskStatusSucceeded, []byte(`{"ok":true}`), "", map[string]string{"module": "respond"}, 0, "", nil))
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String(), nil)
 	getReq.Header.Set("X-API-Key", "changeme")
@@ -135,4 +140,494 @@ type v1TaskResponse struct {
 
 type v1TaskRunOutput struct {
 	Status string `json:"status"`
+}
+
+func TestGetRespondReport(t *testing.T) {
+	router, st, sched := setupTestRouter(t)
+	ctx := context.Background()
+
+	payload := map[string]any{"targets": []string{"/var"}}
+	body, _ := json.Marshal(map[string]any{
+		"type":       "respond",
+		"profile":    "quick",
+		"priority":   1,
+		"payload":    payload,
+		"metadata":   map[string]string{"required_capabilities": "respond"},
+		"created_by": "tester",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "changeme")
+	resp := performRequest(router, req)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	var created map[string]string
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+	taskID := uuid.MustParse(created["id"])
+
+	task, err := st.GetTask(ctx, taskID)
+	require.NoError(t, err)
+	require.Equal(t, model.TaskType("respond"), task.Type)
+
+	agent := &model.Agent{
+		ID:            uuid.New(),
+		Name:          "agent-respond",
+		Capabilities:  []string{"respond"},
+		Status:        model.AgentStatusOnline,
+		LastHeartbeat: time.Now(),
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agent))
+	require.NoError(t, sched.PrimeFromStore(ctx))
+
+	leasedTask, run, err := sched.LeaseTask(ctx, agent)
+	require.NoError(t, err)
+	require.Equal(t, taskID, leasedTask.ID)
+	require.NoError(t, sched.MarkRunStarted(ctx, run.LeaseID))
+
+	execResult := model.ExecutionResult{
+		Status: "succeeded",
+		Summary: model.ExecutionSummary{
+			Command:         "respond",
+			Status:          "完成",
+			DurationSeconds: 2.5,
+			Notes:           []string{"host scan success"},
+			Risks:           map[string]int{"low": 1},
+			Outputs: []model.OutputRecord{
+				{Path: "/tmp/report.json", Label: "主机概要"},
+			},
+		},
+		Artifacts: []model.OutputRecord{
+			{Path: "/tmp/report.json", Label: "主机概要"},
+		},
+		Metadata: map[string]string{"module": "respond"},
+	}
+	summaryBytes, err := json.Marshal(execResult)
+	require.NoError(t, err)
+
+	runStored, err := st.GetTaskRunByLease(ctx, run.LeaseID)
+	require.NoError(t, err)
+	require.NoError(t, sched.CompleteTask(ctx, runStored, model.TaskStatusSucceeded, summaryBytes, "", map[string]string{"module": "respond"}, 0, "", nil))
+
+	reportReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/respond/report", nil)
+	reportReq.Header.Set("X-API-Key", "changeme")
+	reportResp := performRequest(router, reportReq)
+	require.Equal(t, http.StatusOK, reportResp.Code)
+
+	var report struct {
+		TaskID     string                `json:"task_id"`
+		TaskType   string                `json:"task_type"`
+		Profile    string                `json:"profile"`
+		RunID      string                `json:"run_id"`
+		TaskStatus string                `json:"task_status"`
+		Result     model.ExecutionResult `json:"result"`
+		RunMeta    map[string]string     `json:"run_metadata"`
+		ExitCode   int32                 `json:"exit_code"`
+		ErrorCode  string                `json:"error_code"`
+		Completed  *time.Time            `json:"completed_at"`
+	}
+	require.NoError(t, json.Unmarshal(reportResp.Body.Bytes(), &report))
+	require.Equal(t, taskID.String(), report.TaskID)
+	require.Equal(t, "respond", report.TaskType)
+	require.Equal(t, "quick", report.Profile)
+	require.Equal(t, "succeeded", report.TaskStatus)
+	require.Equal(t, "respond", report.Result.Summary.Command)
+	require.Len(t, report.Result.Summary.Outputs, 1)
+	require.Equal(t, "主机概要", report.Result.Summary.Outputs[0].Label)
+	require.NotNil(t, report.Completed)
+}
+
+func TestGetBASReport(t *testing.T) {
+	router, st, sched := setupTestRouter(t)
+	ctx := context.Background()
+
+	payload := map[string]any{"flags": map[string]any{"scenario-id": "initial-access"}}
+	body, _ := json.Marshal(map[string]any{
+		"type":       "bas",
+		"profile":    "default",
+		"priority":   3,
+		"payload":    payload,
+		"metadata":   map[string]string{"required_capabilities": "bas"},
+		"created_by": "bas-tester",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "changeme")
+	resp := performRequest(router, req)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	var created map[string]string
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+	taskID := uuid.MustParse(created["id"])
+
+	task, err := st.GetTask(ctx, taskID)
+	require.NoError(t, err)
+	require.Equal(t, model.TaskType("bas"), task.Type)
+
+	agent := &model.Agent{
+		ID:            uuid.New(),
+		Name:          "agent-bas",
+		Capabilities:  []string{"bas"},
+		Status:        model.AgentStatusOnline,
+		LastHeartbeat: time.Now(),
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agent))
+	require.NoError(t, sched.PrimeFromStore(ctx))
+
+	leasedTask, run, err := sched.LeaseTask(ctx, agent)
+	require.NoError(t, err)
+	require.Equal(t, taskID, leasedTask.ID)
+	require.NoError(t, sched.MarkRunStarted(ctx, run.LeaseID))
+
+	stepStart := time.Now().Add(-1 * time.Minute).UTC()
+	stepEnd := time.Now().UTC()
+	steps := []map[string]any{
+		{
+			"id":         "enumerate-environment",
+			"name":       "枚举系统环境",
+			"status":     "succeeded",
+			"exit_code":  0,
+			"sandbox":    false,
+			"started_at": stepStart,
+			"ended_at":   stepStart.Add(10 * time.Second),
+			"message":    "completed",
+		},
+		{
+			"id":         "exploit-attempt",
+			"name":       "执行提权验证",
+			"status":     "failed",
+			"exit_code":  1,
+			"sandbox":    true,
+			"started_at": stepEnd.Add(-30 * time.Second),
+			"ended_at":   stepEnd,
+			"message":    "exit code 1",
+		},
+		{
+			"id":         "cleanup-artifacts",
+			"name":       "清理临时文件",
+			"status":     "skipped",
+			"exit_code":  0,
+			"sandbox":    true,
+			"started_at": stepEnd,
+			"ended_at":   stepEnd,
+			"message":    "skipped due to previous failure",
+		},
+	}
+	stepJSON, err := json.Marshal(steps)
+	require.NoError(t, err)
+
+	execResult := model.ExecutionResult{
+		Status: "failed",
+		Summary: model.ExecutionSummary{
+			Command:         "bas",
+			Status:          "failed",
+			DurationSeconds: 30,
+			Notes:           []string{"执行提权验证: exit code 1"},
+			Risks:           map[string]int{"critical": 1},
+			Outputs: []model.OutputRecord{
+				{Path: "/tmp/bas-report.json", Label: "BAS 场景报告"},
+			},
+			ErrorMessage: "BAS 场景 privilege-escalation 执行失败，失败步骤: exploit-attempt",
+		},
+		Artifacts: []model.OutputRecord{
+			{Path: "/tmp/bas-report.json", Label: "BAS 场景报告"},
+		},
+		Metadata: map[string]string{
+			"scenario_id":          "privilege-escalation",
+			"scenario_name":        "提权验证与回滚模拟",
+			"scenario_description": "模拟提权场景",
+		},
+	}
+	meta := map[string]string{
+		"scenario_id":      "privilege-escalation",
+		"scenario_name":    "提权验证与回滚模拟",
+		"scenario_tags":    "execution, privilege-escalation",
+		"scenario_summary": string(stepJSON),
+		"scenario_steps":   "3",
+		"steps_success":    "1",
+		"steps_failed":     "1",
+		"steps_skipped":    "1",
+		"failed_steps":     "exploit-attempt",
+	}
+	summaryBytes, err := json.Marshal(execResult)
+	require.NoError(t, err)
+
+	runStored, err := st.GetTaskRunByLease(ctx, run.LeaseID)
+	require.NoError(t, err)
+	require.NoError(t, sched.CompleteTask(ctx, runStored, model.TaskStatusFailed, summaryBytes, execResult.Summary.ErrorMessage, meta, 1, "bas.step_failed", nil))
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/bas/report", nil)
+	getReq.Header.Set("X-API-Key", "changeme")
+	getResp := performRequest(router, getReq)
+	require.Equal(t, http.StatusOK, getResp.Code)
+
+	var report struct {
+		TaskType   string `json:"task_type"`
+		ScenarioID string `json:"scenario_id"`
+		Steps      []struct {
+			Status string `json:"status"`
+		} `json:"steps"`
+		FailedSteps []string `json:"failed_steps"`
+		ErrorCode   string   `json:"error_code"`
+		ExitCode    int32    `json:"exit_code"`
+	}
+	require.NoError(t, json.Unmarshal(getResp.Body.Bytes(), &report))
+	require.Equal(t, "bas", report.TaskType)
+	require.Equal(t, "privilege-escalation", report.ScenarioID)
+	require.Len(t, report.Steps, 3)
+	require.Equal(t, "failed", report.Steps[1].Status)
+	require.Equal(t, []string{"exploit-attempt"}, report.FailedSteps)
+	require.Equal(t, "bas.step_failed", report.ErrorCode)
+	require.Equal(t, int32(1), report.ExitCode)
+}
+
+func TestGetBaselineReport(t *testing.T) {
+	router, st, sched := setupTestRouter(t)
+	ctx := context.Background()
+
+	body, _ := json.Marshal(map[string]any{
+		"type":       "baseline",
+		"profile":    "os",
+		"priority":   1,
+		"payload":    map[string]any{"flags": map[string]any{"scope": "os"}},
+		"metadata":   map[string]string{"required_capabilities": "baseline"},
+		"created_by": "tester",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "changeme")
+	resp := performRequest(router, req)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	var created map[string]string
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+	taskID := uuid.MustParse(created["id"])
+
+	agent := &model.Agent{
+		ID:            uuid.New(),
+		Name:          "agent-baseline",
+		Capabilities:  []string{"baseline"},
+		Status:        model.AgentStatusOnline,
+		LastHeartbeat: time.Now(),
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agent))
+	require.NoError(t, sched.PrimeFromStore(ctx))
+
+	leasedTask, run, err := sched.LeaseTask(ctx, agent)
+	require.NoError(t, err)
+	require.Equal(t, taskID, leasedTask.ID)
+	require.NoError(t, sched.MarkRunStarted(ctx, run.LeaseID))
+
+	execResult := model.ExecutionResult{
+		Status: "succeeded",
+		Summary: model.ExecutionSummary{
+			Command:         "baseline",
+			Status:          "完成",
+			DurationSeconds: 5.2,
+			Risks:           map[string]int{"high": 1, "medium": 3},
+			Notes:           []string{"弱口令策略未启用"},
+			Outputs: []model.OutputRecord{
+				{Path: "/tmp/baseline.json", Label: "基线检查"},
+			},
+		},
+		Metadata: map[string]string{"scope": "os"},
+	}
+	summaryBytes, err := json.Marshal(execResult)
+	require.NoError(t, err)
+
+	runStored, err := st.GetTaskRunByLease(ctx, run.LeaseID)
+	require.NoError(t, err)
+	require.NoError(t, sched.CompleteTask(ctx, runStored, model.TaskStatusSucceeded, summaryBytes, "", map[string]string{"scope": "os"}, 0, "", nil))
+
+	reportReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/baseline/report", nil)
+	reportReq.Header.Set("X-API-Key", "changeme")
+	reportResp := performRequest(router, reportReq)
+	require.Equal(t, http.StatusOK, reportResp.Code)
+
+	var report struct {
+		TaskID     string                `json:"task_id"`
+		Severity   map[string]int        `json:"severity"`
+		Warnings   []string              `json:"warnings"`
+		Result     model.ExecutionResult `json:"result"`
+		Profile    string                `json:"profile"`
+		TaskType   string                `json:"task_type"`
+		TaskStatus string                `json:"task_status"`
+	}
+	require.NoError(t, json.Unmarshal(reportResp.Body.Bytes(), &report))
+	require.Equal(t, taskID.String(), report.TaskID)
+	require.Equal(t, "baseline", report.TaskType)
+	require.Equal(t, "os", report.Profile)
+	require.Equal(t, "succeeded", report.TaskStatus)
+	require.Equal(t, map[string]int{"high": 1, "medium": 3}, report.Severity)
+	require.Equal(t, []string{"弱口令策略未启用"}, report.Warnings)
+	require.Len(t, report.Result.Summary.Outputs, 1)
+	require.Equal(t, "基线检查", report.Result.Summary.Outputs[0].Label)
+}
+
+func TestGetInventoryReport(t *testing.T) {
+	router, st, sched := setupTestRouter(t)
+	ctx := context.Background()
+
+	body, _ := json.Marshal(map[string]any{
+		"type":       "inventory",
+		"profile":    "deep",
+		"priority":   1,
+		"payload":    map[string]any{"flags": map[string]any{"targets": "10.0.0.1,10.0.0.2"}},
+		"metadata":   map[string]string{"required_capabilities": "inventory"},
+		"created_by": "tester",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "changeme")
+	resp := performRequest(router, req)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	var created map[string]string
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+	taskID := uuid.MustParse(created["id"])
+
+	agent := &model.Agent{
+		ID:            uuid.New(),
+		Name:          "agent-inventory",
+		Capabilities:  []string{"inventory"},
+		Status:        model.AgentStatusOnline,
+		LastHeartbeat: time.Now(),
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agent))
+	require.NoError(t, sched.PrimeFromStore(ctx))
+
+	leasedTask, run, err := sched.LeaseTask(ctx, agent)
+	require.NoError(t, err)
+	require.Equal(t, taskID, leasedTask.ID)
+	require.NoError(t, sched.MarkRunStarted(ctx, run.LeaseID))
+
+	targets := []string{"10.0.0.1", "10.0.0.2"}
+	execResult := model.ExecutionResult{
+		Status: "succeeded",
+		Summary: model.ExecutionSummary{
+			Command:         "inventory",
+			Status:          "完成",
+			DurationSeconds: 3.2,
+			Risks:           map[string]int{"high": 2, "low": 5},
+			Outputs: []model.OutputRecord{
+				{Path: "/tmp/inventory-10.0.0.1.json", Label: "资产扫描：10.0.0.1"},
+				{Path: "/tmp/inventory-10.0.0.2.json", Label: "资产扫描：10.0.0.2"},
+				{Path: "/tmp/inventory-summary.json", Label: "资产扫描汇总"},
+			},
+		},
+		Metadata: map[string]string{
+			"total_hosts":  "4",
+			"total_ports":  "12",
+			"targets":      strings.Join(targets, ","),
+			"target_count": "2",
+			"summary_path": "/tmp/inventory-summary.json",
+		},
+	}
+	summaryBytes, err := json.Marshal(execResult)
+	require.NoError(t, err)
+
+	runStored, err := st.GetTaskRunByLease(ctx, run.LeaseID)
+	require.NoError(t, err)
+	require.NoError(t, sched.CompleteTask(ctx, runStored, model.TaskStatusSucceeded, summaryBytes, "", map[string]string{"targets": strings.Join(targets, ","), "target_count": "2"}, 0, "", nil))
+
+	reportReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/inventory/report", nil)
+	reportReq.Header.Set("X-API-Key", "changeme")
+	reportResp := performRequest(router, reportReq)
+	require.Equal(t, http.StatusOK, reportResp.Code)
+
+	var report struct {
+		TaskID  string                `json:"task_id"`
+		Totals  map[string]int        `json:"totals"`
+		Targets []string              `json:"targets"`
+		Result  model.ExecutionResult `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(reportResp.Body.Bytes(), &report))
+	require.Equal(t, taskID.String(), report.TaskID)
+	require.Equal(t, map[string]int{"hosts": 4, "ports": 12}, report.Totals)
+	require.ElementsMatch(t, targets, report.Targets)
+	require.Len(t, report.Result.Summary.Outputs, 3)
+	require.Equal(t, "资产扫描汇总", report.Result.Summary.Outputs[2].Label)
+}
+
+func TestGetSupplyChainReport(t *testing.T) {
+	router, st, sched := setupTestRouter(t)
+	ctx := context.Background()
+
+	body, _ := json.Marshal(map[string]any{
+		"type":       "supplychain",
+		"profile":    "generate",
+		"priority":   1,
+		"payload":    map[string]any{"flags": map[string]any{"path": "/app", "mode": "generate"}},
+		"metadata":   map[string]string{"required_capabilities": "supplychain"},
+		"created_by": "tester",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "changeme")
+	resp := performRequest(router, req)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	var created map[string]string
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+	taskID := uuid.MustParse(created["id"])
+
+	agent := &model.Agent{
+		ID:            uuid.New(),
+		Name:          "agent-supplychain",
+		Capabilities:  []string{"supplychain"},
+		Status:        model.AgentStatusOnline,
+		LastHeartbeat: time.Now(),
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agent))
+	require.NoError(t, sched.PrimeFromStore(ctx))
+
+	leasedTask, run, err := sched.LeaseTask(ctx, agent)
+	require.NoError(t, err)
+	require.Equal(t, taskID, leasedTask.ID)
+	require.NoError(t, sched.MarkRunStarted(ctx, run.LeaseID))
+
+	execResult := model.ExecutionResult{
+		Status: "succeeded",
+		Summary: model.ExecutionSummary{
+			Command:         "supplychain",
+			Status:          "完成",
+			DurationSeconds: 4.1,
+			Risks:           map[string]int{"low": 15},
+			Notes:           []string{"包含第三方组件"},
+			Outputs: []model.OutputRecord{
+				{Path: "/tmp/sbom.json", Label: "供应链报告"},
+			},
+		},
+		Metadata: map[string]string{
+			"mode":            "generate",
+			"component_count": "15",
+			"sources":         "package.json,requirements.txt",
+			"report_path":     "/tmp/sbom.json",
+		},
+	}
+	summaryBytes, err := json.Marshal(execResult)
+	require.NoError(t, err)
+
+	runStored, err := st.GetTaskRunByLease(ctx, run.LeaseID)
+	require.NoError(t, err)
+	require.NoError(t, sched.CompleteTask(ctx, runStored, model.TaskStatusSucceeded, summaryBytes, "", map[string]string{"mode": "generate"}, 0, "", nil))
+
+	reportReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/supplychain/report", nil)
+	reportReq.Header.Set("X-API-Key", "changeme")
+	reportResp := performRequest(router, reportReq)
+	require.Equal(t, http.StatusOK, reportResp.Code)
+
+	var report struct {
+		TaskID         string                `json:"task_id"`
+		Mode           string                `json:"mode"`
+		ComponentCount int                   `json:"component_count"`
+		Sources        []string              `json:"sources"`
+		Result         model.ExecutionResult `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(reportResp.Body.Bytes(), &report))
+	require.Equal(t, taskID.String(), report.TaskID)
+	require.Equal(t, "generate", report.Mode)
+	require.Equal(t, 15, report.ComponentCount)
+	require.ElementsMatch(t, []string{"package.json", "requirements.txt"}, report.Sources)
+	require.Len(t, report.Result.Summary.Outputs, 1)
+	require.Equal(t, "供应链报告", report.Result.Summary.Outputs[0].Label)
 }

@@ -217,6 +217,14 @@ Server端采用微服务思想设计，各组件通过接口交互，便于扩�
 - **migrations/**：数据库迁移文件
 - **proto/**：gRPC协议定义和生成的代码
 
+## 5. 运维与监控
+
+- [沙箱部署与审批指南](docs/bas-sandbox-guide.md)：介绍 BAS 子任务沙箱化、审批与回退配置。
+- [任务模板 API 说明](docs/task-template-api.md)：模板管理、调度下发与多 Agent 目标配置。
+- [报告中心接口说明](docs/report-center.md)：查询历史任务、导出 JSON/HTML 报告。
+- [运维与扩容指南](docs/operations-guide.md)：部署规划、健康检查、SSE 监控、告警与回滚流程。
+- [阶段二发布 Checklist](docs/release-checklist.md)：回归测试、性能/安全评估与上线记录模板。
+
 ## 4. 开发规范
 
 ### 4.1 代码规范

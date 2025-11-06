@@ -40,6 +40,9 @@ func (s *FileStore) Save(req *serverpb.ReportResultRequest) error {
 		Status:       req.GetStatus(),
 		ErrorMessage: req.GetErrorMessage(),
 		Summary:      req.GetSummaryJson(),
+		Metadata:     cloneStringMap(req.GetMetadata()),
+		ExitCode:     req.GetExitCode(),
+		ErrorCode:    req.GetErrorCode(),
 		SavedAt:      time.Now().UTC(),
 	}
 	data, err := json.Marshal(record)
@@ -93,13 +96,16 @@ func (s *FileStore) path(leaseID string) string {
 }
 
 type serializedResult struct {
-	AgentID      string    `json:"agent_id"`
-	LeaseID      string    `json:"lease_id"`
-	TaskID       string    `json:"task_id"`
-	Status       string    `json:"status"`
-	ErrorMessage string    `json:"error_message,omitempty"`
-	Summary      []byte    `json:"summary"`
-	SavedAt      time.Time `json:"saved_at"`
+	AgentID      string            `json:"agent_id"`
+	LeaseID      string            `json:"lease_id"`
+	TaskID       string            `json:"task_id"`
+	Status       string            `json:"status"`
+	ErrorMessage string            `json:"error_message,omitempty"`
+	Summary      []byte            `json:"summary"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
+	ExitCode     int32             `json:"exit_code,omitempty"`
+	ErrorCode    string            `json:"error_code,omitempty"`
+	SavedAt      time.Time         `json:"saved_at"`
 }
 
 func (s serializedResult) ToProto() *serverpb.ReportResultRequest {
@@ -110,5 +116,19 @@ func (s serializedResult) ToProto() *serverpb.ReportResultRequest {
 		Status:       s.Status,
 		ErrorMessage: s.ErrorMessage,
 		SummaryJson:  s.Summary,
+		Metadata:     cloneStringMap(s.Metadata),
+		ExitCode:     s.ExitCode,
+		ErrorCode:    s.ErrorCode,
 	}
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }

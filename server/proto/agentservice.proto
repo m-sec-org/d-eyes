@@ -45,6 +45,8 @@ message TaskLease {
   string task_type = 3;
   bytes payload = 4;
   int64 lease_timeout_seconds = 5;
+  string profile = 6;
+  map<string, string> metadata = 7;
 }
 
 message PullTaskResponse {
@@ -65,6 +67,9 @@ message ReportResultRequest {
   string error_message = 5;
   bytes summary_json = 6;
   repeated Artifact artifacts = 7;
+  map<string, string> metadata = 8;
+  int32 exit_code = 9;
+  string error_code = 10;
 }
 
 message ReportResultResponse {

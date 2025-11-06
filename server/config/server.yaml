@@ -22,3 +22,13 @@ scheduler:
 metrics:
   enabled: true
   path: /metrics
+audit:
+  enabled: true
+  log_path: /var/log/d-eyes/bas-audit.log
+alerts:
+  enabled: true
+  channel: log
+  notify_bas_failure: true
+  notify_sandbox_fallback: true
+templates:
+  persist_path: /var/lib/d-eyes/templates.json

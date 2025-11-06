@@ -51,7 +51,7 @@ func TestMemoryStore_ListAgentsAndLatestRun(t *testing.T) {
 		t.Fatalf("create run1: %v", err)
 	}
 	finished := time.Now()
-	if err := st.UpdateTaskRunCompletion(ctx, run1.ID, model.TaskStatusSucceeded, finished, []byte(`{"ok":true}`), ""); err != nil {
+	if err := st.UpdateTaskRunCompletion(ctx, run1.ID, model.TaskStatusSucceeded, finished, []byte(`{"ok":true}`), "", map[string]string{"module": "respond"}, 0, "", time.Time{}); err != nil {
 		t.Fatalf("complete run1: %v", err)
 	}
 
@@ -122,7 +122,7 @@ func TestMemoryStore_TaskRunLifecycle(t *testing.T) {
 
 	completedAt := time.Now()
 	summary := []byte(`{"ok":true}`)
-	require.NoError(t, st.UpdateTaskRunCompletion(ctx, run.ID, model.TaskStatusSucceeded, completedAt, summary, ""))
+	require.NoError(t, st.UpdateTaskRunCompletion(ctx, run.ID, model.TaskStatusSucceeded, completedAt, summary, "", map[string]string{}, 0, "", time.Time{}))
 
 	_, err = st.GetTaskRunByLease(ctx, leaseID)
 	require.ErrorIs(t, err, store.ErrNotFound)
