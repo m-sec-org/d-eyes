@@ -1,0 +1,32 @@
+export const mockAuditEvents = [
+  {
+    id: 'evt-1001',
+    timestamp: '2025-02-19T02:45:05Z',
+    actor: 'ops.lead',
+    role: 'admin',
+    action: 'task.create',
+    resource: 'task/6a3c3a34-0b6e-4de5-8b02-51f0af812f5c',
+    result: 'success',
+    metadata: { task_type: 'respond', scenario_id: 'resp-001' },
+  },
+  {
+    id: 'evt-1002',
+    timestamp: '2025-02-19T01:30:00Z',
+    actor: 'audit.user',
+    role: 'auditor',
+    action: 'audit.export',
+    resource: 'audit/logs',
+    result: 'success',
+    metadata: { filters: ['resource=task', 'severity=high'] },
+  },
+  {
+    id: 'evt-0999',
+    timestamp: '2025-02-18T21:12:00Z',
+    actor: 'ops.lead',
+    role: 'admin',
+    action: 'config.update',
+    resource: 'system/baseline',
+    result: 'success',
+    metadata: { changes: ['threshold:70->65'] },
+  },
+];

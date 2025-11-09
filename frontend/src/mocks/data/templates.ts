@@ -1,0 +1,26 @@
+export const mockTemplates = [
+  {
+    id: '6b8f987a-3371-4ac2-9d6c-d14fcb2f7c9e',
+    name: 'Respond-Quick',
+    description: '快速响应主机异常',
+    task_type: 'respond',
+    profile: 'default',
+    flags: { modules: ['proc', 'network'], targets: ['{{ip}}'] },
+    metadata: { severity: 'high' },
+    targets: [],
+    priority: 3,
+    created_by: 'ops.lead',
+    schedule: { enabled: false },
+  },
+  {
+    id: '0a6c2ec2-8083-49df-b3a9-7b0e8e3cc411',
+    name: 'Baseline Linux',
+    description: 'Linux 基线巡检',
+    task_type: 'baseline',
+    profile: 'os',
+    flags: { scope: 'linux' },
+    priority: 2,
+    created_by: 'ops.lead',
+    schedule: { enabled: true, interval_minutes: 720, next_run: '2025-02-20T03:00:00Z' },
+  },
+];
