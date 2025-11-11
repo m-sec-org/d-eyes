@@ -510,7 +510,32 @@ func (s *Scheduler) publishTaskEvent(event streams.TaskEvent) {
 	if event.Metadata != nil && len(event.Metadata) == 0 {
 		event.Metadata = nil
 	}
+	if event.Progress == 0 {
+		event.Progress = statusProgress(event.Status)
+	}
 	s.taskHub.Publish(event)
+}
+
+func statusProgress(status string) int {
+	switch status {
+	case string(model.TaskStatusPending):
+		return 0
+	case string(model.TaskStatusLeased):
+		return 10
+	case string(model.TaskStatusRunning):
+		return 60
+	case string(model.TaskStatusSucceeded):
+		return 100
+	case string(model.TaskStatusFailed), string(model.TaskStatusCanceled):
+		return 100
+	default:
+		return 0
+	}
+}
+
+// PublishExternalEvent allows other components to push custom events.
+func (s *Scheduler) PublishExternalEvent(event streams.TaskEvent) {
+	s.publishTaskEvent(event)
 }
 
 func (s *Scheduler) publishStats() {

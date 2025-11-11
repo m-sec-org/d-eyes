@@ -58,7 +58,7 @@ export function RiskDashboard() {
       columnWidthRatio: 0.55,
       colorField: 'status',
       color: (datum: { status: string }) => CHART_COLOR_MAP[datum.status] ?? '#1677ff',
-      label: { position: 'middle', style: { fill: '#fff', fontSize: 12 } },
+      label: { position: 'inside', style: { fill: '#fff', fontSize: 12 } },
       tooltip: { showMarkers: false },
       interactions: [{ type: 'active-region' }],
       xAxis: { label: { autoRotate: false } },
@@ -102,7 +102,7 @@ export function RiskDashboard() {
         <Row gutter={16}>
           {statCards.map((card) => (
             <Col xs={24} md={8} key={card.title}>
-              <Card bordered={false}>
+              <Card variant="borderless">
                 {isLoading ? (
                   <Skeleton active paragraph={false} title={{ width: '60%' }} />
                 ) : (

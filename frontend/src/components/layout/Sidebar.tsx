@@ -1,16 +1,22 @@
 import { NavLink } from 'react-router-dom';
-import { usePermissions } from '@/hooks/usePermissions';
+import { usePermissions, type Role } from '@/hooks/usePermissions';
 
 interface SidebarProps {
   collapsed?: boolean;
 }
 
-const NAV_GROUPS = [
+type NavGroup = {
+  title: string;
+  items: Array<{ label: string; route: string; icon: string; roles: Role[] }>;
+};
+
+const NAV_GROUPS: NavGroup[] = [
   {
     title: '运营',
     items: [
       { label: '总览', route: '/', icon: '📊', roles: ['operator', 'admin'] },
       { label: '任务', route: '/tasks', icon: '🧭', roles: ['operator', 'admin'] },
+      { label: 'Agent', route: '/agents', icon: '🤖', roles: ['admin'] },
       { label: '命令队列', route: '/queues', icon: '📡', roles: ['admin'] },
     ],
   },
@@ -25,8 +31,11 @@ const NAV_GROUPS = [
   {
     title: '治理',
     items: [
+      { label: 'BAS 场景', route: '/bas', icon: '🛡️', roles: ['admin'] },
+      { label: '报告中心', route: '/reports', icon: '📝', roles: ['admin'] },
       { label: '系统配置', route: '/settings', icon: '⚙️', roles: ['admin'] },
       { label: '日志审计', route: '/audit', icon: '📜', roles: ['auditor', 'admin'] },
+      { label: 'UI 指南', route: '/ui-guide', icon: '🎨', roles: ['admin'] },
     ],
   },
 ];

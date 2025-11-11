@@ -91,7 +91,7 @@ importers:
         specifier: ^8.45.0
         version: 8.46.3(eslint@9.39.1)(typescript@5.9.3)
       vite:
-        specifier: ^7.1.7
+        specifier: ^7.2.1
         version: 7.2.1(@types/node@24.10.0)
       vitest:
         specifier: ^2.1.8

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,11 +18,13 @@ import (
 
 	"github.com/m-sec-org/d-eyes/server/internal/api"
 	v1 "github.com/m-sec-org/d-eyes/server/internal/api/v1"
+	"github.com/m-sec-org/d-eyes/server/internal/basscenarios"
 	"github.com/m-sec-org/d-eyes/server/internal/config"
 	"github.com/m-sec-org/d-eyes/server/internal/model"
 	"github.com/m-sec-org/d-eyes/server/internal/queue/memory"
 	"github.com/m-sec-org/d-eyes/server/internal/scheduler"
 	"github.com/m-sec-org/d-eyes/server/internal/store"
+	"github.com/m-sec-org/d-eyes/server/internal/taskcatalog"
 )
 
 func setupTestRouter(t *testing.T) (*gin.Engine, store.Store, *scheduler.Scheduler) {
@@ -44,7 +48,7 @@ func setupTestRouter(t *testing.T) (*gin.Engine, store.Store, *scheduler.Schedul
 	sched := scheduler.New(st, queue, cfg.Scheduler)
 	handler := &v1.TaskHandler{Store: st, Sched: sched}
 	reportHandler := &v1.ReportHandler{Store: st}
-	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, reportHandler, nil, nil)
+	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, reportHandler, nil, nil, nil, nil, nil, nil, nil)
 	return router, st, sched
 }
 
@@ -52,6 +56,22 @@ func performRequest(r http.Handler, req *http.Request) *httptest.ResponseRecorde
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
+}
+
+func newTestCatalog(t *testing.T) *taskcatalog.Manager {
+	t.Helper()
+	log := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+	catalog, err := taskcatalog.NewManager(taskcatalog.Config{}, log)
+	require.NoError(t, err)
+	return catalog
+}
+
+func newTestBASManager(t *testing.T) *basscenarios.Manager {
+	t.Helper()
+	log := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+	mgr, err := basscenarios.NewManager(basscenarios.Config{}, log)
+	require.NoError(t, err)
+	return mgr
 }
 
 func TestTaskLifecycle(t *testing.T) {
@@ -129,6 +149,198 @@ func TestTaskLifecycle(t *testing.T) {
 	require.NoError(t, json.Unmarshal(retryResp.Body.Bytes(), &retryBody))
 	require.Equal(t, 1, retryBody.RetryCount)
 	require.Equal(t, "pending", retryBody.Status)
+}
+
+func TestTaskCreateValidatesProfilePayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	st := store.NewInMemoryStore()
+	queue := memory.New()
+	cfg := config.Config{
+		Security: config.SecurityConfig{
+			APIKeys: []string{"changeme"},
+		},
+		Scheduler: config.SchedulerConfig{
+			LeaseTTL:          2 * time.Minute,
+			MaxRetries:        1,
+			HeartbeatTimeout:  30 * time.Second,
+			QueueCapacity:     64,
+			LeasePollInterval: time.Millisecond,
+		},
+	}
+	sched := scheduler.New(st, queue, cfg.Scheduler)
+	catalog := newTestCatalog(t)
+	_, err := catalog.CreateTaskType(context.Background(), taskcatalog.TaskType{
+		Name:        "respond",
+		DisplayName: "Respond",
+	})
+	require.NoError(t, err)
+	_, err = catalog.CreateTaskProfile(context.Background(), taskcatalog.TaskProfile{
+		ID:          "respond_profile_v1",
+		TaskType:    "respond",
+		DisplayName: "Respond Quick",
+		Version:     "1.0.0",
+		Schema: taskcatalog.TaskProfileSchema{
+			Parameters: []taskcatalog.ProfileParameter{
+				{Key: "targets", Label: "Targets", Type: "string", Required: true},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	handler := &v1.TaskHandler{Store: st, Sched: sched, Catalog: catalog}
+	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, nil, nil, nil, nil, nil, nil)
+
+	makeRequest := func(payload map[string]any) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "changeme")
+		return performRequest(router, req)
+	}
+
+	t.Run("missing required parameter fails", func(t *testing.T) {
+		resp := makeRequest(map[string]any{
+			"type":     "respond",
+			"profile":  "respond_profile_v1",
+			"priority": 2,
+			"payload":  map[string]any{},
+		})
+		require.Equal(t, http.StatusBadRequest, resp.Code)
+	})
+
+	t.Run("valid payload passes", func(t *testing.T) {
+		resp := makeRequest(map[string]any{
+			"type":     "respond",
+			"profile":  "respond_profile_v1",
+			"priority": 2,
+			"payload": map[string]any{
+				"targets": "/var/log",
+			},
+		})
+		require.Equal(t, http.StatusCreated, resp.Code)
+	})
+}
+
+func TestCreateBASTaskRequiresApprovedScenario(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	st := store.NewInMemoryStore()
+	queue := memory.New()
+	cfg := config.Config{
+		Security: config.SecurityConfig{
+			APIKeys: []string{"changeme"},
+		},
+		Scheduler: config.SchedulerConfig{
+			LeaseTTL:          2 * time.Minute,
+			MaxRetries:        1,
+			HeartbeatTimeout:  30 * time.Second,
+			QueueCapacity:     64,
+			LeasePollInterval: time.Millisecond,
+		},
+	}
+	sched := scheduler.New(st, queue, cfg.Scheduler)
+	basMgr := newTestBASManager(t)
+	scenario, err := basMgr.Create(ctx, basscenarios.Scenario{
+		Name: "Purple Team Drill",
+		Steps: []basscenarios.ScenarioStep{
+			{Name: "Recon", Action: "recon"},
+		},
+		RequiresApproval: true,
+	})
+	require.NoError(t, err)
+
+	handler := &v1.TaskHandler{Store: st, Sched: sched, BASScenarios: basMgr}
+	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, &v1.BASScenarioHandler{Manager: basMgr}, nil, nil, nil, nil, nil)
+
+	buildRequest := func() *http.Request {
+		body, _ := json.Marshal(map[string]any{
+			"type":     "bas",
+			"profile":  "default",
+			"priority": 5,
+			"metadata": map[string]string{
+				"scenario_id": scenario.ID.String(),
+			},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "changeme")
+		return req
+	}
+
+	resp := performRequest(router, buildRequest())
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+
+	_, err = basMgr.Approve(ctx, scenario.ID, "secops", "ok")
+	require.NoError(t, err)
+	_, err = basMgr.SetStatus(ctx, scenario.ID, basscenarios.StatusActive)
+	require.NoError(t, err)
+
+	resp = performRequest(router, buildRequest())
+	require.Equal(t, http.StatusCreated, resp.Code)
+}
+
+func TestTaskVisualsEndpoint(t *testing.T) {
+	router, st, _ := setupTestRouter(t)
+	ctx := context.Background()
+
+	task := &model.Task{
+		ID:        uuid.New(),
+		Type:      "respond",
+		Profile:   "quick",
+		Priority:  3,
+		Status:    model.TaskStatusSucceeded,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, st.CreateTask(ctx, task))
+
+	execResult := model.ExecutionResult{
+		Status: "succeeded",
+		Summary: model.ExecutionSummary{
+			Command:         "respond --profile quick",
+			DurationSeconds: 10,
+		},
+		Metadata: map[string]string{
+			"visual.network_graph": `{"nodes":[{"id":"host","label":"10.0.0.8","kind":"host"}],"edges":[]}`,
+		},
+		ReportedAt: time.Now(),
+	}
+	summaryBytes, err := json.Marshal(execResult)
+	require.NoError(t, err)
+
+	run := &model.TaskRun{
+		ID:           uuid.New(),
+		TaskID:       task.ID,
+		TaskType:     task.Type,
+		AgentID:      uuid.New(),
+		LeaseID:      uuid.New(),
+		LeaseExpires: time.Now().Add(time.Minute),
+		Status:       model.TaskStatusSucceeded,
+		Summary:      summaryBytes,
+		Metadata: map[string]string{
+			"visual.file_risk": `{"total_files": 5, "risk_counts":{"high":1}}`,
+		},
+	}
+	require.NoError(t, st.CreateTaskRun(ctx, run))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+task.ID.String()+"/visuals", nil)
+	req.Header.Set("X-API-Key", "changeme")
+	resp := performRequest(router, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var payload struct {
+		Items []map[string]any `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.GreaterOrEqual(t, len(payload.Items), 1)
+
+	foundNetwork := false
+	for _, item := range payload.Items {
+		if item["visual_type"] == "network_graph" {
+			foundNetwork = true
+		}
+	}
+	require.True(t, foundNetwork, "expected network_graph visual payload")
 }
 
 type v1TaskResponse struct {

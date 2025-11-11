@@ -18,16 +18,21 @@ import (
 	"github.com/m-sec-org/d-eyes/server/internal/api"
 	v1 "github.com/m-sec-org/d-eyes/server/internal/api/v1"
 	"github.com/m-sec-org/d-eyes/server/internal/audit"
+	"github.com/m-sec-org/d-eyes/server/internal/auditlog"
+	"github.com/m-sec-org/d-eyes/server/internal/basscenarios"
 	"github.com/m-sec-org/d-eyes/server/internal/config"
 	"github.com/m-sec-org/d-eyes/server/internal/grpcsvc"
 	"github.com/m-sec-org/d-eyes/server/internal/logger"
 	"github.com/m-sec-org/d-eyes/server/internal/metrics"
 	"github.com/m-sec-org/d-eyes/server/internal/monitor"
 	"github.com/m-sec-org/d-eyes/server/internal/queueprovider"
+	"github.com/m-sec-org/d-eyes/server/internal/rbac"
+	"github.com/m-sec-org/d-eyes/server/internal/reporttemplates"
 	"github.com/m-sec-org/d-eyes/server/internal/scheduler"
 	"github.com/m-sec-org/d-eyes/server/internal/store"
 	"github.com/m-sec-org/d-eyes/server/internal/storeprovider"
 	"github.com/m-sec-org/d-eyes/server/internal/streams"
+	"github.com/m-sec-org/d-eyes/server/internal/taskcatalog"
 	"github.com/m-sec-org/d-eyes/server/internal/templates"
 	pb "github.com/m-sec-org/d-eyes/server/proto/agentservicepb"
 )
@@ -79,14 +84,61 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	defer templateManager.Close()
 
+	reportTemplateManager, err := reporttemplates.New(cfg.Reports.TemplatePath, log)
+	if err != nil {
+		return fmt.Errorf("init report templates: %w", err)
+	}
+
+	auditLogManager, err := auditlog.New(cfg.Audit.StorePath, 2000)
+	if err != nil {
+		return fmt.Errorf("init audit log manager: %w", err)
+	}
+
+	basScenarioManager, err := basscenarios.NewManager(basscenarios.Config{
+		PersistPath:       cfg.BAS.ScenarioPersistPath,
+		DefaultBoundaries: cfg.BAS.DefaultNetworkBoundaries,
+		DefaultResourceLimits: basscenarios.ResourceLimits{
+			MaxTargets:        cfg.BAS.DefaultResourceLimits.MaxTargets,
+			MaxParallelSteps:  cfg.BAS.DefaultResourceLimits.MaxParallelSteps,
+			MaxDurationMinute: cfg.BAS.DefaultResourceLimits.MaxDurationMinutes,
+			MaxCPUPercent:     cfg.BAS.DefaultResourceLimits.MaxCPUPercent,
+		},
+	}, log)
+	if err != nil {
+		return fmt.Errorf("init bas scenario manager: %w", err)
+	}
+
 	taskStream := streams.NewTaskHub()
 	sched.SetTaskHub(taskStream)
 	taskStreamHandler := streams.SSEHandler(taskStream)
 
-	taskHandler := &v1.TaskHandler{Store: st, Sched: sched}
+	taskCatalogManager, err := taskcatalog.NewManager(taskcatalog.Config{PersistPath: cfg.TaskCatalog.PersistPath}, log)
+	if err != nil {
+		return fmt.Errorf("init task catalog: %w", err)
+	}
+
+	rbacPolicies := make([]rbac.Policy, 0, len(cfg.RBAC.Policies))
+	for _, p := range cfg.RBAC.Policies {
+		rbacPolicies = append(rbacPolicies, rbac.Policy{Role: p.Role, Permissions: p.Permissions})
+	}
+	rbacEnforcer := rbac.New(rbacPolicies)
+
+	taskHandler := &v1.TaskHandler{
+		Store:        st,
+		Sched:        sched,
+		Catalog:      taskCatalogManager,
+		BASScenarios: basScenarioManager,
+		RBAC:         rbacEnforcer,
+		Audit:        auditLogManager,
+	}
 	templateHandler := &v1.TemplateHandler{Manager: templateManager}
-	reportHandler := &v1.ReportHandler{Store: st}
-	router := api.NewRouter(cfg, taskHandler, templateHandler, reportHandler, metricsHandler, taskStreamHandler)
+	reportHandler := &v1.ReportHandler{Store: st, Templates: reportTemplateManager, Audit: auditLogManager}
+	catalogHandler := &v1.TaskCatalogHandler{Catalog: taskCatalogManager}
+	basHandler := &v1.BASScenarioHandler{Manager: basScenarioManager, RBAC: rbacEnforcer, Audit: auditLogManager}
+	agentHandler := &v1.AgentHandler{Store: st, RBAC: rbacEnforcer}
+	auditHandler := &v1.AuditHandler{Logs: auditLogManager}
+	rbacHandler := &v1.RBACHandler{Enforcer: rbacEnforcer}
+	router := api.NewRouter(cfg, taskHandler, templateHandler, reportHandler, catalogHandler, basHandler, agentHandler, auditHandler, rbacHandler, metricsHandler, taskStreamHandler)
 
 	grpcServer, err := newGRPCServer(cfg, st, sched, log, metricsCollector)
 	if err != nil {

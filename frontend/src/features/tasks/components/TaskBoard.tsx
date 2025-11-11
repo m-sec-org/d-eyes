@@ -27,7 +27,7 @@ export function TaskBoard({ tasks, loading = false }: TaskBoardProps) {
       <Row gutter={16} style={{ marginBottom: 16 }}>
         {PLACEHOLDER.map((_, index) => (
           <Col xs={24} md={6} key={index}>
-            <Card bordered={false}>
+            <Card variant="borderless">
               <Skeleton active paragraph={false} title={{ width: '60%' }} />
             </Card>
           </Col>
@@ -39,12 +39,12 @@ export function TaskBoard({ tasks, loading = false }: TaskBoardProps) {
   return (
     <Row gutter={16} style={{ marginBottom: 16 }}>
       <Col xs={24} md={6}>
-        <Card bordered={false}>
+        <Card variant="borderless">
           <Statistic title="任务总数" value={stats.total} valueStyle={{ fontWeight: 600 }} />
         </Card>
       </Col>
       <Col xs={24} md={6}>
-        <Card bordered={false}>
+        <Card variant="borderless">
           <Statistic
             title="运行中"
             value={stats.running}
@@ -53,7 +53,7 @@ export function TaskBoard({ tasks, loading = false }: TaskBoardProps) {
         </Card>
       </Col>
       <Col xs={24} md={6}>
-        <Card bordered={false}>
+        <Card variant="borderless">
           <Statistic
             title="待执行"
             value={stats.pending}
@@ -62,7 +62,7 @@ export function TaskBoard({ tasks, loading = false }: TaskBoardProps) {
         </Card>
       </Col>
       <Col xs={24} md={6}>
-        <Card bordered={false}>
+        <Card variant="borderless">
           <Statistic
             title="失败"
             value={stats.failed}

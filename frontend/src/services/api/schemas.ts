@@ -41,6 +41,11 @@ export const TaskEventSchema = z.object({
   queue_depth: z.number().optional(),
   in_flight: z.number().optional(),
   bas_in_flight: z.number().optional(),
+  progress: z.number().optional(),
+  message: z.string().optional(),
+  action: z.string().optional(),
+  actor: z.string().optional(),
+  severity: z.string().optional(),
   updated_at: z.string().datetime(),
 });
 
@@ -80,6 +85,100 @@ export const TemplateSchema = z.object({
     })
     .optional()
     .nullable(),
+});
+
+export const TaskProfileParameterSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  type: z.enum(['string', 'number', 'boolean', 'enum', 'multiselect', 'string_list', 'cidr_list']),
+  required: z.boolean().optional(),
+  options: z.array(z.string()).optional(),
+  pattern: z.string().optional(),
+  format: z.string().optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  default: z.any().optional(),
+  hint: z.string().optional(),
+});
+
+export const TaskProfileSchema = z.object({
+  id: z.string(),
+  task_type: z.string(),
+  display_name: z.string(),
+  version: z.string(),
+  description: z.string().optional().nullable(),
+  owner: z.string().optional().nullable(),
+  schema: z.object({
+    defaults: z.record(z.any()).optional(),
+    parameters: z.array(TaskProfileParameterSchema),
+    constraints: z
+      .array(
+        z.object({
+          expression: z.string(),
+          message: z.string(),
+        })
+      )
+      .optional(),
+  }),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+});
+
+export const TaskTypeCatalogSchema = z.object({
+  name: z.string(),
+  display_name: z.string(),
+  description: z.string().optional().nullable(),
+  capabilities: z.array(z.string()).optional(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+});
+
+export const TaskVisualSchema = z.object({
+  task_id: z.string().uuid(),
+  task_type: z.string(),
+  visual_type: z.string(),
+  generated_at: z.string().datetime(),
+  payload: z.record(z.any()),
+});
+
+export const BASResourceLimitSchema = z.object({
+  max_targets: z.number().optional(),
+  max_parallel_steps: z.number().optional(),
+  max_duration_minutes: z.number().optional(),
+  max_cpu_percent: z.number().optional(),
+});
+
+export const BASScenarioStepSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  action: z.string(),
+  order: z.number(),
+  args: z.record(z.any()).optional(),
+  timeout_seconds: z.number().optional(),
+  require_sandbox: z.boolean().optional(),
+});
+
+export const BASScenarioSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  description: z.string().optional().nullable(),
+  tags: z.array(z.string()).optional(),
+  status: z.enum(['draft', 'pending', 'approved', 'active', 'disabled']),
+  steps: z.array(BASScenarioStepSchema),
+  resource_limits: BASResourceLimitSchema,
+  network_boundaries: z.array(z.string()).optional(),
+  requires_approval: z.boolean().optional(),
+  approval: z
+    .object({
+      approved_by: z.string().optional().nullable(),
+      approved_at: z.string().datetime().optional().nullable(),
+      notes: z.string().optional().nullable(),
+    })
+    .optional(),
+  created_by: z.string().optional().nullable(),
+  updated_by: z.string().optional().nullable(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
 });
 
 export const AuditEventSchema = z.object({

@@ -168,6 +168,15 @@ func (p *PostgresStore) UpdateAgentStatus(ctx context.Context, id uuid.UUID, sta
 	return nil
 }
 
+func (p *PostgresStore) UpdateAgentMetadata(ctx context.Context, id uuid.UUID, labels map[string]string) error {
+	labelsJSON, _ := json.Marshal(labels)
+	_, err := p.pool.Exec(ctx, `UPDATE agents SET labels=$2, updated_at=NOW() WHERE id=$1`, id, labelsJSON)
+	if err != nil {
+		return fmt.Errorf("update agent metadata: %w", err)
+	}
+	return nil
+}
+
 func (p *PostgresStore) CreateTask(ctx context.Context, task *model.Task) error {
 	if task.ID == uuid.Nil {
 		task.ID = uuid.New()

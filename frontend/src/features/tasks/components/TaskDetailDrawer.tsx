@@ -1,7 +1,11 @@
 import type { Task } from '@/services/types';
 import dayjs from 'dayjs';
 import { useMemo } from 'react';
+import useSWR from 'swr';
 import { Drawer, Descriptions, Tag, List, Space, Button } from 'antd';
+
+import { fetchTaskVisuals } from '@/services/api/taskVisuals';
+import { TaskVisualTabs } from './TaskVisualTabs';
 
 interface TaskDetailDrawerProps {
   task: Task | null;
@@ -30,6 +34,8 @@ export function TaskDetailDrawer({ task, onClose }: TaskDetailDrawerProps) {
         : undefined,
     };
   }, [task]);
+
+  const { data: visuals } = useSWR(task ? ['task-visuals', task.id] : null, () => fetchTaskVisuals(task!.id));
 
   return (
     <Drawer
@@ -99,6 +105,8 @@ export function TaskDetailDrawer({ task, onClose }: TaskDetailDrawerProps) {
               )}
             />
           )}
+
+          {visuals && visuals.length > 0 && <TaskVisualTabs visuals={visuals} />}
 
           <Space>
             <Button type="primary">重试任务</Button>

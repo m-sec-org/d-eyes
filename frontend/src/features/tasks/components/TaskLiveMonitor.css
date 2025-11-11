@@ -1,0 +1,212 @@
+.task-live-monitor {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.task-live-monitor__header {
+  align-items: flex-start;
+}
+
+.task-live-monitor__actions {
+  flex-wrap: wrap;
+}
+
+.live-monitor-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.live-monitor-summary__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.live-monitor-summary__card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: var(--color-surface-muted);
+}
+
+.live-monitor-summary__card strong {
+  font-size: 1.5rem;
+}
+
+.live-monitor-summary__card.variant-danger {
+  border-color: rgba(255, 99, 99, 0.4);
+  background: rgba(255, 99, 99, 0.08);
+}
+
+.live-monitor-summary__card.variant-warning {
+  border-color: rgba(255, 196, 0, 0.4);
+  background: rgba(255, 196, 0, 0.08);
+}
+
+.live-monitor-summary__card.variant-success {
+  border-color: rgba(41, 204, 123, 0.35);
+  background: rgba(41, 204, 123, 0.08);
+}
+
+.live-monitor-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 196, 0, 0.18);
+  color: #8a5d00;
+  font-size: 0.85rem;
+}
+
+.live-monitor-alert {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-base);
+  border: 1px solid var(--color-border);
+}
+
+.live-monitor-alert.warning {
+  background: rgba(255, 196, 0, 0.12);
+  border-color: rgba(255, 196, 0, 0.4);
+}
+
+.live-monitor-alert.danger {
+  background: rgba(255, 77, 79, 0.12);
+  border-color: rgba(255, 77, 79, 0.4);
+}
+
+.live-monitor-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.live-monitor-table {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  overflow: hidden;
+}
+
+.live-monitor-table__header {
+  background: var(--color-surface-muted);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.live-monitor-row {
+  display: grid;
+  grid-template-columns: 140px 140px 120px 90px 1fr;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 1rem;
+  font-size: 0.9rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.live-monitor-row--header {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.live-monitor-row:nth-child(even) {
+  background: rgba(255, 255, 255, 0.01);
+}
+
+.live-monitor-virtual-body {
+  max-height: 420px;
+  min-height: 240px;
+  overflow-y: auto;
+  position: relative;
+}
+
+.live-monitor-virtual-body > div {
+  width: 100%;
+}
+
+.live-monitor-empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+}
+
+.live-monitor-overflow {
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-base);
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: var(--color-surface-muted);
+}
+
+.live-monitor-overflow__segments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.live-monitor-overflow__segment {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: var(--color-surface-card);
+}
+
+.live-monitor-overflow__counts {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  border: 1px solid transparent;
+}
+
+.pill--danger {
+  background: rgba(255, 77, 79, 0.15);
+  border-color: rgba(255, 77, 79, 0.4);
+  color: #b42318;
+}
+
+.pill--warning {
+  background: rgba(255, 196, 0, 0.15);
+  border-color: rgba(255, 196, 0, 0.4);
+  color: #8a5d00;
+}
+
+.pill--info {
+  background: rgba(82, 131, 255, 0.15);
+  border-color: rgba(82, 131, 255, 0.4);
+  color: #1f5ed1;
+}
+
+.task-live-monitor .mono {
+  font-family: var(--font-family-mono);
+}
+
+@media (max-width: 960px) {
+  .live-monitor-row {
+    grid-template-columns: 120px 120px 100px 80px 1fr;
+    font-size: 0.85rem;
+  }
+}

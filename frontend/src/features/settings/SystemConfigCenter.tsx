@@ -2,6 +2,8 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import dayjs from 'dayjs';
 import { listTemplates } from '@/services/api/templates';
+import { listRbacPolicies } from '@/services/api/rbac';
+import { Button, FormField, TextInput } from '@/components/ui';
 
 const mockGlobalConfig = {
   risk_threshold: 70,
@@ -12,6 +14,7 @@ const mockGlobalConfig = {
 
 export function SystemConfigCenter() {
   const { data: templates, mutate } = useSWR('task-templates', listTemplates);
+  const { data: policies } = useSWR('rbac-policies', listRbacPolicies);
   const [riskThreshold, setRiskThreshold] = useState(mockGlobalConfig.risk_threshold);
   const [samplingRate, setSamplingRate] = useState(mockGlobalConfig.asset_sampling_rate);
 
@@ -25,15 +28,15 @@ export function SystemConfigCenter() {
       <section className="section-heading">
         <div>
           <h1>系统配置中心</h1>
-          <p className="muted">管理任务模板与全局参数，支持草稿/发布对比</p>
+          <p className="muted">管理核心任务与全局参数，支持草稿/发布对比</p>
         </div>
         <div className="actions">
-          <button type="button" className="primary" onClick={handleSave}>
+          <Button type="button" variant="primary" onClick={handleSave}>
             保存配置
-          </button>
-          <button type="button" className="ghost">
+          </Button>
+          <Button type="button" variant="ghost">
             发布到生产
-          </button>
+          </Button>
         </div>
       </section>
 
@@ -43,10 +46,27 @@ export function SystemConfigCenter() {
           <small>最近更新：{dayjs(mockGlobalConfig.updated_at).format('MM-DD HH:mm')} / {mockGlobalConfig.updated_by}</small>
         </header>
         <div className="drawer-form">
-          <label className="drawer-label">风险阈值</label>
-          <input type="number" min={0} max={100} value={riskThreshold} onChange={(e) => setRiskThreshold(Number(e.target.value))} />
-          <label className="drawer-label">资产采样率</label>
-          <input type="number" min={0} max={1} step={0.05} value={samplingRate} onChange={(e) => setSamplingRate(Number(e.target.value))} />
+          <FormField label="风险阈值" required hint="0-100，超过阈值进入高危处置" htmlFor="risk-threshold">
+            <TextInput
+              id="risk-threshold"
+              type="number"
+              min={0}
+              max={100}
+              value={riskThreshold}
+              onChange={(e) => setRiskThreshold(Number(e.target.value))}
+            />
+          </FormField>
+          <FormField label="资产采样率" required hint="建议 0.2~0.5 之间" htmlFor="sampling-rate">
+            <TextInput
+              id="sampling-rate"
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={samplingRate}
+              onChange={(e) => setSamplingRate(Number(e.target.value))}
+            />
+          </FormField>
         </div>
       </section>
 
@@ -73,12 +93,12 @@ export function SystemConfigCenter() {
                 <td>{tmpl.priority ?? '-'}</td>
                 <td>{tmpl.schedule?.enabled ? `每 ${tmpl.schedule.interval_minutes} 分钟` : '手动'}</td>
                 <td>
-                  <button type="button" className="ghost small">
+                  <Button type="button" variant="ghost" size="sm">
                     编辑
-                  </button>
-                  <button type="button" className="ghost small" onClick={() => mutate()}>
+                  </Button>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => mutate()}>
                     部署
-                  </button>
+                  </Button>
                 </td>
               </tr>
             ))}
@@ -91,6 +111,38 @@ export function SystemConfigCenter() {
             )}
           </tbody>
         </table>
+      </section>
+
+      <section className="card">
+        <header className="card-header">
+          <h2>权限策略</h2>
+          <small>查看角色与权限矩阵</small>
+        </header>
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>角色</th>
+                <th>权限列表</th>
+              </tr>
+            </thead>
+            <tbody>
+              {policies?.map((policy) => (
+                <tr key={policy.role}>
+                  <td>{policy.role}</td>
+                  <td>{policy.permissions.join(', ')}</td>
+                </tr>
+              ))}
+              {!policies?.length && (
+                <tr>
+                  <td colSpan={2} className="empty">
+                    暂无策略
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   );

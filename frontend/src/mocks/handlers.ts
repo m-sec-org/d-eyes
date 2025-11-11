@@ -6,6 +6,7 @@ import { mockAuditEvents } from './data/audit';
 import { mockAssets } from './data/assets';
 import { mockAssetDetails } from './data/assetDetails';
 import { mockUsers } from './data/auth';
+import { mockRbacPolicies } from './data/rbac';
 
 const API_BASE = '/api/v1';
 
@@ -122,4 +123,5 @@ export const handlers = [
     });
     return respondWithDelay({ ids: body.ids, tag: body.tag });
   }),
+  http.get(`${API_BASE}/rbac/policies`, async () => respondWithDelay({ policies: mockRbacPolicies })),
 ];

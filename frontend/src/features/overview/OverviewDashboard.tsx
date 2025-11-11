@@ -60,7 +60,7 @@ export function OverviewDashboard() {
 
         <Row gutter={16}>
           <Col xs={24} md={6}>
-            <Card bordered={false}>
+            <Card variant="borderless">
               {loadingTasks ? (
                 <Skeleton active paragraph={false} />
               ) : (
@@ -69,7 +69,7 @@ export function OverviewDashboard() {
             </Card>
           </Col>
           <Col xs={24} md={6}>
-            <Card bordered={false}>
+            <Card variant="borderless">
               {loadingTasks ? (
                 <Skeleton active paragraph={false} />
               ) : (
@@ -78,7 +78,7 @@ export function OverviewDashboard() {
             </Card>
           </Col>
           <Col xs={24} md={6}>
-            <Card bordered={false}>
+            <Card variant="borderless">
               {loadingTasks ? (
                 <Skeleton active paragraph={false} />
               ) : (
@@ -87,7 +87,7 @@ export function OverviewDashboard() {
             </Card>
           </Col>
           <Col xs={24} md={6}>
-            <Card bordered={false}>
+            <Card variant="borderless">
               {loadingTasks ? (
                 <Skeleton active paragraph={false} />
               ) : (

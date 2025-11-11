@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,14 +13,51 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/m-sec-org/d-eyes/server/internal/auditlog"
+	"github.com/m-sec-org/d-eyes/server/internal/basscenarios"
 	"github.com/m-sec-org/d-eyes/server/internal/model"
+	"github.com/m-sec-org/d-eyes/server/internal/rbac"
 	"github.com/m-sec-org/d-eyes/server/internal/scheduler"
+	"github.com/m-sec-org/d-eyes/server/internal/security"
 	"github.com/m-sec-org/d-eyes/server/internal/store"
+	"github.com/m-sec-org/d-eyes/server/internal/streams"
+	"github.com/m-sec-org/d-eyes/server/internal/taskcatalog"
 )
 
 type TaskHandler struct {
-	Store store.Store
-	Sched *scheduler.Scheduler
+	Store        store.Store
+	Sched        *scheduler.Scheduler
+	Catalog      *taskcatalog.Manager
+	BASScenarios *basscenarios.Manager
+	RBAC         *rbac.Enforcer
+	Audit        *auditlog.Manager
+}
+
+func (h *TaskHandler) requirePermission(c *gin.Context, permission string) bool {
+	if h == nil || h.RBAC == nil {
+		return true
+	}
+	principal := security.PrincipalFrom(c)
+	if h.RBAC.Enforce(principal.Role, permission) {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "insufficient permissions"})
+	return false
+}
+
+func (h *TaskHandler) recordAudit(c *gin.Context, action, resource, result string, metadata map[string]string) {
+	if h == nil || h.Audit == nil {
+		return
+	}
+	principal := security.PrincipalFrom(c)
+	h.Audit.Record(auditlog.Event{
+		Actor:    principal.User,
+		Role:     principal.Role,
+		Action:   action,
+		Resource: resource,
+		Result:   result,
+		Metadata: metadata,
+	})
 }
 
 type createTaskRequest struct {
@@ -59,10 +97,43 @@ type taskRunResponse struct {
 	ExpiresAt  *time.Time        `json:"expires_at,omitempty"`
 }
 
+type taskVisualResponse struct {
+	TaskID      string      `json:"task_id"`
+	TaskType    string      `json:"task_type"`
+	VisualType  string      `json:"visual_type"`
+	GeneratedAt time.Time   `json:"generated_at"`
+	Payload     interface{} `json:"payload"`
+}
+
+func normalizePayloadMap(raw interface{}) (map[string]any, error) {
+	if raw == nil {
+		return map[string]any{}, nil
+	}
+	if payload, ok := raw.(map[string]any); ok {
+		return payload, nil
+	}
+	bytes, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes) == 0 || string(bytes) == "null" {
+		return map[string]any{}, nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(bytes, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = map[string]any{}
+	}
+	return out, nil
+}
+
 func (h *TaskHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/tasks", h.createTask)
 	r.GET("/tasks", h.listTasks)
 	r.GET("/tasks/:id", h.getTask)
+	r.GET("/tasks/:id/visuals", h.getTaskVisuals)
 	r.GET("/tasks/:id/respond/report", h.getRespondReport)
 	r.GET("/tasks/:id/baseline/report", h.getBaselineReport)
 	r.GET("/tasks/:id/bas/report", h.getBASReport)
@@ -70,9 +141,13 @@ func (h *TaskHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/tasks/:id/supplychain/report", h.getSupplyChainReport)
 	r.POST("/tasks/:id/cancel", h.cancelTask)
 	r.POST("/tasks/:id/retry", h.retryTask)
+	r.POST("/tasks/:id/actions", h.handleTaskAction)
 }
 
 func (h *TaskHandler) createTask(c *gin.Context) {
+	if !h.requirePermission(c, "tasks.create") {
+		return
+	}
 	var req createTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -81,15 +156,77 @@ func (h *TaskHandler) createTask(c *gin.Context) {
 	if req.Priority == 0 {
 		req.Priority = 5
 	}
-	payloadBytes, err := json.Marshal(req.Payload)
+	payloadMap, err := normalizePayloadMap(req.Payload)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
 		return
+	}
+	if h.Catalog != nil && strings.TrimSpace(req.Profile) != "" && strings.TrimSpace(req.Type) != "" {
+		if err := h.Catalog.ValidateTaskPayload(req.Type, req.Profile, payloadMap); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	payloadBytes, err := json.Marshal(payloadMap)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	principal := security.PrincipalFrom(c)
+	if req.CreatedBy == "" {
+		req.CreatedBy = principal.User
 	}
 	ctx := c.Request.Context()
 	metadata := make(map[string]string, len(req.Metadata))
 	for k, v := range req.Metadata {
 		metadata[k] = v
+	}
+	if h.BASScenarios != nil && strings.EqualFold(req.Type, "bas") {
+		scenarioID := strings.TrimSpace(metadata["scenario_id"])
+		if scenarioID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bas task requires scenario_id in metadata"})
+			return
+		}
+		scenarioUUID, err := uuid.Parse(scenarioID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid scenario_id"})
+			return
+		}
+		scenario, err := h.BASScenarios.Get(ctx, scenarioUUID)
+		if err != nil {
+			if errors.Is(err, basscenarios.ErrNotFound) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "scenario not found"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if scenario.Status == basscenarios.StatusDisabled || scenario.Status == basscenarios.StatusDraft {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "scenario not active"})
+			return
+		}
+		if scenario.RequiresApproval && scenario.Status != basscenarios.StatusApproved && scenario.Status != basscenarios.StatusActive {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "scenario not approved"})
+			return
+		}
+		metadata["scenario_name"] = scenario.Name
+		if scenario.Description != "" {
+			metadata["scenario_description"] = scenario.Description
+		}
+		if len(scenario.Tags) > 0 {
+			metadata["scenario_tags"] = strings.Join(scenario.Tags, ",")
+		}
+		if len(scenario.NetworkBoundaries) > 0 {
+			metadata["network_boundaries"] = strings.Join(scenario.NetworkBoundaries, ",")
+		}
+		metadata["sandbox_approval_required"] = strconv.FormatBool(scenario.RequiresApproval)
+		if scenario.Approval.ApprovedBy != "" {
+			metadata["sandbox_approved"] = "true"
+		}
+		metadata["scenario_status"] = string(scenario.Status)
+		if encodedLimits, err := json.Marshal(scenario.ResourceLimits); err == nil {
+			metadata["scenario_limits"] = string(encodedLimits)
+		}
 	}
 	task := &model.Task{
 		ID:        uuid.New(),
@@ -114,6 +251,10 @@ func (h *TaskHandler) createTask(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.recordAudit(c, "task.create", "task:"+task.ID.String(), "accepted", map[string]string{
+		"type":    req.Type,
+		"profile": req.Profile,
+	})
 	c.JSON(http.StatusCreated, gin.H{"id": task.ID.String()})
 }
 
@@ -172,6 +313,119 @@ func (h *TaskHandler) getTask(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func (h *TaskHandler) getTaskVisuals(c *gin.Context) {
+	ctx := c.Request.Context()
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task id"})
+		return
+	}
+	task, err := h.Store.GetTask(ctx, id)
+	if err != nil {
+		if err == store.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	run, err := h.Store.GetLatestTaskRun(ctx, task.ID)
+	if err != nil {
+		if err == store.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "task run not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	var exec model.ExecutionResult
+	if len(run.Summary) > 0 {
+		if err := json.Unmarshal(run.Summary, &exec); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode summary"})
+			return
+		}
+	}
+	visualTypeFilter := c.Query("type")
+	visuals := buildTaskVisuals(task, run, exec, visualTypeFilter)
+	c.JSON(http.StatusOK, gin.H{"items": visuals})
+}
+
+func buildTaskVisuals(task *model.Task, run *model.TaskRun, exec model.ExecutionResult, filter string) []taskVisualResponse {
+	var visuals []taskVisualResponse
+	appendVisualsFromMetadata(&visuals, task, run, exec.Metadata, exec.ReportedAt, filter)
+	appendVisualsFromMetadata(&visuals, task, run, run.Metadata, time.Time{}, filter)
+	if len(visuals) == 0 && (filter == "" || filter == "host_summary") {
+		payload := hostSummaryPayload(exec, run)
+		visuals = append(visuals, newTaskVisual(task, run, exec.ReportedAt, "host_summary", payload))
+	}
+	return visuals
+}
+
+func appendVisualsFromMetadata(target *[]taskVisualResponse, task *model.Task, run *model.TaskRun, metadata map[string]string, reportedAt time.Time, filter string) {
+	if len(metadata) == 0 {
+		return
+	}
+	for key, raw := range metadata {
+		if !strings.HasPrefix(key, "visual.") {
+			continue
+		}
+		visualType := strings.TrimPrefix(key, "visual.")
+		if filter != "" && filter != visualType {
+			continue
+		}
+		var payload interface{}
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			continue
+		}
+		*target = append(*target, newTaskVisual(task, run, reportedAt, visualType, payload))
+	}
+}
+
+func newTaskVisual(task *model.Task, run *model.TaskRun, reportedAt time.Time, visualType string, payload interface{}) taskVisualResponse {
+	generatedAt := reportedAt
+	if generatedAt.IsZero() && run != nil && run.FinishedAt != nil && !run.FinishedAt.IsZero() {
+		generatedAt = *run.FinishedAt
+	}
+	if generatedAt.IsZero() {
+		generatedAt = time.Now().UTC()
+	}
+	return taskVisualResponse{
+		TaskID:      task.ID.String(),
+		TaskType:    string(task.Type),
+		VisualType:  visualType,
+		GeneratedAt: generatedAt,
+		Payload:     payload,
+	}
+}
+
+func hostSummaryPayload(exec model.ExecutionResult, run *model.TaskRun) map[string]any {
+	payload := map[string]any{
+		"status":           exec.Status,
+		"command":          exec.Summary.Command,
+		"duration_seconds": exec.Summary.DurationSeconds,
+	}
+	if len(exec.Summary.Risks) > 0 {
+		payload["risks"] = exec.Summary.Risks
+	}
+	if len(exec.Summary.Notes) > 0 {
+		payload["notes"] = exec.Summary.Notes
+	}
+	if len(exec.Summary.Outputs) > 0 {
+		payload["outputs"] = exec.Summary.Outputs
+	}
+	if exec.Metadata != nil {
+		payload["metadata"] = exec.Metadata
+	}
+	if run != nil {
+		payload["agent_id"] = run.AgentID.String()
+		if run.Metadata != nil {
+			payload["run_metadata"] = run.Metadata
+		}
+	}
+	return payload
 }
 
 type supplyChainReportResponse struct {
@@ -283,6 +537,9 @@ func (h *TaskHandler) getSupplyChainReport(c *gin.Context) {
 }
 
 func (h *TaskHandler) cancelTask(c *gin.Context) {
+	if !h.requirePermission(c, "tasks.cancel") {
+		return
+	}
 	ctx := c.Request.Context()
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -297,10 +554,14 @@ func (h *TaskHandler) cancelTask(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.recordAudit(c, "task.cancel", "task:"+id.String(), "accepted", nil)
 	c.Status(http.StatusNoContent)
 }
 
 func (h *TaskHandler) retryTask(c *gin.Context) {
+	if !h.requirePermission(c, "tasks.retry") {
+		return
+	}
 	ctx := c.Request.Context()
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -338,7 +599,67 @@ func (h *TaskHandler) retryTask(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.recordAudit(c, "task.retry", "task:"+id.String(), "accepted", nil)
 	c.JSON(http.StatusAccepted, resp)
+}
+
+type taskActionRequest struct {
+	Action string `json:"action" binding:"required"`
+	Reason string `json:"reason"`
+}
+
+func (h *TaskHandler) handleTaskAction(c *gin.Context) {
+	if !h.requirePermission(c, "tasks.intervene") {
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task id"})
+		return
+	}
+	var req taskActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+	switch action {
+	case "pause", "resume", "terminate", "ack":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported action"})
+		return
+	}
+	ctx := c.Request.Context()
+	task, err := h.Store.GetTask(ctx, id)
+	if err != nil {
+		if err == store.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	principal := security.PrincipalFrom(c)
+	severity := "info"
+	if action == "terminate" {
+		severity = "danger"
+	} else if action == "pause" || action == "resume" {
+		severity = "warning"
+	}
+	if h.Sched != nil {
+		h.Sched.PublishExternalEvent(streams.TaskEvent{
+			Event:    "manual_action",
+			TaskID:   task.ID.String(),
+			TaskType: string(task.Type),
+			Status:   string(task.Status),
+			Action:   action,
+			Actor:    principal.User,
+			Message:  req.Reason,
+			Severity: severity,
+		})
+	}
+	h.recordAudit(c, "task.action"+"."+action, "task:"+task.ID.String(), "accepted", map[string]string{"reason": req.Reason})
+	c.JSON(http.StatusAccepted, gin.H{"status": "accepted"})
 }
 
 func (h *TaskHandler) buildTaskResponse(ctx context.Context, task *model.Task) (taskResponse, error) {

@@ -2,14 +2,28 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	v1 "github.com/m-sec-org/d-eyes/server/internal/api/v1"
 	"github.com/m-sec-org/d-eyes/server/internal/config"
+	"github.com/m-sec-org/d-eyes/server/internal/security"
 )
 
-func NewRouter(cfg config.Config, taskHandler *v1.TaskHandler, templateHandler *v1.TemplateHandler, reportHandler *v1.ReportHandler, metricsHandler gin.HandlerFunc, taskStreamHandler gin.HandlerFunc) *gin.Engine {
+func NewRouter(
+	cfg config.Config,
+	taskHandler *v1.TaskHandler,
+	templateHandler *v1.TemplateHandler,
+	reportHandler *v1.ReportHandler,
+	catalogHandler *v1.TaskCatalogHandler,
+	basScenarioHandler *v1.BASScenarioHandler,
+	agentHandler *v1.AgentHandler,
+	auditHandler *v1.AuditHandler,
+	rbacHandler *v1.RBACHandler,
+	metricsHandler gin.HandlerFunc,
+	taskStreamHandler gin.HandlerFunc,
+) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -25,12 +39,31 @@ func NewRouter(cfg config.Config, taskHandler *v1.TaskHandler, templateHandler *
 	if len(cfg.Security.APIKeys) > 0 {
 		apiGroup.Use(apiKeyMiddleware(cfg.Security.APIKeys))
 	}
-	taskHandler.RegisterRoutes(apiGroup)
+	apiGroup.Use(principalMiddleware())
+
+	if taskHandler != nil {
+		taskHandler.RegisterRoutes(apiGroup)
+	}
 	if templateHandler != nil {
 		templateHandler.RegisterRoutes(apiGroup)
 	}
 	if reportHandler != nil {
 		reportHandler.RegisterRoutes(apiGroup)
+	}
+	if catalogHandler != nil {
+		catalogHandler.RegisterRoutes(apiGroup)
+	}
+	if basScenarioHandler != nil {
+		basScenarioHandler.RegisterRoutes(apiGroup)
+	}
+	if agentHandler != nil {
+		agentHandler.RegisterRoutes(apiGroup)
+	}
+	if auditHandler != nil {
+		auditHandler.RegisterRoutes(apiGroup)
+	}
+	if rbacHandler != nil {
+		rbacHandler.RegisterRoutes(apiGroup)
 	}
 	if taskStreamHandler != nil {
 		apiGroup.GET("/tasks/stream", taskStreamHandler)
@@ -61,6 +94,21 @@ func apiKeyMiddleware(keys []string) gin.HandlerFunc {
 			}
 		}
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid api key"})
+	}
+}
+
+func principalMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user := strings.TrimSpace(c.GetHeader("X-User"))
+		if user == "" {
+			user = "api-client"
+		}
+		role := strings.ToLower(strings.TrimSpace(c.GetHeader("X-User-Role")))
+		if role == "" {
+			role = "operator"
+		}
+		security.WithPrincipal(c, security.Principal{User: user, Role: role})
+		c.Next()
 	}
 }
 

@@ -223,6 +223,113 @@
   border: 1px solid rgba(255, 255, 255, 0.02);
 }
 
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.form-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.form-grid .ui-field {
+  width: 100%;
+}
+
+.scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.scenario-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.scenario-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.scenario-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tag.status-success {
+  background: rgba(41, 204, 123, 0.15);
+  color: #13a35a;
+}
+
+.tag.status-info {
+  background: rgba(82, 131, 255, 0.15);
+  color: #1f5ed1;
+}
+
+.tag.status-warning {
+  background: rgba(255, 196, 0, 0.15);
+  color: #9b6700;
+}
+
+.tag.status-muted {
+  background: rgba(120, 132, 149, 0.15);
+  color: #4a5568;
+}
+
+.tag.status-danger {
+  background: rgba(255, 99, 99, 0.15);
+  color: #b42318;
+}
+
+.steps-editor {
+  margin-top: 1rem;
+  border-top: 1px dashed var(--color-border);
+  padding-top: 1rem;
+}
+
+.step-draft {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.step-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--color-border-muted);
+}
+
+.step-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
 .highlight {
   display: flex;
   flex-direction: column;
@@ -258,6 +365,16 @@
 
 .trend.negative {
   color: var(--color-risk-high);
+}
+
+.resource-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.resource-grid .ui-field {
+  width: 100%;
 }
 
 .grid {
@@ -314,6 +431,31 @@
 .timeline-meta {
   color: var(--color-text-secondary);
   font-size: 0.85rem;
+}
+
+.table-wrapper {
+  margin-top: 1rem;
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.9rem;
+}
+
+thead th {
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
 }
 
 .command-overlay {
@@ -460,14 +602,9 @@
   flex-wrap: wrap;
 }
 
-.filter-row input[type='search'] {
+.filter-row .ui-control {
   flex: 1;
   min-width: 220px;
-  padding: 0.6rem 0.8rem;
-  border-radius: var(--radius-base);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-card);
-  color: var(--color-text-primary);
 }
 
 .status-tabs {
@@ -490,15 +627,42 @@
   color: #fff;
 }
 
-.view-manager select {
-  border-radius: var(--radius-base);
-  border: 1px solid var(--color-border);
-  padding: 0.4rem 0.6rem;
-  background: var(--color-surface-card);
+.view-manager .ui-control {
+  max-width: 260px;
 }
 
 .grid-4 {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.ui-showcase-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.token-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.token-table th,
+.token-table td {
+  border-bottom: 1px solid var(--color-border-muted);
+  padding: 0.6rem 0.4rem;
+  text-align: left;
+}
+
+.token-table code {
+  font-size: var(--font-size-sm);
+}
+
+.token-swatch {
+  display: inline-block;
+  width: 56px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
 }
 
 .highlight.danger {
@@ -690,6 +854,12 @@
   border-radius: 999px;
   background: var(--color-surface-muted);
   font-size: 0.85rem;
+}
+
+.field-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 .drawer-form {
   display: flex;

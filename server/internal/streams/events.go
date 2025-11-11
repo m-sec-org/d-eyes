@@ -23,6 +23,11 @@ type TaskEvent struct {
 	InFlight     int               `json:"in_flight,omitempty"`
 	BASInFlight  int               `json:"bas_in_flight,omitempty"`
 	QueueDepth   int64             `json:"queue_depth,omitempty"`
+	Progress     int               `json:"progress,omitempty"`
+	Message      string            `json:"message,omitempty"`
+	Action       string            `json:"action,omitempty"`
+	Actor        string            `json:"actor,omitempty"`
+	Severity     string            `json:"severity,omitempty"`
 	UpdatedAt    time.Time         `json:"updated_at"`
 }
 

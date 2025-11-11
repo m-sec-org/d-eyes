@@ -18,6 +18,7 @@ type Store interface {
 	GetAgentByName(ctx context.Context, name string) (*model.Agent, error)
 	GetAgent(ctx context.Context, id uuid.UUID) (*model.Agent, error)
 	UpdateAgentStatus(ctx context.Context, id uuid.UUID, status model.AgentStatus, heartbeat time.Time, load float64, running []string) error
+	UpdateAgentMetadata(ctx context.Context, id uuid.UUID, labels map[string]string) error
 
 	CreateTask(ctx context.Context, task *model.Task) error
 	UpdateTaskStatus(ctx context.Context, taskID uuid.UUID, status model.TaskStatus) error

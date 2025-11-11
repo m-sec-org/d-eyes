@@ -1,0 +1,213 @@
+:root {
+  --ui-button-font-weight: 600;
+}
+
+.ui-button {
+  border: 1px solid transparent;
+  border-radius: var(--radius-base);
+  height: var(--control-height-md);
+  padding: 0 1.25rem;
+  font-size: var(--font-size-base);
+  font-weight: var(--ui-button-font-weight);
+  line-height: var(--line-height-tight);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+  background: transparent;
+  color: var(--color-text-primary);
+}
+
+.ui-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-focus-ring);
+}
+
+.ui-button:disabled,
+.ui-button[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.55;
+  box-shadow: none;
+}
+
+.ui-button--primary {
+  background: var(--color-accent);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(23, 116, 255, 0.2);
+}
+
+.ui-button--primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+
+.ui-button--primary:active:not(:disabled) {
+  background: var(--color-accent-active);
+}
+
+.ui-button--secondary {
+  border-color: var(--color-border);
+  background: var(--color-control-bg);
+  color: var(--color-text-primary);
+}
+
+.ui-button--secondary:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background: var(--color-control-bg-muted);
+}
+
+.ui-button--ghost {
+  border-color: transparent;
+  color: var(--color-text-secondary);
+  background: transparent;
+}
+
+.ui-button--ghost:hover:not(:disabled) {
+  background: var(--color-accent-muted);
+  color: var(--color-text-primary);
+}
+
+.ui-button--danger {
+  background: var(--color-danger);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(245, 34, 45, 0.18);
+}
+
+.ui-button--danger:hover:not(:disabled) {
+  background: #ff6b74;
+}
+
+.ui-button--danger:active:not(:disabled) {
+  background: #d43038;
+}
+
+.ui-button--sm {
+  height: var(--control-height-sm);
+  padding: 0 0.85rem;
+  font-size: var(--font-size-sm);
+}
+
+.ui-button--ghost-danger {
+  border-color: rgba(245, 34, 45, 0.35);
+  color: var(--color-danger);
+  background: transparent;
+}
+
+.ui-button--ghost-danger:hover:not(:disabled) {
+  background: var(--color-danger-bg);
+}
+
+.ui-button--block {
+  width: 100%;
+}
+
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ui-field__label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.ui-field__hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-relaxed);
+}
+
+.ui-field__error {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+.ui-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ui-control {
+  width: 100%;
+  border-radius: var(--radius-base);
+  border: 1px solid var(--color-control-border, var(--color-border));
+  background: var(--color-control-bg);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-base);
+  padding: 0.55rem 0.75rem;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
+}
+
+.ui-control::placeholder {
+  color: var(--color-control-placeholder);
+}
+
+.ui-control:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-focus-ring);
+}
+
+.ui-control:disabled {
+  background: var(--color-control-disabled-bg);
+  color: var(--color-control-disabled-text);
+  border-color: var(--color-border-muted);
+  cursor: not-allowed;
+}
+
+.ui-control--invalid {
+  border-color: var(--color-danger);
+  box-shadow: 0 0 0 2px rgba(245, 34, 45, 0.15);
+}
+
+.ui-control--textarea {
+  resize: vertical;
+  min-height: 96px;
+}
+
+.ui-control--select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--color-text-secondary) 50%),
+    linear-gradient(135deg, var(--color-text-secondary) 50%, transparent 50%);
+  background-position: calc(100% - 20px) calc(50% - 2px), calc(100% - 16px) calc(50% - 2px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  padding-right: 2.5rem;
+}
+
+.ui-control--select[multiple] {
+  background-image: none;
+  padding-right: 0.75rem;
+  min-height: 120px;
+}
+
+.ui-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+}
+
+.ui-checkbox input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.ui-checkbox input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}

@@ -8,6 +8,7 @@ export interface TaskFilters {
 }
 
 export async function listTasks(filters?: TaskFilters): Promise<TaskListResponse> {
-  const res = await httpClient.get('/tasks', { params: filters });
+  const config = filters ? { params: filters } : undefined;
+  const res = await httpClient.get('/tasks', config);
   return TaskListResponseSchema.parse(res.data);
 }

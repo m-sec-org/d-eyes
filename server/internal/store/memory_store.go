@@ -91,6 +91,22 @@ func (m *memoryStore) UpdateAgentStatus(_ context.Context, id uuid.UUID, status 
 	return nil
 }
 
+func (m *memoryStore) UpdateAgentMetadata(_ context.Context, id uuid.UUID, labels map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	agent, ok := m.agents[id]
+	if !ok {
+		return ErrNotFound
+	}
+	copyLabels := make(map[string]string, len(labels))
+	for k, v := range labels {
+		copyLabels[k] = v
+	}
+	agent.Labels = copyLabels
+	agent.UpdatedAt = time.Now()
+	return nil
+}
+
 func (m *memoryStore) CreateTask(_ context.Context, task *model.Task) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

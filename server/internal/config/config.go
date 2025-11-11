@@ -13,16 +13,20 @@ import (
 
 // Config captures all runtime configuration for the server process.
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	Security  SecurityConfig  `yaml:"security"`
-	Database  DatabaseConfig  `yaml:"database"`
-	Redis     RedisConfig     `yaml:"redis"`
-	Scheduler SchedulerConfig `yaml:"scheduler"`
-	Search    SearchConfig    `yaml:"search"`
-	Metrics   MetricsConfig   `yaml:"metrics"`
-	Audit     AuditConfig     `yaml:"audit"`
-	Alerts    AlertsConfig    `yaml:"alerts"`
-	Templates TemplateConfig  `yaml:"templates"`
+	Server      ServerConfig      `yaml:"server"`
+	Security    SecurityConfig    `yaml:"security"`
+	Database    DatabaseConfig    `yaml:"database"`
+	Redis       RedisConfig       `yaml:"redis"`
+	Scheduler   SchedulerConfig   `yaml:"scheduler"`
+	Search      SearchConfig      `yaml:"search"`
+	Metrics     MetricsConfig     `yaml:"metrics"`
+	Audit       AuditConfig       `yaml:"audit"`
+	Alerts      AlertsConfig      `yaml:"alerts"`
+	Templates   TemplateConfig    `yaml:"templates"`
+	TaskCatalog TaskCatalogConfig `yaml:"task_catalog"`
+	BAS         BASConfig         `yaml:"bas"`
+	RBAC        RBACConfig        `yaml:"rbac"`
+	Reports     ReportConfig      `yaml:"reports"`
 }
 
 type ServerConfig struct {
@@ -78,8 +82,9 @@ type MetricsConfig struct {
 }
 
 type AuditConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	LogPath string `yaml:"log_path"`
+	Enabled   bool   `yaml:"enabled"`
+	LogPath   string `yaml:"log_path"`
+	StorePath string `yaml:"store_path"`
 }
 
 type AlertsConfig struct {
@@ -91,6 +96,36 @@ type AlertsConfig struct {
 
 type TemplateConfig struct {
 	PersistPath string `yaml:"persist_path"`
+}
+
+type BASConfig struct {
+	ScenarioPersistPath      string            `yaml:"scenario_persist_path"`
+	DefaultNetworkBoundaries []string          `yaml:"default_network_boundaries"`
+	DefaultResourceLimits    BASResourceLimits `yaml:"default_resource_limits"`
+}
+
+type BASResourceLimits struct {
+	MaxTargets         int `yaml:"max_targets"`
+	MaxParallelSteps   int `yaml:"max_parallel_steps"`
+	MaxDurationMinutes int `yaml:"max_duration_minutes"`
+	MaxCPUPercent      int `yaml:"max_cpu_percent"`
+}
+
+type TaskCatalogConfig struct {
+	PersistPath string `yaml:"persist_path"`
+}
+
+type ReportConfig struct {
+	TemplatePath string `yaml:"template_path"`
+}
+
+type RBACConfig struct {
+	Policies []RBACPolicy `yaml:"policies"`
+}
+
+type RBACPolicy struct {
+	Role        string   `yaml:"role"`
+	Permissions []string `yaml:"permissions"`
 }
 
 type SearchConfig struct {
@@ -149,8 +184,9 @@ func Default() Config {
 			Path:    "/metrics",
 		},
 		Audit: AuditConfig{
-			Enabled: false,
-			LogPath: "",
+			Enabled:   false,
+			LogPath:   "",
+			StorePath: "",
 		},
 		Alerts: AlertsConfig{
 			Enabled:          false,
@@ -161,11 +197,34 @@ func Default() Config {
 		Templates: TemplateConfig{
 			PersistPath: "",
 		},
+		TaskCatalog: TaskCatalogConfig{
+			PersistPath: "",
+		},
+		BAS: BASConfig{
+			ScenarioPersistPath:      "",
+			DefaultNetworkBoundaries: []string{"dmz"},
+			DefaultResourceLimits: BASResourceLimits{
+				MaxTargets:         64,
+				MaxParallelSteps:   2,
+				MaxDurationMinutes: 60,
+				MaxCPUPercent:      80,
+			},
+		},
 		Search: SearchConfig{
 			Enabled:   false,
 			Addresses: []string{"http://127.0.0.1:9200"},
 			Index:     "d-eyes-task-results",
 			Timeout:   5 * time.Second,
+		},
+		RBAC: RBACConfig{
+			Policies: []RBACPolicy{
+				{Role: "operator", Permissions: []string{"tasks.view", "reports.view", "audit.view"}},
+				{Role: "auditor", Permissions: []string{"audit.view", "reports.view"}},
+				{Role: "admin", Permissions: []string{"*"}},
+			},
+		},
+		Reports: ReportConfig{
+			TemplatePath: "",
 		},
 	}
 }
@@ -239,6 +298,15 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("D_EYES_SERVER_TEMPLATES_PATH"); v != "" {
 		cfg.Templates.PersistPath = v
+	}
+	if v := os.Getenv("D_EYES_BAS_SCENARIO_PATH"); v != "" {
+		cfg.BAS.ScenarioPersistPath = v
+	}
+	if v := os.Getenv("D_EYES_REPORT_TEMPLATE_PATH"); v != "" {
+		cfg.Reports.TemplatePath = v
+	}
+	if v := os.Getenv("D_EYES_AUDIT_STORE_PATH"); v != "" {
+		cfg.Audit.StorePath = v
 	}
 }
 

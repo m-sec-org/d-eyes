@@ -18,7 +18,7 @@ const { Title, Text } = Typography;
 
 export function PageHeader({ title, description, breadcrumbs = [], extra }: PageHeaderProps) {
   return (
-    <Card bordered={false}>
+    <Card variant="borderless">
       <Space direction="vertical" style={{ width: '100%' }} size="small">
         {breadcrumbs.length > 0 && (
           <Breadcrumb

@@ -25,3 +25,7 @@ export async function cancelTask(taskId: string): Promise<Task> {
   const res = await httpClient.post(`/tasks/${taskId}/cancel`);
   return TaskSchema.parse(res.data);
 }
+
+export async function performTaskAction(taskId: string, action: 'pause' | 'resume' | 'terminate' | 'ack', reason?: string) {
+  await httpClient.post(`/tasks/${taskId}/actions`, { action, reason });
+}

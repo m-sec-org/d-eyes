@@ -1,6 +1,6 @@
 import { useAuth } from './useAuth';
 
-type Role = 'operator' | 'auditor' | 'admin';
+export type Role = 'operator' | 'auditor' | 'admin';
 
 const routeRoles: Record<string, Role[]> = {
   '/': ['operator', 'admin'],
@@ -9,8 +9,12 @@ const routeRoles: Record<string, Role[]> = {
   '/assets': ['operator', 'admin'],
   '/queues': ['admin'],
   '/topology': ['admin'],
+  '/bas': ['admin'],
+  '/agents': ['admin'],
+  '/reports': ['admin'],
   '/settings': ['admin'],
   '/audit': ['auditor', 'admin'],
+  '/ui-guide': ['admin'],
 };
 
 const rolePriority: Role[] = ['operator', 'auditor', 'admin'];

@@ -6,6 +6,7 @@ import { TaskBoard } from './components/TaskBoard';
 import { TaskFilters } from './components/TaskFilters';
 import { TaskList } from './components/TaskList';
 import { TaskDetailDrawer } from './components/TaskDetailDrawer';
+import { TaskLiveMonitor } from './components/TaskLiveMonitor';
 import { CreateTaskDrawer } from './forms/CreateTaskDrawer';
 import { useTaskActions } from './hooks/useTaskActions';
 import { Button, Space } from 'antd';
@@ -49,6 +50,7 @@ export function TaskOverview() {
           onRemoveView={filterState.removeView}
         />
 
+        <TaskLiveMonitor tasks={tasks} />
         <TaskBoard tasks={tasks} loading={isLoading} />
         <TaskList
           tasks={tasks}

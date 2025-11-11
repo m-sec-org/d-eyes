@@ -2,13 +2,20 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import dayjs from 'dayjs';
 import { listAuditEvents } from '@/services/api/audit';
+import type { AuditEvent } from '@/services/types';
 import { OperationTimeline } from '@/components/OperationTimeline';
+import { Button, TextInput } from '@/components/ui';
 
 export function AuditLogView() {
-  const { data, isLoading, mutate } = useSWR('audit-events', listAuditEvents);
-  const [filter, setFilter] = useState('all');
+  const [actor, setActor] = useState('');
+  const [resource, setResource] = useState('');
+  const [action, setAction] = useState('');
+  const [limit, setLimit] = useState(50);
+  const { data, isLoading, mutate } = useSWR(['audit-events', actor, resource, action, limit], () =>
+    listAuditEvents({ actor, resource, action, limit })
+  );
 
-  const filtered = data?.items.filter((event) => (filter === 'all' ? true : event.resource.startsWith(filter))) ?? [];
+  const filtered = data?.items ?? [];
 
   return (
     <div className="audit-log-view">
@@ -18,23 +25,21 @@ export function AuditLogView() {
           <p className="muted">记录系统关键操作，支持过滤与导出</p>
         </div>
         <div className="actions">
-          <button type="button" className="ghost" onClick={() => mutate()}>
+          <Button type="button" variant="ghost" onClick={() => mutate()}>
             刷新
-          </button>
-          <button type="button" className="primary">
+          </Button>
+          <Button type="button" variant="primary" onClick={() => downloadJSON(filtered)}>
             导出 JSON
-          </button>
+          </Button>
         </div>
       </section>
 
       <section className="card">
         <div className="filter-row">
-          <select value={filter} onChange={(event) => setFilter(event.target.value)}>
-            <option value="all">全部资源</option>
-            <option value="task">任务操作</option>
-            <option value="system">系统配置</option>
-            <option value="audit">审计导出</option>
-          </select>
+          <TextInput placeholder="操作人" value={actor} onChange={(e) => setActor(e.target.value)} />
+          <TextInput placeholder="资源关键词" value={resource} onChange={(e) => setResource(e.target.value)} />
+          <TextInput placeholder="行为关键词" value={action} onChange={(e) => setAction(e.target.value)} />
+          <TextInput type="number" min={10} max={500} value={limit} onChange={(e) => setLimit(Number(e.target.value) || 50)} />
         </div>
         {isLoading ? (
           <div>加载中...</div>
@@ -70,4 +75,15 @@ export function AuditLogView() {
       </section>
     </div>
   );
+}
+
+function downloadJSON(events: AuditEvent[]) {
+  const payload = JSON.stringify(events, null, 2);
+  const blob = new Blob([payload], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `audit-${Date.now()}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }

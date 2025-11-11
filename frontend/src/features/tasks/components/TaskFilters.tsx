@@ -29,7 +29,7 @@ export function TaskFilters({
   onRemoveView,
 }: TaskFiltersProps) {
   return (
-    <Card bodyStyle={{ padding: '16px 20px' }} style={{ marginBottom: 16 }}>
+    <Card styles={{ body: { padding: '16px 20px' } }} style={{ marginBottom: 16 }}>
       <Space direction="vertical" style={{ width: '100%' }} size="large">
         <Segmented
           value={filters.status}
@@ -39,7 +39,7 @@ export function TaskFilters({
           aria-label="任务状态筛选"
         />
         <Space wrap style={{ width: '100%' }}>
-          <Input.Search
+          <Input
             allowClear
             placeholder="搜索任务 ID / 目标 / 场景..."
             style={{ minWidth: 220 }}

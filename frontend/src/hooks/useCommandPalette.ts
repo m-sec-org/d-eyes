@@ -66,6 +66,30 @@ const seedCommands: CommandItem[] = [
     route: '/topology',
     keywords: ['topology', '拓扑'],
   },
+  {
+    id: 'view-bas',
+    type: 'view',
+    label: '跳转到 BAS 场景',
+    description: '管理 BAS 场景与审批',
+    route: '/bas',
+    keywords: ['bas', 'scenario', '攻防'],
+  },
+  {
+    id: 'view-agents',
+    type: 'view',
+    label: '跳转到 Agent 管理',
+    description: '查看节点状态与标签',
+    route: '/agents',
+    keywords: ['agent', '节点'],
+  },
+  {
+    id: 'view-reports',
+    type: 'view',
+    label: '跳转到报告中心',
+    description: '管理模板并导出报告',
+    route: '/reports',
+    keywords: ['report', '报告'],
+  },
 ];
 
 export function useCommandPalette() {

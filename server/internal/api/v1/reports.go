@@ -1,22 +1,46 @@
 package v1
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/m-sec-org/d-eyes/server/internal/auditlog"
 	"github.com/m-sec-org/d-eyes/server/internal/model"
+	"github.com/m-sec-org/d-eyes/server/internal/reporttemplates"
+	"github.com/m-sec-org/d-eyes/server/internal/security"
 	"github.com/m-sec-org/d-eyes/server/internal/store"
 )
 
 // ReportHandler 聚合任务结果并提供导出能力。
 type ReportHandler struct {
-	Store store.Store
+	Store     store.Store
+	Templates *reporttemplates.Manager
+	Audit     *auditlog.Manager
+}
+
+func (h *ReportHandler) recordAudit(c *gin.Context, action, resource, result string) {
+	if h == nil || h.Audit == nil {
+		return
+	}
+	principal := security.PrincipalFrom(c)
+	h.Audit.Record(auditlog.Event{
+		Actor:    principal.User,
+		Role:     principal.Role,
+		Action:   action,
+		Resource: resource,
+		Result:   result,
+	})
 }
 
 func (h *ReportHandler) RegisterRoutes(r *gin.RouterGroup) {
@@ -26,6 +50,13 @@ func (h *ReportHandler) RegisterRoutes(r *gin.RouterGroup) {
 	group := r.Group("/reports")
 	group.GET("/summary", h.summary)
 	group.GET("/export", h.export)
+	if h.Templates != nil {
+		group.GET("/templates", h.listTemplates)
+		group.POST("/templates", h.createTemplate)
+		group.PUT("/templates/:id", h.updateTemplate)
+		group.DELETE("/templates/:id", h.deleteTemplate)
+		group.POST("/generate", h.generateReport)
+	}
 }
 
 type reportItem struct {
@@ -105,6 +136,142 @@ func (h *ReportHandler) export(c *gin.Context) {
 	}
 }
 
+func (h *ReportHandler) listTemplates(c *gin.Context) {
+	templates := h.Templates.List()
+	c.JSON(http.StatusOK, templates)
+}
+
+func (h *ReportHandler) createTemplate(c *gin.Context) {
+	var req reporttemplates.Template
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	created, err := h.Templates.Create(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.recordAudit(c, "report.template.create", "report-template:"+created.ID.String(), "accepted")
+	c.JSON(http.StatusCreated, created)
+}
+
+func (h *ReportHandler) updateTemplate(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid template id"})
+		return
+	}
+	var req reporttemplates.Template
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	updated, err := h.Templates.Update(id, req)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, reporttemplates.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	h.recordAudit(c, "report.template.update", "report-template:"+id.String(), "accepted")
+	c.JSON(http.StatusOK, updated)
+}
+
+func (h *ReportHandler) deleteTemplate(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid template id"})
+		return
+	}
+	if err := h.Templates.Delete(id); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, reporttemplates.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	h.recordAudit(c, "report.template.delete", "report-template:"+id.String(), "accepted")
+	c.Status(http.StatusNoContent)
+}
+
+func (h *ReportHandler) generateReport(c *gin.Context) {
+	var req struct {
+		TaskID     string `json:"task_id" binding:"required"`
+		TemplateID string `json:"template_id" binding:"required"`
+		Format     string `json:"format"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	taskID, err := uuid.Parse(req.TaskID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task_id"})
+		return
+	}
+	templateID, err := uuid.Parse(req.TemplateID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid template_id"})
+		return
+	}
+	tmpl, err := h.Templates.Get(templateID)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, reporttemplates.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	format := strings.ToLower(strings.TrimSpace(req.Format))
+	if format == "" {
+		format = strings.ToLower(tmpl.Format)
+	}
+	ctx := c.Request.Context()
+	task, run, exec, err := h.loadExecution(ctx, taskID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	data := map[string]any{
+		"task":         task,
+		"run":          run,
+		"result":       exec,
+		"generated_at": time.Now().UTC(),
+		"template":     tmpl,
+	}
+	switch format {
+	case "json":
+		c.Header("Content-Type", "application/json")
+		c.JSON(http.StatusOK, data)
+	case "html":
+		buf := bytes.Buffer{}
+		t, err := template.New(tmpl.Name).Parse(tmpl.Body)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid template body"})
+			return
+		}
+		if err := t.Execute(&buf, data); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="report-%s.html"`, taskID))
+		_, _ = c.Writer.Write(buf.Bytes())
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported format"})
+	}
+	h.recordAudit(c, "report.generate"+"."+format, "task:"+taskID.String(), "completed")
+}
+
 func toReportItem(res *model.TaskResult) reportItem {
 	item := reportItem{
 		ResultID:     res.ID.String(),
@@ -170,4 +337,22 @@ func parseLimit(raw string, fallback int) int {
 		return v
 	}
 	return fallback
+}
+
+func (h *ReportHandler) loadExecution(ctx context.Context, taskID uuid.UUID) (*model.Task, *model.TaskRun, *model.ExecutionResult, error) {
+	task, err := h.Store.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	run, err := h.Store.GetLatestTaskRun(ctx, taskID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var exec model.ExecutionResult
+	if len(run.Summary) > 0 {
+		if err := json.Unmarshal(run.Summary, &exec); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	return task, run, &exec, nil
 }

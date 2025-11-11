@@ -13,8 +13,12 @@ import { SystemConfigCenter } from './features/settings/SystemConfigCenter';
 import { AuditLogView } from './features/audit/AuditLogView';
 import { QueueMonitor } from './features/queues/QueueMonitor';
 import { TopologyOverview } from './features/topology/TopologyOverview';
+import { BASScenarioConsole } from './features/bas/BASScenarioConsole';
+import { AgentDirectory } from './features/agents/AgentDirectory';
+import { ReportWorkbench } from './features/reports/ReportWorkbench';
 import { Route, Routes, useNavigate } from 'react-router-dom';
 import { ProtectedRoute } from './app/routes/ProtectedRoute';
+import { ThemeShowcase } from './features/styleguide/ThemeShowcase';
 
 function App() {
   const { open, filtered, query, setQuery, toggle, close } = useCommandPalette();
@@ -58,6 +62,14 @@ function App() {
               }
             />
             <Route
+              path="/agents"
+              element={
+                <ProtectedRoute route="/agents" allowedRoles={['admin']}>
+                  <AgentDirectory />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/risks"
               element={
                 <ProtectedRoute route="/risks" allowedRoles={['operator', 'auditor', 'admin']}>
@@ -90,6 +102,22 @@ function App() {
               }
             />
             <Route
+              path="/bas"
+              element={
+                <ProtectedRoute route="/bas" allowedRoles={['admin']}>
+                  <BASScenarioConsole />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/reports"
+              element={
+                <ProtectedRoute route="/reports" allowedRoles={['admin']}>
+                  <ReportWorkbench />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/settings"
               element={
                 <ProtectedRoute route="/settings" allowedRoles={['admin']}>
@@ -102,6 +130,14 @@ function App() {
               element={
                 <ProtectedRoute route="/audit" allowedRoles={['auditor', 'admin']}>
                   <AuditLogView />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/ui-guide"
+              element={
+                <ProtectedRoute route="/ui-guide" allowedRoles={['admin']}>
+                  <ThemeShowcase />
                 </ProtectedRoute>
               }
             />

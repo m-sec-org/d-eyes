@@ -162,17 +162,17 @@ export function AssetOverview() {
 
         <Row gutter={16}>
           <Col xs={24} md={8}>
-            <Card bordered={false}>
+            <Card variant="borderless">
               <Statistic title="在线资产" value={summary?.totals.online ?? 0} valueStyle={{ color: '#52c41a' }} />
             </Card>
           </Col>
           <Col xs={24} md={8}>
-            <Card bordered={false}>
+            <Card variant="borderless">
               <Statistic title="离线资产" value={summary?.totals.offline ?? 0} valueStyle={{ color: '#faad14' }} />
             </Card>
           </Col>
           <Col xs={24} md={8}>
-            <Card bordered={false}>
+            <Card variant="borderless">
               <Statistic title="高风险" value={summary?.totals.critical ?? 0} valueStyle={{ color: '#ff4d4f' }} />
             </Card>
           </Col>
@@ -181,10 +181,10 @@ export function AssetOverview() {
         <Card
           title="资产列表"
           extra={<Text type="secondary">来自最新 inventory · {filtered.length} 条记录</Text>}
-          bodyStyle={{ paddingTop: 0 }}
+          styles={{ body: { paddingTop: 0 } }}
         >
           <Space style={{ marginBottom: 16 }} wrap>
-            <Input.Search
+            <Input
               placeholder="搜索主机 / 标签 / IP"
               allowClear
               value={search}

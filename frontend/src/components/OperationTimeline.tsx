@@ -12,12 +12,12 @@ interface TimelineItem {
 }
 
 export function OperationTimeline() {
-  const { data: auditData } = useSWR('audit-events', listAuditEvents);
+  const { data: auditData } = useSWR('audit-events', () => listAuditEvents());
   const taskEvents = useTaskEventStore((state) => state.events);
 
   const timeline = useMemo<TimelineItem[]>(() => {
-    const taskItems: TimelineItem[] = taskEvents.map((event) => ({
-      id: `task-${event.task_id}-${event.updated_at}-${event.event}`,
+    const taskItems: TimelineItem[] = taskEvents.map((event, index) => ({
+      id: `task-${event.task_id}-${event.updated_at}-${event.event}-${index}`,
       title: `任务 ${event.event}`,
       timestamp: event.updated_at,
       type: 'task',

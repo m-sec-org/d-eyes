@@ -11,7 +11,15 @@ const AuditListSchema = z
   .union([z.object({ items: AuditEventSchema.array() }), AuditEventSchema.array()])
   .transform((payload) => ('items' in payload ? payload : { items: payload }));
 
-export async function listAuditEvents(): Promise<AuditListResponse> {
-  const res = await httpClient.get('/audit/events');
+export interface AuditFilter {
+  actor?: string;
+  resource?: string;
+  action?: string;
+  limit?: number;
+}
+
+export async function listAuditEvents(filter?: AuditFilter): Promise<AuditListResponse> {
+  const config = filter ? { params: filter } : undefined;
+  const res = await httpClient.get('/audit/events', config);
   return AuditListSchema.parse(res.data);
 }
