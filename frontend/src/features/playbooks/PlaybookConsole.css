@@ -1,0 +1,56 @@
+.playbook-console {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.playbook-grid,
+.playbook-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+
+.playbook-card {
+  border-radius: 16px;
+}
+
+.playbook-list-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.playbook-detail-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.playbook-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.playbook-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.playbook-detail-grid pre,
+.playbook-detail-pane pre {
+  background: var(--surface-subtle, rgba(0, 0, 0, 0.03));
+  padding: 0.75rem;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.playbook-card .selected {
+  background: rgba(22, 119, 255, 0.08);
+}
+
+.muted {
+  color: var(--text-muted, #6b7280);
+}

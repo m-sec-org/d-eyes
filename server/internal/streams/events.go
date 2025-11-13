@@ -12,23 +12,24 @@ import (
 
 // TaskEvent 描述任务状态或统计事件。
 type TaskEvent struct {
-	Event        string            `json:"event"`
-	TaskID       string            `json:"task_id,omitempty"`
-	TaskType     string            `json:"task_type,omitempty"`
-	Status       string            `json:"status,omitempty"`
-	AgentID      string            `json:"agent_id,omitempty"`
-	ScenarioID   string            `json:"scenario_id,omitempty"`
-	ScenarioName string            `json:"scenario_name,omitempty"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
-	InFlight     int               `json:"in_flight,omitempty"`
-	BASInFlight  int               `json:"bas_in_flight,omitempty"`
-	QueueDepth   int64             `json:"queue_depth,omitempty"`
-	Progress     int               `json:"progress,omitempty"`
-	Message      string            `json:"message,omitempty"`
-	Action       string            `json:"action,omitempty"`
-	Actor        string            `json:"actor,omitempty"`
-	Severity     string            `json:"severity,omitempty"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	Event         string            `json:"event"`
+	TaskID        string            `json:"task_id,omitempty"`
+	TaskType      string            `json:"task_type,omitempty"`
+	Status        string            `json:"status,omitempty"`
+	AgentID       string            `json:"agent_id,omitempty"`
+	ScenarioID    string            `json:"scenario_id,omitempty"`
+	ScenarioName  string            `json:"scenario_name,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	InFlight      int               `json:"in_flight,omitempty"`
+	BASInFlight   int               `json:"bas_in_flight,omitempty"`
+	BASQueueDepth int64             `json:"bas_queue_depth,omitempty"`
+	QueueDepth    int64             `json:"queue_depth,omitempty"`
+	Progress      int               `json:"progress,omitempty"`
+	Message       string            `json:"message,omitempty"`
+	Action        string            `json:"action,omitempty"`
+	Actor         string            `json:"actor,omitempty"`
+	Severity      string            `json:"severity,omitempty"`
+	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
 // Hub 负责事件的订阅与分发。

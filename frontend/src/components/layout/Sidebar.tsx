@@ -25,6 +25,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: '风险', route: '/risks', icon: '⚠️', roles: ['operator', 'auditor', 'admin'] },
       { label: '资产', route: '/assets', icon: '🧱', roles: ['operator', 'admin'] },
+      { label: '威胁情报', route: '/threat-intel', icon: '🕵️', roles: ['operator', 'admin'] },
+      { label: '行为异常', route: '/anomalies', icon: '🧠', roles: ['operator', 'auditor', 'admin'] },
       { label: '拓扑', route: '/topology', icon: '🗺️', roles: ['admin'] },
     ],
   },
@@ -32,6 +34,8 @@ const NAV_GROUPS: NavGroup[] = [
     title: '治理',
     items: [
       { label: 'BAS 场景', route: '/bas', icon: '🛡️', roles: ['admin'] },
+      { label: '合规', route: '/compliance', icon: '📋', roles: ['admin'] },
+      { label: 'Playbooks', route: '/playbooks', icon: '🧩', roles: ['admin'] },
       { label: '报告中心', route: '/reports', icon: '📝', roles: ['admin'] },
       { label: '系统配置', route: '/settings', icon: '⚙️', roles: ['admin'] },
       { label: '日志审计', route: '/audit', icon: '📜', roles: ['auditor', 'admin'] },

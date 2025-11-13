@@ -27,6 +27,10 @@ type Config struct {
 	BAS         BASConfig         `yaml:"bas"`
 	RBAC        RBACConfig        `yaml:"rbac"`
 	Reports     ReportConfig      `yaml:"reports"`
+	Artifact    ArtifactConfig    `yaml:"artifact"`
+	ThreatIntel ThreatIntelConfig `yaml:"threat_intel"`
+	Behavior    BehaviorConfig    `yaml:"behavior"`
+	Playbook    PlaybookConfig    `yaml:"playbook"`
 }
 
 type ServerConfig struct {
@@ -99,9 +103,11 @@ type TemplateConfig struct {
 }
 
 type BASConfig struct {
-	ScenarioPersistPath      string            `yaml:"scenario_persist_path"`
 	DefaultNetworkBoundaries []string          `yaml:"default_network_boundaries"`
 	DefaultResourceLimits    BASResourceLimits `yaml:"default_resource_limits"`
+	DefaultExecutionPlan     BASExecutionPlan  `yaml:"default_execution_plan"`
+	DefaultApprovalPolicy    []BASApprovalRule `yaml:"default_approval_policy"`
+	CacheTTL                 time.Duration     `yaml:"cache_ttl"`
 }
 
 type BASResourceLimits struct {
@@ -111,12 +117,74 @@ type BASResourceLimits struct {
 	MaxCPUPercent      int `yaml:"max_cpu_percent"`
 }
 
+type BASExecutionPlan struct {
+	Mode               string `yaml:"mode"`
+	MaxParallel        int    `yaml:"max_parallel"`
+	RetryLimit         int    `yaml:"retry_limit"`
+	StepTimeoutSeconds int    `yaml:"step_timeout_seconds"`
+	CrossAgent         bool   `yaml:"cross_agent"`
+}
+
+type BASApprovalRule struct {
+	Role           string `yaml:"role"`
+	TimeoutSeconds int    `yaml:"timeout_seconds"`
+}
+
 type TaskCatalogConfig struct {
 	PersistPath string `yaml:"persist_path"`
 }
 
 type ReportConfig struct {
 	TemplatePath string `yaml:"template_path"`
+}
+
+type ArtifactConfig struct {
+	StorageDir string        `yaml:"storage_dir"`
+	UploadTTL  time.Duration `yaml:"upload_ttl"`
+	MaxSize    int64         `yaml:"max_size_bytes"`
+}
+
+type ThreatIntelConfig struct {
+	Enabled             bool          `yaml:"enabled"`
+	WorkerConcurrency   int           `yaml:"worker_concurrency"`
+	QueuePollInterval   time.Duration `yaml:"queue_poll_interval"`
+	MaxAttempts         int           `yaml:"max_attempts"`
+	RetryBackoff        time.Duration `yaml:"retry_backoff"`
+	VerdictTTL          time.Duration `yaml:"verdict_ttl"`
+	OpenTIPAPIKey       string        `yaml:"opentip_api_key"`
+	OpenTIPBaseURL      string        `yaml:"opentip_base_url"`
+	MetaDefenderAPIKey  string        `yaml:"metadefender_api_key"`
+	MetaDefenderBaseURL string        `yaml:"metadefender_base_url"`
+}
+
+type BehaviorConfig struct {
+	Enabled             bool                `yaml:"enabled"`
+	HeartbeatStream     string              `yaml:"heartbeat_stream"`
+	EventStream         string              `yaml:"event_stream"`
+	AnomalyCPUThreshold float64             `yaml:"anomaly_cpu_threshold"`
+	Graph               BehaviorGraphConfig `yaml:"graph"`
+}
+
+type BehaviorGraphConfig struct {
+	Enabled                  bool          `yaml:"enabled"`
+	Window                   time.Duration `yaml:"window"`
+	SampleRate               float64       `yaml:"sample_rate"`
+	MaxBatch                 int           `yaml:"max_batch"`
+	RedisGroup               string        `yaml:"redis_group"`
+	RedisConsumer            string        `yaml:"redis_consumer"`
+	FlushInterval            time.Duration `yaml:"flush_interval"`
+	CPUScoreWeight           float64       `yaml:"cpu_score_weight"`
+	BlockedActionWeight      float64       `yaml:"blocked_action_weight"`
+	ConnectionBurstThreshold int           `yaml:"connection_burst_threshold"`
+	ResourceAnomalyWeight    float64       `yaml:"resource_anomaly_weight"`
+	ConnectionAnomalyWeight  float64       `yaml:"connection_anomaly_weight"`
+	UserSessionAnomalyWeight float64       `yaml:"user_session_anomaly_weight"`
+}
+
+type PlaybookConfig struct {
+	Enabled           bool          `yaml:"enabled"`
+	WorkerConcurrency int           `yaml:"worker_concurrency"`
+	ApprovalTimeout   time.Duration `yaml:"approval_timeout"`
 }
 
 type RBACConfig struct {
@@ -201,7 +269,6 @@ func Default() Config {
 			PersistPath: "",
 		},
 		BAS: BASConfig{
-			ScenarioPersistPath:      "",
 			DefaultNetworkBoundaries: []string{"dmz"},
 			DefaultResourceLimits: BASResourceLimits{
 				MaxTargets:         64,
@@ -209,6 +276,17 @@ func Default() Config {
 				MaxDurationMinutes: 60,
 				MaxCPUPercent:      80,
 			},
+			DefaultExecutionPlan: BASExecutionPlan{
+				Mode:               "serial",
+				MaxParallel:        1,
+				RetryLimit:         1,
+				StepTimeoutSeconds: 300,
+				CrossAgent:         false,
+			},
+			DefaultApprovalPolicy: []BASApprovalRule{
+				{Role: "admin", TimeoutSeconds: 3600},
+			},
+			CacheTTL: 30 * time.Second,
 		},
 		Search: SearchConfig{
 			Enabled:   false,
@@ -218,13 +296,54 @@ func Default() Config {
 		},
 		RBAC: RBACConfig{
 			Policies: []RBACPolicy{
-				{Role: "operator", Permissions: []string{"tasks.view", "reports.view", "audit.view"}},
-				{Role: "auditor", Permissions: []string{"audit.view", "reports.view"}},
+				{Role: "operator", Permissions: []string{"tasks.view", "reports.view", "audit.view", "playbook.execute"}},
+				{Role: "auditor", Permissions: []string{"audit.view", "reports.view", "playbook.execute"}},
 				{Role: "admin", Permissions: []string{"*"}},
 			},
 		},
 		Reports: ReportConfig{
 			TemplatePath: "",
+		},
+		Artifact: ArtifactConfig{
+			StorageDir: "./tmp/artifacts",
+			UploadTTL:  15 * time.Minute,
+			MaxSize:    25 * 1024 * 1024,
+		},
+		ThreatIntel: ThreatIntelConfig{
+			Enabled:             false,
+			WorkerConcurrency:   2,
+			QueuePollInterval:   5 * time.Second,
+			MaxAttempts:         3,
+			RetryBackoff:        30 * time.Second,
+			VerdictTTL:          24 * time.Hour,
+			OpenTIPBaseURL:      "https://opentip.kaspersky.com/api/v1",
+			MetaDefenderBaseURL: "https://api.metadefender.com/v4",
+		},
+		Behavior: BehaviorConfig{
+			Enabled:             false,
+			HeartbeatStream:     "behavior.heartbeats",
+			EventStream:         "behavior.events",
+			AnomalyCPUThreshold: 90,
+			Graph: BehaviorGraphConfig{
+				Enabled:                  true,
+				Window:                   5 * time.Minute,
+				SampleRate:               1.0,
+				MaxBatch:                 256,
+				RedisGroup:               "behavior-graph",
+				RedisConsumer:            "behavior-graph-consumer",
+				FlushInterval:            5 * time.Second,
+				CPUScoreWeight:           0.4,
+				BlockedActionWeight:      0.2,
+				ConnectionBurstThreshold: 25,
+				ResourceAnomalyWeight:    0.2,
+				ConnectionAnomalyWeight:  0.15,
+				UserSessionAnomalyWeight: 0.05,
+			},
+		},
+		Playbook: PlaybookConfig{
+			Enabled:           false,
+			WorkerConcurrency: 2,
+			ApprovalTimeout:   30 * time.Minute,
 		},
 	}
 }
@@ -268,6 +387,11 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("D_EYES_SERVER_REDIS_PASSWORD"); v != "" {
 		cfg.Redis.Password = v
 	}
+	if v := os.Getenv("D_EYES_BAS_CACHE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			cfg.BAS.CacheTTL = d
+		}
+	}
 	if v := os.Getenv("D_EYES_SERVER_REDIS_DB"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Redis.DB = n
@@ -299,14 +423,69 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("D_EYES_SERVER_TEMPLATES_PATH"); v != "" {
 		cfg.Templates.PersistPath = v
 	}
-	if v := os.Getenv("D_EYES_BAS_SCENARIO_PATH"); v != "" {
-		cfg.BAS.ScenarioPersistPath = v
-	}
 	if v := os.Getenv("D_EYES_REPORT_TEMPLATE_PATH"); v != "" {
 		cfg.Reports.TemplatePath = v
 	}
 	if v := os.Getenv("D_EYES_AUDIT_STORE_PATH"); v != "" {
 		cfg.Audit.StorePath = v
+	}
+	if v := os.Getenv("D_EYES_ARTIFACT_DIR"); v != "" {
+		cfg.Artifact.StorageDir = v
+	}
+	if v := os.Getenv("D_EYES_ARTIFACT_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Artifact.UploadTTL = d
+		}
+	}
+	if v := os.Getenv("D_EYES_ARTIFACT_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			cfg.Artifact.MaxSize = n
+		}
+	}
+	if v := os.Getenv("D_EYES_TI_ENABLED"); v != "" {
+		cfg.ThreatIntel.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("D_EYES_TI_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ThreatIntel.WorkerConcurrency = n
+		}
+	}
+	if v := os.Getenv("D_EYES_TI_QUEUE_POLL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.ThreatIntel.QueuePollInterval = d
+		}
+	}
+	if v := os.Getenv("D_EYES_TI_MAX_ATTEMPTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ThreatIntel.MaxAttempts = n
+		}
+	}
+	if v := os.Getenv("D_EYES_TI_RETRY_BACKOFF"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.ThreatIntel.RetryBackoff = d
+		}
+	}
+	if v := os.Getenv("D_EYES_TI_VERDICT_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.ThreatIntel.VerdictTTL = d
+		}
+	}
+	if v := os.Getenv("D_EYES_TI_OPENTIP_API_KEY"); v != "" {
+		cfg.ThreatIntel.OpenTIPAPIKey = v
+	}
+	if v := os.Getenv("D_EYES_TI_OPENTIP_BASE_URL"); v != "" {
+		cfg.ThreatIntel.OpenTIPBaseURL = strings.TrimRight(strings.TrimSpace(v), "/")
+	}
+	if v := os.Getenv("D_EYES_TI_METADEFENDER_API_KEY"); v != "" {
+		cfg.ThreatIntel.MetaDefenderAPIKey = v
+	}
+	if v := os.Getenv("D_EYES_TI_METADEFENDER_BASE_URL"); v != "" {
+		cfg.ThreatIntel.MetaDefenderBaseURL = strings.TrimRight(strings.TrimSpace(v), "/")
+	}
+	if v := os.Getenv("D_EYES_BEHAVIOR_CPU_THRESHOLD"); v != "" {
+		if pct, err := strconv.ParseFloat(v, 64); err == nil && pct > 0 {
+			cfg.Behavior.AnomalyCPUThreshold = pct
+		}
 	}
 }
 
@@ -320,6 +499,25 @@ func (c Config) Validate() error {
 	}
 	if c.Audit.Enabled && strings.TrimSpace(c.Audit.LogPath) == "" {
 		return errors.New("audit.log_path must be set when audit enabled")
+	}
+	if strings.TrimSpace(c.Artifact.StorageDir) == "" {
+		return errors.New("artifact.storage_dir must be set")
+	}
+	if c.Artifact.UploadTTL <= 0 {
+		return errors.New("artifact.upload_ttl must be positive")
+	}
+	if c.Artifact.MaxSize <= 0 {
+		return errors.New("artifact.max_size_bytes must be positive")
+	}
+	mode := strings.ToLower(strings.TrimSpace(c.BAS.DefaultExecutionPlan.Mode))
+	if mode != "serial" && mode != "parallel" {
+		return errors.New("bas.default_execution_plan.mode must be serial or parallel")
+	}
+	if mode == "parallel" && c.BAS.DefaultExecutionPlan.MaxParallel <= 0 {
+		return errors.New("bas.default_execution_plan.max_parallel must be > 0 for parallel mode")
+	}
+	if c.BAS.CacheTTL < 0 {
+		return errors.New("bas.cache_ttl must be >= 0")
 	}
 	return nil
 }

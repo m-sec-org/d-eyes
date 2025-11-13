@@ -16,6 +16,7 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
+	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 )
 
 type moduleResult struct {
@@ -70,6 +71,7 @@ func runFileScan(ctx context.Context, req TaskRequest) (moduleResult, error) {
 		targets = []string{"."}
 	}
 	const maxSamples = 50
+	notes := make([]string, 0)
 	type suspiciousFile struct {
 		Path     string    `json:"path"`
 		Reason   string    `json:"reason"`
@@ -153,6 +155,17 @@ func runFileScan(ctx context.Context, req TaskRequest) (moduleResult, error) {
 	summary.SuspiciousFiles = suspiciousCount
 	summary.SampleSuspicious = suspiciousSamples
 
+	tiCollector := newTICollector(req)
+	if tiCollector != nil {
+		for _, sample := range suspiciousSamples {
+			ctxInfo := map[string]string{
+				"module": "respond.filescan",
+				"reason": sample.Reason,
+			}
+			tiCollector.LookupFile(ctx, sample.Path, ctxInfo)
+		}
+	}
+
 	file, path, err := req.Manager.CreateFile("respond", req.Name+"-filescan", "json")
 	if err != nil {
 		return moduleResult{}, err
@@ -167,9 +180,20 @@ func runFileScan(ctx context.Context, req TaskRequest) (moduleResult, error) {
 	if suspiciousCount > 0 {
 		risk["high"] = suspiciousCount
 	}
+	outputs := []reporting.OutputRecord{{Label: "文件扫描", Path: path}}
+	if tiCollector != nil {
+		tiOutputs, tiNotes := tiCollector.Flush("respond", req.Name+"-threatintel-files", "威胁情报 - 文件扫描")
+		if len(tiOutputs) > 0 {
+			outputs = append(outputs, tiOutputs...)
+		}
+		if len(tiNotes) > 0 {
+			notes = append(notes, tiNotes...)
+		}
+	}
 	return moduleResult{
-		Outputs: []reporting.OutputRecord{{Label: "文件扫描", Path: path}},
+		Outputs: outputs,
 		Risks:   risk,
+		Notes:   notes,
 	}, nil
 }
 
@@ -178,6 +202,7 @@ func runNetworkAnalysis(ctx context.Context, req TaskRequest) (moduleResult, err
 	if err != nil {
 		return moduleResult{}, err
 	}
+	notes := make([]string, 0)
 	type connection struct {
 		PID     int32  `json:"pid"`
 		Process string `json:"process"`
@@ -231,6 +256,32 @@ func runNetworkAnalysis(ctx context.Context, req TaskRequest) (moduleResult, err
 		ExternalCount int          `json:"external_connections"`
 	}{Connections: connections, ExternalCount: externalCount}
 
+	tiCollector := newTICollector(req)
+	if tiCollector != nil {
+		seen := make(map[string]struct{})
+		for _, conn := range connections {
+			host, _, err := net.SplitHostPort(conn.Remote)
+			if err != nil || host == "" {
+				continue
+			}
+			ip := net.ParseIP(host)
+			if !isPublicIPv4(ip) {
+				continue
+			}
+			key := ip.String()
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			ctxInfo := map[string]string{
+				"module":  "respond.network",
+				"process": conn.Process,
+				"pid":     fmt.Sprintf("%d", conn.PID),
+			}
+			tiCollector.LookupIndicator(ctx, threatintel.IndicatorIP, key, ctxInfo)
+		}
+	}
+
 	file, path, err := req.Manager.CreateFile("respond", req.Name+"-network", "json")
 	if err != nil {
 		return moduleResult{}, err
@@ -245,9 +296,20 @@ func runNetworkAnalysis(ctx context.Context, req TaskRequest) (moduleResult, err
 	if externalCount > 0 {
 		risk["medium"] = externalCount
 	}
+	outputs := []reporting.OutputRecord{{Label: "网络连接", Path: path}}
+	if tiCollector != nil {
+		tiOutputs, tiNotes := tiCollector.Flush("respond", req.Name+"-threatintel-network", "威胁情报 - 网络连接")
+		if len(tiOutputs) > 0 {
+			outputs = append(outputs, tiOutputs...)
+		}
+		if len(tiNotes) > 0 {
+			notes = append(notes, tiNotes...)
+		}
+	}
 	return moduleResult{
-		Outputs: []reporting.OutputRecord{{Label: "网络连接", Path: path}},
+		Outputs: outputs,
 		Risks:   risk,
+		Notes:   notes,
 	}, nil
 }
 

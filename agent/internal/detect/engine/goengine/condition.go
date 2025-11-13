@@ -3,6 +3,8 @@ package goengine
 import (
 	"fmt"
 	"strings"
+
+	"github.com/m-sec-org/d-eyes/agent/internal/detect/engine/goengine/metadata"
 )
 
 // ConditionContext used during evaluation.
@@ -138,7 +140,7 @@ func (q quantifierNode) resolveGroup(ctx *ConditionContext) []string {
 // Precondition describes header or metadata constraints extracted from condition string.
 type Precondition struct {
 	Placeholder string
-	Eval        func(data []byte) bool
+	Eval        func(data []byte, meta *metadata.FileMetadata) bool
 }
 
 // expression parser --------------------------------------------------------

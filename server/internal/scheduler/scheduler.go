@@ -38,6 +38,7 @@ type Scheduler struct {
 	statusCounts  map[model.TaskStatus]int64
 	resultWriter  resultWriter
 	basInFlight   int
+	basPending    int64
 	auditRecorder audit.Recorder
 	alertNotifier alerts.Notifier
 	taskHub       *streams.Hub
@@ -118,7 +119,7 @@ func (s *Scheduler) LeaseTask(ctx context.Context, agent *model.Agent) (task *mo
 	}
 
 	if !s.reserveBAS(task.Type) {
-		_ = s.queue.Requeue(ctx, task)
+		_ = s.requeueTask(ctx, task)
 		s.releaseCapacity(agent.ID)
 		if s.m != nil {
 			s.observeQueueDepth(ctx)
@@ -144,13 +145,13 @@ func (s *Scheduler) LeaseTask(ctx context.Context, agent *model.Agent) (task *mo
 	}
 
 	if err = s.store.CreateTaskRun(ctx, run); err != nil {
-		_ = s.queue.Requeue(ctx, task)
+		_ = s.requeueTask(ctx, task)
 		return nil, nil, err
 	}
 
 	prevStatus := task.Status
 	if err = s.store.UpdateTaskStatus(ctx, task.ID, model.TaskStatusLeased); err != nil {
-		_ = s.queue.Requeue(ctx, task)
+		_ = s.requeueTask(ctx, task)
 		return nil, nil, err
 	}
 
@@ -245,7 +246,7 @@ func (s *Scheduler) HandleLeaseTimeout(ctx context.Context, run *model.TaskRun) 
 	task.Status = model.TaskStatusPending
 	s.observeStatusChange(prevStatus, model.TaskStatusPending)
 
-	if err := s.queue.Requeue(ctx, task); err != nil {
+	if err := s.requeueTask(ctx, task); err != nil {
 		return err
 	}
 	s.observeQueueDepth(ctx)
@@ -538,6 +539,24 @@ func (s *Scheduler) PublishExternalEvent(event streams.TaskEvent) {
 	s.publishTaskEvent(event)
 }
 
+func (s *Scheduler) requeueTask(ctx context.Context, task *model.Task) error {
+	if err := s.queue.Requeue(ctx, task); err != nil {
+		return err
+	}
+	if task != nil && task.Type == model.TaskType("bas") {
+		s.adjustBASPending(1)
+	}
+	return nil
+}
+
+func (s *Scheduler) noteDequeuedTask(task *model.Task) {
+	if task == nil || task.Type != model.TaskType("bas") {
+		return
+	}
+	s.adjustBASPending(-1)
+	s.observeBASQueueWait(task)
+}
+
 func (s *Scheduler) publishStats() {
 	if s.taskHub == nil {
 		return
@@ -550,6 +569,7 @@ func (s *Scheduler) snapshotStats() streams.TaskEvent {
 	s.mu.Lock()
 	inFlight := s.totalInFlight
 	bas := s.basInFlight
+	basPending := s.basPending
 	s.mu.Unlock()
 
 	var depth int64
@@ -559,11 +579,12 @@ func (s *Scheduler) snapshotStats() streams.TaskEvent {
 		}
 	}
 	return streams.TaskEvent{
-		Event:       "stats",
-		InFlight:    inFlight,
-		BASInFlight: bas,
-		QueueDepth:  depth,
-		UpdatedAt:   time.Now().UTC(),
+		Event:         "stats",
+		InFlight:      inFlight,
+		BASInFlight:   bas,
+		BASQueueDepth: basPending,
+		QueueDepth:    depth,
+		UpdatedAt:     time.Now().UTC(),
 	}
 }
 
@@ -572,7 +593,11 @@ func (s *Scheduler) EnqueueTask(ctx context.Context, task *model.Task) error {
 	if err := s.queue.Push(ctx, task); err != nil {
 		return err
 	}
+	if task != nil && task.Type == model.TaskType("bas") {
+		s.adjustBASPending(1)
+	}
 	s.observeQueueDepth(ctx)
+	s.publishStats()
 	return nil
 }
 
@@ -583,7 +608,7 @@ func (s *Scheduler) PrimeFromStore(ctx context.Context) error {
 		return err
 	}
 	for _, task := range tasks {
-		if err := s.queue.Requeue(ctx, task); err != nil {
+		if err := s.requeueTask(ctx, task); err != nil {
 			return err
 		}
 	}
@@ -597,6 +622,7 @@ func (s *Scheduler) dequeueTask(ctx context.Context, capabilities []string) (*mo
 		return nil, err
 	}
 	if task != nil {
+		s.noteDequeuedTask(task)
 		s.observeQueueDepth(ctx)
 		return task, nil
 	}
@@ -605,6 +631,7 @@ func (s *Scheduler) dequeueTask(ctx context.Context, capabilities []string) (*mo
 	}
 	task, err = s.queue.Pop(ctx, capabilities)
 	if task != nil {
+		s.noteDequeuedTask(task)
 		s.observeQueueDepth(ctx)
 	}
 	return task, err
@@ -651,6 +678,7 @@ func (s *Scheduler) reserveBAS(taskType model.TaskType) bool {
 		return false
 	}
 	s.basInFlight++
+	s.updateBASInFlightLocked()
 	return true
 }
 
@@ -663,11 +691,53 @@ func (s *Scheduler) releaseBAS(taskType model.TaskType) {
 	if s.basInFlight > 0 {
 		s.basInFlight--
 	}
+	s.updateBASInFlightLocked()
 }
 
 func (s *Scheduler) updateInFlightMetricLocked() {
 	if s.m != nil {
 		s.m.TasksInFlight.Set(float64(s.totalInFlight))
+	}
+}
+
+func (s *Scheduler) updateBASInFlightLocked() {
+	if s.m != nil {
+		s.m.BASInFlight.Set(float64(s.basInFlight))
+	}
+}
+
+func (s *Scheduler) adjustBASPending(delta int64) {
+	if delta == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.basPending += delta
+	if s.basPending < 0 {
+		s.basPending = 0
+	}
+	s.updateBASPendingMetricLocked()
+	s.mu.Unlock()
+}
+
+func (s *Scheduler) updateBASPendingMetricLocked() {
+	if s.m != nil {
+		if s.basPending < 0 {
+			s.basPending = 0
+		}
+		s.m.BASBacklog.Set(float64(s.basPending))
+	}
+}
+
+func (s *Scheduler) observeBASQueueWait(task *model.Task) {
+	if s.m == nil || task == nil || task.Type != model.TaskType("bas") {
+		return
+	}
+	if task.CreatedAt.IsZero() {
+		return
+	}
+	wait := time.Since(task.CreatedAt)
+	if wait >= 0 {
+		s.m.BASQueueWait.Observe(wait.Seconds())
 	}
 }
 

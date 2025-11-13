@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/fatih/color v1.17.0
+	github.com/hillu/go-yara/v4 v4.3.4
 	github.com/m-sec-org/d-eyes/server v0.0.0
 	github.com/pkg/errors v0.9.1
 	github.com/shirou/gopsutil/v4 v4.24.5
@@ -18,6 +19,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
+	golang.org/x/time v0.6.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250804133106-a7a43d27e69b // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 )

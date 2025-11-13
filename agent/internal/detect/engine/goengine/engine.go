@@ -3,7 +3,6 @@ package goengine
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"log"
 	"path/filepath"
 	"sort"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/m-sec-org/d-eyes/agent/internal/detect/engine"
+	"github.com/m-sec-org/d-eyes/agent/internal/detect/engine/goengine/metadata"
 )
 
 // Engine implements engine.RuleBundle using a pure Go matcher.
@@ -64,10 +64,11 @@ func (e *Engine) Scan(data []byte, opt engine.ScanOptions) ([]engine.Match, erro
 
 	fileLower := strings.ToLower(string(data))
 	wideData := buildWideBuffer(data)
+	fileMeta := metadata.Extract(data)
 
 	matches := make([]engine.Match, 0)
 	for _, rule := range e.rules {
-		result := rule.Match(data, fileLower, wideData)
+		result := rule.Match(data, fileLower, wideData, fileMeta)
 		if result == nil {
 			continue
 		}
@@ -80,6 +81,10 @@ func (e *Engine) Scan(data []byte, opt engine.ScanOptions) ([]engine.Match, erro
 			Strings:     make([]engine.MatchedString, 0, len(result.Strings)),
 			Metadata:    cloneMetadata(rule.Metadata),
 			ScoreHints:  rule.ScoreHints,
+			Partial:     result.Partial,
+		}
+		if len(result.PartialReasons) > 0 {
+			match.PartialReasons = append(match.PartialReasons, result.PartialReasons...)
 		}
 		for _, hit := range result.Strings {
 			match.Strings = append(match.Strings, engine.MatchedString{
@@ -113,32 +118,33 @@ func RuleFromSource(path string, content []byte) ([]*Rule, error) {
 }
 
 // FromDirectory compiles all .yar files inside provided map (path->content).
-func FromDirectory(files map[string][]byte, version string) (*Engine, error) {
+func FromDirectory(files map[string][]byte, version string) (*Engine, BuildStats, error) {
 	ruleList := make([]*Rule, 0)
 	keys := make([]string, 0, len(files))
 	for k := range files {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	skipped := make([]string, 0)
+	stats := BuildStats{}
 	for _, path := range keys {
 		if !strings.HasSuffix(strings.ToLower(path), ".yar") {
 			continue
 		}
+		stats.TotalRuleFiles++
 		items, err := RuleFromSource(path, files[path])
 		if err != nil {
-			if isUnsupportedError(err) {
-				skipped = append(skipped, filepath.Base(path))
-				continue
-			}
-			return nil, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+			reason := classifySkipReason(err)
+			log.Printf("yara: skipping rule file %s reason=%s error=%v", filepath.Base(path), reason, err)
+			stats.recordSkip(reason)
+			continue
+		}
+		stats.recordSuccess(len(items))
+		for _, rule := range items {
+			stats.recordRule(rule)
 		}
 		ruleList = append(ruleList, items...)
 	}
-	if len(skipped) > 0 {
-		log.Printf("yara: skipped %d rule files due to unsupported features: %s", len(skipped), strings.Join(skipped, ", "))
-	}
-	return NewEngine("embedded", version, ruleList), nil
+	return NewEngine("embedded", version, ruleList), stats, nil
 }
 
 func isUnsupportedError(err error) bool {
@@ -170,4 +176,22 @@ func cloneMetadata(src map[string]string) map[string]string {
 		dst[k] = v
 	}
 	return dst
+}
+
+func classifySkipReason(err error) string {
+	if isUnsupportedError(err) {
+		return "unsupported-feature"
+	}
+	if err == nil {
+		return "unknown"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "syntax"):
+		return "syntax-error"
+	case strings.Contains(msg, "duplicate"):
+		return "duplicate-definition"
+	default:
+		return "parse-error"
+	}
 }

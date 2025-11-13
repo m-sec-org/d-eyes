@@ -36,7 +36,7 @@ func newTestService(t *testing.T) (*grpcsvc.Service, store.Store, *scheduler.Sch
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := grpcsvc.NewService(cfg, st, sched, logger, m)
+	svc := grpcsvc.NewService(cfg, st, sched, logger, m, nil, nil, nil, nil, nil)
 	return svc, st, sched
 }
 

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/m-sec-org/d-eyes/agent/internal/detect/engine/goengine/metadata"
 )
 
 var (
@@ -122,8 +124,12 @@ func (p *parser) parseRule(name, body string) (*Rule, error) {
 
 	if condBody, ok := sections["condition"]; ok {
 		condBody = strings.TrimSpace(condBody)
-		preconds, placeholderCondition := extractPreconditions(condBody)
+		preconds, placeholderCondition, partialReasons := extractPreconditions(condBody)
 		rule.Preconds = preconds
+		if len(partialReasons) > 0 {
+			rule.Partial = true
+			rule.PartialReasons = append(rule.PartialReasons, partialReasons...)
+		}
 		if strings.TrimSpace(placeholderCondition) != "" {
 			node, err := compileCondition(placeholderCondition)
 			if err != nil {
@@ -250,10 +256,11 @@ func compileCondition(condition string) (Node, error) {
 	return parser.parseExpression()
 }
 
-// extractPreconditions returns header checks replaced with placeholders.
-func extractPreconditions(condition string) ([]*Precondition, string) {
+// extractPreconditions returns header/metadata checks replaced with placeholders.
+func extractPreconditions(condition string) ([]*Precondition, string, []string) {
 	placeholders := make([]*Precondition, 0)
 	result := condition
+	partialReasons := make([]string, 0)
 
 	result = headerUintRe.ReplaceAllStringFunc(result, func(match string) string {
 		sub := headerUintRe.FindStringSubmatch(match)
@@ -268,7 +275,7 @@ func extractPreconditions(condition string) ([]*Precondition, string) {
 		placeholder := fmt.Sprintf("__pc%d", len(placeholders))
 		placeholders = append(placeholders, &Precondition{
 			Placeholder: placeholder,
-			Eval: func(data []byte) bool {
+			Eval: func(data []byte, _ *metadata.FileMetadata) bool {
 				switch bits {
 				case 8:
 					if offset < len(data) {
@@ -308,7 +315,7 @@ func extractPreconditions(condition string) ([]*Precondition, string) {
 		placeholder := fmt.Sprintf("__pc%d", len(placeholders))
 		placeholders = append(placeholders, &Precondition{
 			Placeholder: placeholder,
-			Eval: func(data []byte) bool {
+			Eval: func(data []byte, _ *metadata.FileMetadata) bool {
 				switch comp {
 				case "<":
 					return len(data) < value
@@ -327,7 +334,13 @@ func extractPreconditions(condition string) ([]*Precondition, string) {
 		return placeholder
 	})
 
-	return placeholders, result
+	var metadataPartial []string
+	result, metadataPartial = replaceMetadataConditions(result, &placeholders)
+	if len(metadataPartial) > 0 {
+		partialReasons = append(partialReasons, metadataPartial...)
+	}
+
+	return placeholders, result, partialReasons
 }
 
 func parseInt(str string) uint64 {

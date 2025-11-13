@@ -17,14 +17,17 @@ import (
 	"github.com/m-sec-org/d-eyes/server/internal/alerts"
 	"github.com/m-sec-org/d-eyes/server/internal/api"
 	v1 "github.com/m-sec-org/d-eyes/server/internal/api/v1"
+	"github.com/m-sec-org/d-eyes/server/internal/artifacts"
 	"github.com/m-sec-org/d-eyes/server/internal/audit"
 	"github.com/m-sec-org/d-eyes/server/internal/auditlog"
 	"github.com/m-sec-org/d-eyes/server/internal/basscenarios"
+	"github.com/m-sec-org/d-eyes/server/internal/behavior"
 	"github.com/m-sec-org/d-eyes/server/internal/config"
 	"github.com/m-sec-org/d-eyes/server/internal/grpcsvc"
 	"github.com/m-sec-org/d-eyes/server/internal/logger"
 	"github.com/m-sec-org/d-eyes/server/internal/metrics"
 	"github.com/m-sec-org/d-eyes/server/internal/monitor"
+	"github.com/m-sec-org/d-eyes/server/internal/playbook"
 	"github.com/m-sec-org/d-eyes/server/internal/queueprovider"
 	"github.com/m-sec-org/d-eyes/server/internal/rbac"
 	"github.com/m-sec-org/d-eyes/server/internal/reporttemplates"
@@ -34,6 +37,7 @@ import (
 	"github.com/m-sec-org/d-eyes/server/internal/streams"
 	"github.com/m-sec-org/d-eyes/server/internal/taskcatalog"
 	"github.com/m-sec-org/d-eyes/server/internal/templates"
+	"github.com/m-sec-org/d-eyes/server/internal/threatintel"
 	pb "github.com/m-sec-org/d-eyes/server/proto/agentservicepb"
 )
 
@@ -65,6 +69,33 @@ func Run(ctx context.Context, cfg config.Config) error {
 	sched.SetMetrics(metricsCollector)
 	metricsHandler := metrics.Handler(reg)
 
+	auditLogManager, err := auditlog.New(cfg.Audit.StorePath, 2000)
+	if err != nil {
+		return fmt.Errorf("init audit log manager: %w", err)
+	}
+
+	tiOrchestrator := threatintel.New(st, cfg.ThreatIntel, log, metricsCollector, auditLogManager)
+	if tiOrchestrator.Enabled() {
+		tiOrchestrator.Start(ctx)
+		defer tiOrchestrator.Stop()
+	}
+
+	behaviorHub := behavior.NewHub()
+	defer behaviorHub.Close()
+	behaviorRecorder, err := behavior.NewRecorder(cfg.Behavior, cfg.Redis, log)
+	if err != nil {
+		return fmt.Errorf("init behavior recorder: %w", err)
+	}
+	behaviorAnalyzer := behavior.NewAnalyzer(cfg.Behavior, st, log, behaviorHub)
+	behaviorGraph, err := behavior.NewGraphService(cfg.Behavior, cfg.Redis, st, behaviorHub, log)
+	if err != nil {
+		return fmt.Errorf("init behavior graph: %w", err)
+	}
+	if behaviorGraph != nil {
+		behaviorGraph.Start(ctx)
+		defer behaviorGraph.Stop()
+	}
+
 	if cfg.Audit.Enabled && cfg.Audit.LogPath != "" {
 		auditLogger, err := audit.NewLogger(cfg.Audit.LogPath)
 		if err != nil {
@@ -89,13 +120,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("init report templates: %w", err)
 	}
 
-	auditLogManager, err := auditlog.New(cfg.Audit.StorePath, 2000)
-	if err != nil {
-		return fmt.Errorf("init audit log manager: %w", err)
-	}
-
 	basScenarioManager, err := basscenarios.NewManager(basscenarios.Config{
-		PersistPath:       cfg.BAS.ScenarioPersistPath,
+		Store:             st,
 		DefaultBoundaries: cfg.BAS.DefaultNetworkBoundaries,
 		DefaultResourceLimits: basscenarios.ResourceLimits{
 			MaxTargets:        cfg.BAS.DefaultResourceLimits.MaxTargets,
@@ -103,6 +129,15 @@ func Run(ctx context.Context, cfg config.Config) error {
 			MaxDurationMinute: cfg.BAS.DefaultResourceLimits.MaxDurationMinutes,
 			MaxCPUPercent:     cfg.BAS.DefaultResourceLimits.MaxCPUPercent,
 		},
+		DefaultExecutionPlan: basscenarios.ExecutionPlan{
+			Mode:               cfg.BAS.DefaultExecutionPlan.Mode,
+			MaxParallel:        cfg.BAS.DefaultExecutionPlan.MaxParallel,
+			RetryLimit:         cfg.BAS.DefaultExecutionPlan.RetryLimit,
+			StepTimeoutSeconds: cfg.BAS.DefaultExecutionPlan.StepTimeoutSeconds,
+			CrossAgent:         cfg.BAS.DefaultExecutionPlan.CrossAgent,
+		},
+		DefaultApprovalPolicy: basApprovalRulesFromConfig(cfg.BAS.DefaultApprovalPolicy),
+		CacheTTL:              cfg.BAS.CacheTTL,
 	}, log)
 	if err != nil {
 		return fmt.Errorf("init bas scenario manager: %w", err)
@@ -138,9 +173,26 @@ func Run(ctx context.Context, cfg config.Config) error {
 	agentHandler := &v1.AgentHandler{Store: st, RBAC: rbacEnforcer}
 	auditHandler := &v1.AuditHandler{Logs: auditLogManager}
 	rbacHandler := &v1.RBACHandler{Enforcer: rbacEnforcer}
-	router := api.NewRouter(cfg, taskHandler, templateHandler, reportHandler, catalogHandler, basHandler, agentHandler, auditHandler, rbacHandler, metricsHandler, taskStreamHandler)
+	artifactManager, err := artifacts.NewManager(cfg.Artifact)
+	if err != nil {
+		return fmt.Errorf("init artifact manager: %w", err)
+	}
+	artifactHandler := &v1.ArtifactHandler{Manager: artifactManager}
+	threatIntelHandler := &v1.ThreatIntelHandler{Store: st, Orchestrator: tiOrchestrator, Audit: auditLogManager}
+	behaviorHandler := &v1.BehaviorHandler{Store: st}
+	complianceHandler := &v1.ComplianceHandler{Store: st}
+	threatStreamHandler := threatintel.SSEHandler(tiOrchestrator.Hub())
+	anomalyStreamHandler := behavior.SSEHandler(behaviorHub)
+	playbookManager := playbook.NewManager(st, log)
+	playbookEngine := playbook.NewEngine(cfg.Playbook, playbookManager, st, sched, log, taskStream, behaviorHub, tiOrchestrator.Hub())
+	if playbookEngine != nil {
+		playbookEngine.Start(ctx)
+		defer playbookEngine.Stop()
+	}
+	playbookHandler := &v1.PlaybookHandler{Manager: playbookManager, Engine: playbookEngine, RBAC: rbacEnforcer}
+	router := api.NewRouter(cfg, taskHandler, templateHandler, reportHandler, catalogHandler, basHandler, agentHandler, auditHandler, rbacHandler, artifactHandler, threatIntelHandler, behaviorHandler, complianceHandler, playbookHandler, metricsHandler, taskStreamHandler, threatStreamHandler, anomalyStreamHandler)
 
-	grpcServer, err := newGRPCServer(cfg, st, sched, log, metricsCollector)
+	grpcServer, err := newGRPCServer(cfg, st, sched, log, metricsCollector, artifactManager, tiOrchestrator, behaviorRecorder, behaviorAnalyzer, behaviorGraph)
 	if err != nil {
 		return err
 	}
@@ -178,7 +230,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	return nil
 }
 
-func newGRPCServer(cfg config.Config, st store.Store, sched *scheduler.Scheduler, log *slog.Logger, metricsCollector *metrics.Metrics) (*grpc.Server, error) {
+func newGRPCServer(cfg config.Config, st store.Store, sched *scheduler.Scheduler, log *slog.Logger, metricsCollector *metrics.Metrics, artifactManager *artifacts.Manager, ti *threatintel.Orchestrator, behaviorRecorder *behavior.Recorder, behaviorAnalyzer *behavior.Analyzer, behaviorGraph *behavior.GraphService) (*grpc.Server, error) {
 	var serverOpts []grpc.ServerOption
 	if cfg.Server.TLS.Enabled {
 		creds, err := credentials.NewServerTLSFromFile(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
@@ -188,7 +240,7 @@ func newGRPCServer(cfg config.Config, st store.Store, sched *scheduler.Scheduler
 		serverOpts = append(serverOpts, grpc.Creds(creds))
 	}
 	grpcServer := grpc.NewServer(serverOpts...)
-	svc := grpcsvc.NewService(cfg, st, sched, log, metricsCollector)
+	svc := grpcsvc.NewService(cfg, st, sched, log, metricsCollector, artifactManager, ti, behaviorRecorder, behaviorAnalyzer, behaviorGraph)
 	pb.RegisterAgentServiceServer(grpcServer, svc)
 	return grpcServer, nil
 }
@@ -200,4 +252,18 @@ func serveGRPC(cfg config.Config, grpcServer *grpc.Server, log *slog.Logger) err
 	}
 	log.Info("grpc server listening", "addr", cfg.Server.GRPCAddr)
 	return grpcServer.Serve(lis)
+}
+
+func basApprovalRulesFromConfig(rules []config.BASApprovalRule) []basscenarios.ApprovalRule {
+	if len(rules) == 0 {
+		return nil
+	}
+	result := make([]basscenarios.ApprovalRule, 0, len(rules))
+	for _, rule := range rules {
+		result = append(result, basscenarios.ApprovalRule{
+			Role:           rule.Role,
+			TimeoutSeconds: rule.TimeoutSeconds,
+		})
+	}
+	return result
 }

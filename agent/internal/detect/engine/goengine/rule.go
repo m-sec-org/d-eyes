@@ -8,24 +8,29 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/m-sec-org/d-eyes/agent/internal/detect/engine/goengine/metadata"
 	"github.com/m-sec-org/d-eyes/agent/internal/detect/scoring"
 )
 
 // Rule describes a compiled YARA rule.
 type Rule struct {
-	Name        string
-	Description string
-	Tags        []string
-	Metadata    map[string]string
-	Strings     []*Pattern
-	Condition   Node
-	Preconds    []*Precondition
-	ScoreHints  scoring.ScoreHints
+	Name           string
+	Description    string
+	Tags           []string
+	Metadata       map[string]string
+	Strings        []*Pattern
+	Condition      Node
+	Preconds       []*Precondition
+	ScoreHints     scoring.ScoreHints
+	Partial        bool
+	PartialReasons []string
 }
 
 // RuleMatch captures evaluation outcome for a rule.
 type RuleMatch struct {
-	Strings []PatternMatch
+	Strings        []PatternMatch
+	Partial        bool
+	PartialReasons []string
 }
 
 // PatternMatch stores matched string identifier and offsets.
@@ -35,7 +40,7 @@ type PatternMatch struct {
 }
 
 // Match evaluates the rule against provided buffers.
-func (r *Rule) Match(data []byte, lowerData string, wideData []byte) *RuleMatch {
+func (r *Rule) Match(data []byte, lowerData string, wideData []byte, meta *metadata.FileMetadata) *RuleMatch {
 	if len(r.Strings) == 0 {
 		return nil
 	}
@@ -62,7 +67,7 @@ func (r *Rule) Match(data []byte, lowerData string, wideData []byte) *RuleMatch 
 	}
 
 	for _, pc := range r.Preconds {
-		ctx.Placeholders[pc.Placeholder] = pc.Eval(data)
+		ctx.Placeholders[pc.Placeholder] = pc.Eval(data, meta)
 	}
 
 	if r.Condition != nil {
@@ -73,6 +78,10 @@ func (r *Rule) Match(data []byte, lowerData string, wideData []byte) *RuleMatch 
 
 	result := RuleMatch{
 		Strings: make([]PatternMatch, 0, len(matchState)),
+		Partial: r.Partial,
+	}
+	if len(r.PartialReasons) > 0 {
+		result.PartialReasons = append(result.PartialReasons, r.PartialReasons...)
 	}
 	for _, m := range matchState {
 		result.Strings = append(result.Strings, m)

@@ -48,7 +48,7 @@ func setupTestRouter(t *testing.T) (*gin.Engine, store.Store, *scheduler.Schedul
 	sched := scheduler.New(st, queue, cfg.Scheduler)
 	handler := &v1.TaskHandler{Store: st, Sched: sched}
 	reportHandler := &v1.ReportHandler{Store: st}
-	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, reportHandler, nil, nil, nil, nil, nil, nil, nil)
+	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, reportHandler, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	return router, st, sched
 }
 
@@ -69,7 +69,8 @@ func newTestCatalog(t *testing.T) *taskcatalog.Manager {
 func newTestBASManager(t *testing.T) *basscenarios.Manager {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
-	mgr, err := basscenarios.NewManager(basscenarios.Config{}, log)
+	basStore := store.NewInMemoryStore()
+	mgr, err := basscenarios.NewManager(basscenarios.Config{Store: basStore}, log)
 	require.NoError(t, err)
 	return mgr
 }
@@ -188,7 +189,7 @@ func TestTaskCreateValidatesProfilePayload(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := &v1.TaskHandler{Store: st, Sched: sched, Catalog: catalog}
-	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, nil, nil, nil, nil, nil, nil)
+	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	makeRequest := func(payload map[string]any) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(payload)
@@ -250,7 +251,7 @@ func TestCreateBASTaskRequiresApprovedScenario(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := &v1.TaskHandler{Store: st, Sched: sched, BASScenarios: basMgr}
-	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, &v1.BASScenarioHandler{Manager: basMgr}, nil, nil, nil, nil, nil)
+	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, &v1.BASScenarioHandler{Manager: basMgr}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	buildRequest := func() *http.Request {
 		body, _ := json.Marshal(map[string]any{
@@ -270,6 +271,8 @@ func TestCreateBASTaskRequiresApprovedScenario(t *testing.T) {
 	resp := performRequest(router, buildRequest())
 	require.Equal(t, http.StatusBadRequest, resp.Code)
 
+	_, err = basMgr.Publish(ctx, scenario.ID, "secops")
+	require.NoError(t, err)
 	_, err = basMgr.Approve(ctx, scenario.ID, "secops", "ok")
 	require.NoError(t, err)
 	_, err = basMgr.SetStatus(ctx, scenario.ID, basscenarios.StatusActive)

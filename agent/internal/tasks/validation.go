@@ -27,7 +27,7 @@ func ValidateRequest(command string, req *TaskRequest) error {
 		return validateSupplyChain(req)
 	case "baseline":
 		return validateBaseline(req)
-	case "bas":
+	case "bas", "bas.advanced":
 		return validateBAS(req)
 	default:
 		return nil

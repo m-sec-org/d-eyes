@@ -18,12 +18,10 @@ import (
 
 	"github.com/m-sec-org/d-eyes/agent/internal"
 	"github.com/m-sec-org/d-eyes/agent/internal/constant"
+	"github.com/m-sec-org/d-eyes/agent/internal/detect/backend"
 	"github.com/m-sec-org/d-eyes/agent/internal/detect/engine"
-	"github.com/m-sec-org/d-eyes/agent/internal/detect/engine/goengine"
-	"github.com/m-sec-org/d-eyes/agent/internal/detect/rules"
 	"github.com/m-sec-org/d-eyes/agent/internal/detect/scoring"
 	"github.com/m-sec-org/d-eyes/agent/pkg/color"
-	"github.com/m-sec-org/d-eyes/agent/yaraRules"
 )
 
 var YaraFileScanOption *YaraFileScanOptions
@@ -37,6 +35,7 @@ func init() {
 type YaraFileScanOptions struct {
 	Path        string
 	RulePath    string
+	Backend     string
 	Thread      int
 	Timeout     time.Duration
 	EnableExcel bool
@@ -59,13 +58,15 @@ func NewDetectPluginYaraFileScan() *YaraFileScanOptions {
 
 // DetectionResult holds aggregated output per dangerous file.
 type DetectionResult struct {
-	RuleName      string
-	Description   string
-	FilePath      string
-	Tags          []string
-	MatchedString []string
-	Risk          scoring.RiskScore
-	Remediation   scoring.RemediationPlan
+	RuleName       string
+	Description    string
+	FilePath       string
+	Tags           []string
+	MatchedString  []string
+	Risk           scoring.RiskScore
+	Remediation    scoring.RemediationPlan
+	Partial        bool
+	PartialReasons []string
 }
 
 // InitCommand registers CLI command.
@@ -89,6 +90,11 @@ func (scan *YaraFileScanOptions) InitCommand() []*cli.Command {
 					Aliases:     []string{"r"},
 					Usage:       "Custom rule file or directory",
 					Destination: &YaraFileScanOption.RulePath,
+				},
+				&cli.StringFlag{
+					Name:        "backend",
+					Usage:       "YARA backend (auto|native|portable). Defaults to env D_EYES_YARA_BACKEND or auto.",
+					Destination: &YaraFileScanOption.Backend,
 				},
 				&cli.IntFlag{
 					Name:        "thread",
@@ -126,12 +132,27 @@ func (scan *YaraFileScanOptions) Action(_ *cli.Context) error {
 		scan.Path = "./"
 	}
 
-	bundle, err := loadRuleBundle(scan.RulePath)
+	result, err := backend.Load(backend.Options{
+		RulePath: scan.RulePath,
+		Mode:     resolveBackendMode(scan.Backend),
+	})
 	if err != nil {
 		return err
 	}
+	bundle := result.Bundle
 
-	fmt.Printf("Loaded %d rules (engine=%s version=%s)\n", bundle.RuleCount(), bundle.Name(), bundle.Version())
+	fmt.Printf("Loaded %d rules (backend=%s engine=%s version=%s)\n",
+		bundle.RuleCount(), result.Backend, bundle.Name(), bundle.Version())
+	if result.Stats.TotalRuleFiles > 0 {
+		fmt.Printf("Rule coverage: %.1f%% (%d/%d files)\n",
+			result.Stats.Coverage()*100,
+			result.Stats.LoadedRuleFiles,
+			result.Stats.TotalRuleFiles,
+		)
+		if result.Fallback && result.FallbackReason != "" {
+			fmt.Println(color.Yellow.Sprintf("Fallback reason: %s", result.FallbackReason))
+		}
+	}
 
 	targets := strings.Split(scan.Path, ",")
 	for i := range targets {
@@ -211,40 +232,6 @@ func (scan *YaraFileScanOptions) Action(_ *cli.Context) error {
 	return nil
 }
 
-func loadRuleBundle(rulePath string) (engine.RuleBundle, error) {
-	if rulePath == "" {
-		manager := rules.NewManager(rules.Config{
-			EmbeddedFS: yaraRules.RulesFS,
-		})
-		return manager.EnsureLoaded()
-	}
-
-	info, err := os.Stat(rulePath)
-	if err != nil {
-		return nil, err
-	}
-	if info.IsDir() {
-		manager := rules.NewManager(rules.Config{
-			EmbeddedFS: yaraRules.RulesFS,
-			CustomDir:  rulePath,
-		})
-		return manager.EnsureLoaded()
-	}
-
-	if filepath.Ext(rulePath) != ".yar" {
-		return nil, fmt.Errorf("unsupported rule file: %s", rulePath)
-	}
-	data, err := os.ReadFile(rulePath)
-	if err != nil {
-		return nil, err
-	}
-	ruleset, err := goengine.RuleFromSource(filepath.Base(rulePath), data)
-	if err != nil {
-		return nil, err
-	}
-	return goengine.NewEngine("custom-file", time.Now().UTC().Format(time.RFC3339), ruleset), nil
-}
-
 func (scan *YaraFileScanOptions) scanFileWorker(bundle engine.RuleBundle, jobs <-chan string, results chan<- DetectionResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for path := range jobs {
@@ -260,13 +247,19 @@ func (scan *YaraFileScanOptions) scanFileWorker(bundle engine.RuleBundle, jobs <
 		}
 		for _, match := range matches {
 			result := DetectionResult{
-				RuleName:      match.RuleName,
-				Description:   match.Description,
-				FilePath:      path,
-				Tags:          match.Tags,
-				MatchedString: extractStringIDs(match.Strings),
+				RuleName:       match.RuleName,
+				Description:    match.Description,
+				FilePath:       path,
+				Tags:           match.Tags,
+				MatchedString:  extractStringIDs(match.Strings),
+				Partial:        match.Partial,
+				PartialReasons: append([]string{}, match.PartialReasons...),
 			}
 			result.Risk = scoring.Calculate(match.RuleName, match.ScoreHints, match.Tags)
+			if match.Partial {
+				result.Risk.Total *= 0.8
+				result.Risk.Level = result.Risk.Level + " (partial)"
+			}
 			result.Remediation = scoring.ResolveRemediation(match.RuleName, match.Tags)
 			results <- result
 		}
@@ -291,7 +284,7 @@ func (scan *YaraFileScanOptions) collectResults(results <-chan DetectionResult) 
 	)
 	if scan.EnableExcel {
 		excel = excelize.NewFile()
-		headers := []string{"Rule", "Description", "File Path", "Risk Level", "Risk Score", "Matched Strings", "Remediation Priority"}
+		headers := []string{"Rule", "Description", "File Path", "Risk Level", "Risk Score", "Matched Strings", "Remediation Priority", "Partial", "Partial Reasons"}
 		for i, header := range headers {
 			cell, _ := excelize.CoordinatesToCellName(i+1, 1)
 			excel.SetCellValue("Sheet1", cell, header)
@@ -315,6 +308,8 @@ func (scan *YaraFileScanOptions) collectResults(results <-chan DetectionResult) 
 				res.Risk.Total,
 				strings.Join(res.MatchedString, ","),
 				res.Remediation.Priority,
+				res.Partial,
+				strings.Join(res.PartialReasons, "; "),
 			}
 			for col, value := range values {
 				cell, _ := excelize.CoordinatesToCellName(col+1, row)
@@ -343,6 +338,13 @@ func printDetection(res DetectionResult, counter int) {
 	fmt.Printf("Risk: %s (%.1f)\n", res.Risk.Level, res.Risk.Total)
 	if len(res.MatchedString) > 0 {
 		fmt.Println("Matched:", strings.Join(res.MatchedString, ", "))
+	}
+	if res.Partial {
+		reason := strings.Join(res.PartialReasons, "; ")
+		if reason == "" {
+			reason = "portable engine could not fully evaluate metadata expressions"
+		}
+		fmt.Println(color.Yellow.Sprintf("Partial evaluation: %s", reason))
 	}
 	if res.Remediation.Priority != "" {
 		fmt.Printf("Remediation Priority: %s\n", res.Remediation.Priority)

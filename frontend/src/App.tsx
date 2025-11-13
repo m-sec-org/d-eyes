@@ -19,6 +19,10 @@ import { ReportWorkbench } from './features/reports/ReportWorkbench';
 import { Route, Routes, useNavigate } from 'react-router-dom';
 import { ProtectedRoute } from './app/routes/ProtectedRoute';
 import { ThemeShowcase } from './features/styleguide/ThemeShowcase';
+import { ThreatIntelWorkspace } from './features/threatintel/ThreatIntelWorkspace';
+import { BehaviorAnomalyCenter } from './features/anomalies/BehaviorAnomalyCenter';
+import { ComplianceDashboard } from './features/compliance/ComplianceDashboard';
+import { PlaybookConsole } from './features/playbooks/PlaybookConsole';
 
 function App() {
   const { open, filtered, query, setQuery, toggle, close } = useCommandPalette();
@@ -94,10 +98,42 @@ function App() {
               }
             />
             <Route
+              path="/threat-intel"
+              element={
+                <ProtectedRoute route="/threat-intel" allowedRoles={['operator', 'admin']}>
+                  <ThreatIntelWorkspace />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/anomalies"
+              element={
+                <ProtectedRoute route="/anomalies" allowedRoles={['operator', 'auditor', 'admin']}>
+                  <BehaviorAnomalyCenter />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/compliance"
+              element={
+                <ProtectedRoute route="/compliance" allowedRoles={['admin']}>
+                  <ComplianceDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/topology"
               element={
                 <ProtectedRoute route="/topology" allowedRoles={['admin']}>
                   <TopologyOverview />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/playbooks"
+              element={
+                <ProtectedRoute route="/playbooks" allowedRoles={['admin']}>
+                  <PlaybookConsole />
                 </ProtectedRoute>
               }
             />

@@ -17,7 +17,9 @@ import (
 	"github.com/m-sec-org/d-eyes/agent/internal/agent/remote"
 	"github.com/m-sec-org/d-eyes/agent/internal/model"
 	"github.com/m-sec-org/d-eyes/agent/internal/tasks"
+	"github.com/m-sec-org/d-eyes/agent/internal/telemetry"
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
+	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 	serverpb "github.com/m-sec-org/d-eyes/server/proto/agentservicepb"
 )
 
@@ -128,6 +130,8 @@ func (r *remoteRunner) runOnce(ctx context.Context) error {
 	if _, err := r.client.Register(ctx, meta); err != nil {
 		return err
 	}
+
+	telemetry.StartSystemSampler(ctx, 5*time.Second)
 
 	hbCh := make(chan remote.HeartbeatPayload, 1)
 	hbErrCh, err := r.client.StartHeartbeat(ctx, hbCh)
@@ -249,6 +253,14 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 		ExitCode:     execModel.ExitCode,
 		ErrorCode:    execModel.ErrorCode,
 	}
+	if telemetryData := telemetry.CollectExecutionMetadata(ctxTask); len(telemetryData) > 0 {
+		if reqProto.Metadata == nil {
+			reqProto.Metadata = make(map[string]string, len(telemetryData))
+		}
+		for k, v := range telemetryData {
+			reqProto.Metadata[k] = v
+		}
+	}
 
 	if err := r.store.Save(reqProto); err != nil {
 		log.Printf("[remote] save result cache failed: %v", err)
@@ -366,6 +378,12 @@ func applyRemotePayload(req *tasks.TaskRequest, payload map[string]any) {
 	}
 	if d, ok := anyToDuration(flags["timeout"]); ok && d > 0 {
 		req.Timeout = d
+	}
+	if v, ok := anyToString(payload["ti_mode"]); ok && v != "" {
+		req.Config.ThreatIntel.Mode = threatintel.ParseMode(v)
+	}
+	if v, ok := anyToString(flags["ti-mode"]); ok && v != "" {
+		req.Config.ThreatIntel.Mode = threatintel.ParseMode(v)
 	}
 }
 

@@ -1,6 +1,8 @@
-import { MockTaskEventSource } from '@/mocks/mockEventSource';
+import { MockTaskEventSource, MockThreatIntelEventSource, MockAnomalyEventSource } from '@/mocks/mockEventSource';
 
 const STREAM_PATH = import.meta.env.VITE_WS_BASE_URL ?? '/api/v1/tasks/stream';
+const TI_STREAM_PATH = import.meta.env.VITE_THREAT_INTEL_STREAM_URL ?? '/api/v1/threat-intel/stream';
+const ANOMALY_STREAM_PATH = import.meta.env.VITE_ANOMALY_STREAM_URL ?? '/api/v1/anomalies/stream';
 const USE_MOCK_SSE = import.meta.env.VITE_USE_MOCK_SSE !== 'false';
 
 export function createTaskEventStream(channel?: string): EventSource {
@@ -11,5 +13,21 @@ export function createTaskEventStream(channel?: string): EventSource {
   if (channel) {
     url.searchParams.set('channel', channel);
   }
+  return new EventSource(url.toString(), { withCredentials: true });
+}
+
+export function createThreatIntelEventStream(): EventSource {
+  if (USE_MOCK_SSE) {
+    return new MockThreatIntelEventSource() as unknown as EventSource;
+  }
+  const url = new URL(TI_STREAM_PATH, window.location.origin);
+  return new EventSource(url.toString(), { withCredentials: true });
+}
+
+export function createAnomalyEventStream(): EventSource {
+  if (USE_MOCK_SSE) {
+    return new MockAnomalyEventSource() as unknown as EventSource;
+  }
+  const url = new URL(ANOMALY_STREAM_PATH, window.location.origin);
   return new EventSource(url.toString(), { withCredentials: true });
 }

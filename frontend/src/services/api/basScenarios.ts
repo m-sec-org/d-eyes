@@ -35,3 +35,17 @@ export async function deactivateBASScenario(id: string): Promise<BASScenario> {
   const res = await httpClient.post(`/bas-scenarios/${id}/deactivate`);
   return BASScenarioSchema.parse(res.data);
 }
+
+export async function publishBASScenario(id: string, updatedBy?: string): Promise<BASScenario> {
+  const payload = updatedBy ? { updated_by: updatedBy } : undefined;
+  const res = await httpClient.post(`/bas-scenarios/${id}/publish`, payload);
+  return BASScenarioSchema.parse(res.data);
+}
+
+export async function cloneBASScenario(id: string, name?: string, createdBy?: string): Promise<BASScenario> {
+  const res = await httpClient.post(`/bas-scenarios/${id}/clone`, {
+    name,
+    created_by: createdBy,
+  });
+  return BASScenarioSchema.parse(res.data);
+}

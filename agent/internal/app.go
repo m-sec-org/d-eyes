@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	fatihColor "github.com/fatih/color"
@@ -13,6 +14,7 @@ import (
 	"github.com/m-sec-org/d-eyes/agent/internal/tasks"
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
+	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 )
 
 var (
@@ -101,6 +103,11 @@ GLOBAL OPTIONS:
 		&cli.BoolFlag{
 			Name:  "quiet",
 			Usage: "启用静默模式，仅生成报告文件，不在终端输出摘要",
+		},
+		&cli.StringFlag{
+			Name:    "ti-mode",
+			Usage:   "威胁情报模式：auto、local、hybrid 或 server（默认 hybrid）",
+			EnvVars: []string{"D_EYES_TI_MODE"},
 		},
 	}
 	app.Before = func(c *cli.Context) error {
@@ -254,6 +261,13 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 				},
 			},
 		},
+		{
+			Name:        "action",
+			Usage:       "执行来自 Server 的响应动作",
+			Description: "由自动化 Playbook 调度的即时操作，例如隔离进程、阻断网络等。",
+			Category:    "Automation",
+			Runner:      tasks.ActionTaskRunner(),
+		},
 	}
 }
 
@@ -285,7 +299,13 @@ func TaskRunnerByName(name string) (tasks.TaskRunner, bool) {
 	defer taskRegistryMu.RUnlock()
 	def, ok := taskRegistry[name]
 	if !ok {
-		return nil, false
+		if idx := strings.IndexRune(name, '.'); idx > 0 {
+			base := name[:idx]
+			def, ok = taskRegistry[base]
+		}
+		if !ok {
+			return nil, false
+		}
 	}
 	return def.Runner, true
 }
@@ -329,6 +349,9 @@ func newTaskCommand(def taskCommandDefinition) *cli.Command {
 				Config:     cfg,
 				Quiet:      c.Bool("quiet"),
 				JSONOutput: c.Bool("json"),
+			}
+			if mode := strings.TrimSpace(c.String("ti-mode")); mode != "" {
+				req.Config.ThreatIntel.Mode = threatintel.ParseMode(mode)
 			}
 			req.ApplyDefaults(def.Name)
 			if err := tasks.ValidateRequest(def.Name, &req); err != nil {

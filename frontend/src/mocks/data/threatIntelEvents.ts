@@ -1,0 +1,43 @@
+export const mockThreatIntelEvents = [
+  {
+    event: 'sample.enqueued',
+    sample_id: '11111111-1111-1111-1111-111111111111',
+    indicator: 'a1f3be5b2c9d4e6f7a8b9c0d1e2f3a4b',
+    status: 'pending',
+    timestamp: new Date(Date.now() - 120000).toISOString(),
+  },
+  {
+    event: 'job.enqueued',
+    sample_id: '11111111-1111-1111-1111-111111111111',
+    job_id: '22222222-2222-2222-2222-222222222222',
+    source: 'opentip',
+    status: 'pending',
+    timestamp: new Date(Date.now() - 90000).toISOString(),
+  },
+  {
+    event: 'job.succeeded',
+    sample_id: '11111111-1111-1111-1111-111111111111',
+    job_id: '22222222-2222-2222-2222-222222222222',
+    source: 'opentip',
+    classification: 'malicious',
+    confidence: 'high',
+    status: 'succeeded',
+    timestamp: new Date(Date.now() - 60000).toISOString(),
+  },
+  {
+    event: 'sample.completed',
+    sample_id: '11111111-1111-1111-1111-111111111111',
+    indicator: 'a1f3be5b2c9d4e6f7a8b9c0d1e2f3a4b',
+    status: 'completed',
+    timestamp: new Date(Date.now() - 30000).toISOString(),
+  },
+  {
+    event: 'job.failed',
+    sample_id: '33333333-3333-3333-3333-333333333333',
+    job_id: '44444444-4444-4444-4444-444444444444',
+    source: 'metadefender',
+    status: 'failed',
+    message: 'rate limited',
+    timestamp: new Date(Date.now() - 20000).toISOString(),
+  },
+];

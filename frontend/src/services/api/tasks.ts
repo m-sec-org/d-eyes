@@ -5,6 +5,7 @@ import type { TaskListResponse } from '../types';
 export interface TaskFilters {
   status?: string;
   limit?: number;
+  type?: string;
 }
 
 export async function listTasks(filters?: TaskFilters): Promise<TaskListResponse> {

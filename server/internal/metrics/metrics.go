@@ -18,6 +18,12 @@ type Metrics struct {
 	BASRuns             *prometheus.CounterVec
 	BASSandboxFallbacks *prometheus.CounterVec
 	BASApprovals        *prometheus.CounterVec
+	BASBacklog          prometheus.Gauge
+	BASInFlight         prometheus.Gauge
+	BASQueueWait        prometheus.Histogram
+	ThreatIntelJobs     *prometheus.CounterVec
+	ThreatIntelQueue    prometheus.Gauge
+	ThreatIntelLatency  *prometheus.HistogramVec
 }
 
 func New(reg prometheus.Registerer) *Metrics {
@@ -90,6 +96,44 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name:      "sandbox_approvals_total",
 			Help:      "Count of BAS runs requiring sandbox approval grouped by approval outcome.",
 		}, []string{"approved"}),
+		BASBacklog: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "d_eyes",
+			Subsystem: "bas",
+			Name:      "queue_backlog",
+			Help:      "Number of BAS tasks waiting in the scheduler queue.",
+		}),
+		BASInFlight: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "d_eyes",
+			Subsystem: "bas",
+			Name:      "tasks_in_flight",
+			Help:      "Number of BAS tasks currently leased to agents.",
+		}),
+		BASQueueWait: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "d_eyes",
+			Subsystem: "bas",
+			Name:      "queue_wait_seconds",
+			Help:      "Time BAS tasks spend waiting in queue before being leased.",
+			Buckets:   []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300},
+		}),
+		ThreatIntelJobs: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "threat_intel",
+			Name:      "jobs_total",
+			Help:      "Count of threat intelligence jobs grouped by source and result.",
+		}, []string{"source", "result"}),
+		ThreatIntelQueue: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "d_eyes",
+			Subsystem: "threat_intel",
+			Name:      "queue_depth",
+			Help:      "Approximate number of pending threat intelligence jobs.",
+		}),
+		ThreatIntelLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "d_eyes",
+			Subsystem: "threat_intel",
+			Name:      "external_latency_seconds",
+			Help:      "Latency of external threat intelligence API calls.",
+			Buckets:   []float64{0.25, 0.5, 1, 2, 5, 10, 30},
+		}, []string{"source", "action"}),
 	}
 	reg.MustRegister(
 		m.Heartbeats,
@@ -103,6 +147,12 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.BASRuns,
 		m.BASSandboxFallbacks,
 		m.BASApprovals,
+		m.BASBacklog,
+		m.BASInFlight,
+		m.BASQueueWait,
+		m.ThreatIntelJobs,
+		m.ThreatIntelQueue,
+		m.ThreatIntelLatency,
 	)
 	return m
 }

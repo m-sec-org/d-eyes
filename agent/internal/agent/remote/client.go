@@ -15,6 +15,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	serverpb "github.com/m-sec-org/d-eyes/server/proto/agentservicepb"
+
+	"github.com/m-sec-org/d-eyes/agent/internal/telemetry"
 )
 
 // Metadata 描述 Agent 的基础信息，用于注册与心跳上报。
@@ -128,6 +130,7 @@ func (c *Client) StartHeartbeat(ctx context.Context, payloadCh <-chan HeartbeatP
 		ticker := time.NewTicker(c.cfg.HeartbeatInterval)
 		defer ticker.Stop()
 		var last HeartbeatPayload
+		var latencyMs float64
 		for {
 			select {
 			case <-ctx.Done():
@@ -138,12 +141,19 @@ func (c *Client) StartHeartbeat(ctx context.Context, payloadCh <-chan HeartbeatP
 					last = payload
 				}
 			case <-ticker.C:
+				telemetryData := &serverpb.HeartbeatTelemetry{
+					LatencyMs:      latencyMs,
+					CpuPercent:     telemetry.LatestCPUPercent(),
+					BlockedActions: telemetry.CurrentBlockedActions(),
+				}
 				req := &serverpb.HeartbeatRequest{
 					AgentId:      agentID,
 					Timestamp:    time.Now().Unix(),
 					Load:         last.Load,
 					RunningTasks: append([]string(nil), last.RunningTasks...),
+					Telemetry:    telemetryData,
 				}
+				sentAt := time.Now()
 				if err := stream.Send(req); err != nil {
 					errCh <- err
 					return
@@ -152,6 +162,7 @@ func (c *Client) StartHeartbeat(ctx context.Context, payloadCh <-chan HeartbeatP
 					errCh <- err
 					return
 				}
+				latencyMs = float64(time.Since(sentAt).Microseconds()) / 1000.0
 			}
 		}
 	}()

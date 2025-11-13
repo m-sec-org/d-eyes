@@ -1,0 +1,162 @@
+package playbook
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/m-sec-org/d-eyes/server/internal/model"
+	"github.com/m-sec-org/d-eyes/server/internal/store"
+)
+
+type Manager struct {
+	store store.Store
+	log   *slog.Logger
+}
+
+func NewManager(st store.Store, logger *slog.Logger) *Manager {
+	if st == nil {
+		return nil
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Manager{store: st, log: logger}
+}
+
+func (m *Manager) Enabled() bool {
+	return m != nil && m.store != nil
+}
+
+func (m *Manager) Create(ctx context.Context, pb *model.Playbook) error {
+	if !m.Enabled() {
+		return fmt.Errorf("playbook manager disabled")
+	}
+	if err := validatePlaybook(pb); err != nil {
+		return err
+	}
+	if pb.ID == uuid.Nil {
+		pb.ID = uuid.New()
+	}
+	if pb.Status == "" {
+		pb.Status = "draft"
+	}
+	pb.Version = 1
+	pb.CreatedAt = time.Now()
+	pb.UpdatedAt = pb.CreatedAt
+	return m.store.CreatePlaybook(ctx, pb)
+}
+
+func (m *Manager) Update(ctx context.Context, pb *model.Playbook) error {
+	if err := validatePlaybook(pb); err != nil {
+		return err
+	}
+	pb.UpdatedAt = time.Now()
+	return m.store.UpdatePlaybook(ctx, pb)
+}
+
+func (m *Manager) Get(ctx context.Context, id uuid.UUID) (*model.Playbook, error) {
+	if !m.Enabled() {
+		return nil, fmt.Errorf("playbook manager disabled")
+	}
+	return m.store.GetPlaybook(ctx, id)
+}
+
+func (m *Manager) List(ctx context.Context, limit int) ([]*model.Playbook, error) {
+	if !m.Enabled() {
+		return nil, fmt.Errorf("playbook manager disabled")
+	}
+	return m.store.ListPlaybooks(ctx, limit)
+}
+
+func (m *Manager) SetStatus(ctx context.Context, id uuid.UUID, status, actor string) (*model.Playbook, error) {
+	pb, err := m.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	pb.Status = status
+	pb.UpdatedBy = actor
+	if status == "active" && pb.ApprovedBy == "" {
+		pb.ApprovedBy = actor
+	}
+	if err := m.store.UpdatePlaybook(ctx, pb); err != nil {
+		return nil, err
+	}
+	return pb, nil
+}
+
+func (m *Manager) RecordRun(ctx context.Context, run *model.PlaybookRun) error {
+	if !m.Enabled() {
+		return fmt.Errorf("playbook manager disabled")
+	}
+	return m.store.CreatePlaybookRun(ctx, run)
+}
+
+func (m *Manager) UpdateRun(ctx context.Context, run *model.PlaybookRun) error {
+	if !m.Enabled() {
+		return fmt.Errorf("playbook manager disabled")
+	}
+	return m.store.UpdatePlaybookRun(ctx, run)
+}
+
+func (m *Manager) ListRuns(ctx context.Context, playbookID uuid.UUID, limit int) ([]*model.PlaybookRun, error) {
+	if !m.Enabled() {
+		return nil, fmt.Errorf("playbook manager disabled")
+	}
+	return m.store.ListPlaybookRuns(ctx, playbookID, limit)
+}
+
+func validatePlaybook(pb *model.Playbook) error {
+	if pb == nil {
+		return fmt.Errorf("playbook required")
+	}
+	if strings.TrimSpace(pb.Name) == "" {
+		return fmt.Errorf("playbook name required")
+	}
+	if strings.TrimSpace(pb.Trigger.Type) == "" {
+		return fmt.Errorf("playbook trigger type required")
+	}
+	if len(pb.Actions) == 0 {
+		return fmt.Errorf("playbook requires at least one action")
+	}
+	for idx, action := range pb.Actions {
+		if err := validateAction(action); err != nil {
+			return fmt.Errorf("action[%d]: %w", idx, err)
+		}
+	}
+	return nil
+}
+
+func validateAction(action model.PlaybookAction) error {
+	switch action.Type {
+	case "notify":
+		if strings.TrimSpace(action.Target) == "" && action.Metadata == nil {
+			return fmt.Errorf("notify action missing target")
+		}
+	case "task.dispatch":
+		if strings.TrimSpace(action.TaskType) == "" {
+			return fmt.Errorf("task.dispatch requires task_type")
+		}
+		if action.Payload != nil {
+			if _, err := json.Marshal(action.Payload); err != nil {
+				return fmt.Errorf("task.dispatch payload invalid: %w", err)
+			}
+		}
+	case "agent.command":
+		if strings.TrimSpace(action.Command) == "" {
+			return fmt.Errorf("agent.command requires command")
+		}
+	case "http.webhook":
+		if strings.TrimSpace(action.Target) == "" {
+			return fmt.Errorf("http.webhook requires target URL")
+		}
+	default:
+		return fmt.Errorf("unsupported action type %q", action.Type)
+	}
+	return nil
+}

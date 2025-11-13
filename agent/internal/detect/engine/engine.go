@@ -13,13 +13,15 @@ var ErrUnsupportedFeature = errors.New("unsupported rule feature")
 
 // Match describes the outcome of a single rule against a target payload.
 type Match struct {
-	RuleName    string
-	Description string
-	Tags        []string
-	FilePath    string
-	Strings     []MatchedString
-	Metadata    map[string]string
-	ScoreHints  scoring.ScoreHints
+	RuleName       string
+	Description    string
+	Tags           []string
+	FilePath       string
+	Strings        []MatchedString
+	Metadata       map[string]string
+	ScoreHints     scoring.ScoreHints
+	Partial        bool
+	PartialReasons []string
 }
 
 // MatchedString stores matched string identifier and offsets.

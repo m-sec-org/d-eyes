@@ -45,7 +45,8 @@ func (r *respondRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, e
 		accumulateRisk(risks, res.Risks)
 	}
 
-	return TaskResult{Outputs: outputs, Risks: risks, Notes: notes}, nil
+	metadata := cloneMetadata(req.Metadata)
+	return TaskResult{Outputs: outputs, Risks: risks, Notes: notes, Metadata: metadata}, nil
 }
 
 type respondModule struct {

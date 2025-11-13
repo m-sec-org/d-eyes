@@ -40,4 +40,60 @@ type Store interface {
 	InsertTaskResult(ctx context.Context, result *model.TaskResult) error
 	ArchiveTaskResults(ctx context.Context, before time.Time) (int, error)
 	ListTaskResults(ctx context.Context, taskType model.TaskType, limit int) ([]*model.TaskResult, error)
+
+	// Threat intelligence orchestrator persistence.
+	CreateThreatIntelSample(ctx context.Context, sample *model.ThreatIntelSample) error
+	UpdateThreatIntelSampleStatus(ctx context.Context, sampleID uuid.UUID, status, lastError string, metadata map[string]string) error
+	GetThreatIntelSample(ctx context.Context, sampleID uuid.UUID) (*model.ThreatIntelSample, error)
+	ListThreatIntelJobsBySample(ctx context.Context, sampleID uuid.UUID) ([]*model.ThreatIntelJob, error)
+
+	InsertThreatIntelJob(ctx context.Context, job *model.ThreatIntelJob) error
+	LeaseThreatIntelJobs(ctx context.Context, limit int) ([]*model.ThreatIntelJob, error)
+	UpdateThreatIntelJobStatus(ctx context.Context, jobID uuid.UUID, status string, nextRunAt time.Time, errMsg string, metadata map[string]string) error
+
+	InsertThreatIntelVerdict(ctx context.Context, verdict *model.ThreatIntelVerdict) error
+	ListThreatIntelVerdicts(ctx context.Context, indicator string, limit int) ([]*model.ThreatIntelVerdict, error)
+	CountThreatIntelJobs(ctx context.Context, statuses []string) (int64, error)
+
+	GetArtifacts(ctx context.Context, ids []uuid.UUID) ([]model.Artifact, error)
+
+	// Behavior telemetry & anomalies.
+	SaveBehaviorMetric(ctx context.Context, metric *model.BehaviorMetric) error
+	SaveBehaviorEvent(ctx context.Context, event *model.BehaviorEvent) error
+	CreateAnomaly(ctx context.Context, anomaly *model.Anomaly) error
+	ListAnomalies(ctx context.Context, limit int) ([]*model.Anomaly, error)
+	ListAnomaliesByFilter(ctx context.Context, filter model.AnomalyFilter) ([]*model.Anomaly, error)
+	GetAnomaly(ctx context.Context, id uuid.UUID) (*model.Anomaly, error)
+	SaveAnomalyGraph(ctx context.Context, anomalyID uuid.UUID, nodes []*model.BehaviorGraphNode, edges []*model.BehaviorGraphEdge) error
+	GetAnomalyGraph(ctx context.Context, anomalyID uuid.UUID) (*model.AnomalyGraph, error)
+
+	// Playbook automation.
+	CreatePlaybook(ctx context.Context, playbook *model.Playbook) error
+	UpdatePlaybook(ctx context.Context, playbook *model.Playbook) error
+	GetPlaybook(ctx context.Context, id uuid.UUID) (*model.Playbook, error)
+	ListPlaybooks(ctx context.Context, limit int) ([]*model.Playbook, error)
+	CreatePlaybookRun(ctx context.Context, run *model.PlaybookRun) error
+	UpdatePlaybookRun(ctx context.Context, run *model.PlaybookRun) error
+	ListPlaybookRuns(ctx context.Context, playbookID uuid.UUID, limit int) ([]*model.PlaybookRun, error)
+
+	// BAS scenario repository.
+	CreateBASScenario(ctx context.Context, scenario *model.BASScenario) error
+	UpdateBASScenario(ctx context.Context, scenario *model.BASScenario) error
+	GetBASScenario(ctx context.Context, id uuid.UUID) (*model.BASScenario, error)
+	ListBASScenarios(ctx context.Context) ([]*model.BASScenario, error)
+	DeleteBASScenario(ctx context.Context, id uuid.UUID) error
+
+	// Compliance data.
+	CreateComplianceFramework(ctx context.Context, framework *model.ComplianceFramework) error
+	UpdateComplianceFramework(ctx context.Context, framework *model.ComplianceFramework) error
+	ListComplianceFrameworks(ctx context.Context) ([]*model.ComplianceFramework, error)
+	CreateComplianceControl(ctx context.Context, control *model.ComplianceControl) error
+	UpdateComplianceControl(ctx context.Context, control *model.ComplianceControl) error
+	ListComplianceControls(ctx context.Context, frameworkID uuid.UUID) ([]*model.ComplianceControl, error)
+	CreateControlMapping(ctx context.Context, mapping *model.ControlMapping) error
+	ListControlMappings(ctx context.Context, controlID uuid.UUID) ([]*model.ControlMapping, error)
+	CreateComplianceFinding(ctx context.Context, finding *model.ComplianceFinding) error
+	UpdateComplianceFinding(ctx context.Context, finding *model.ComplianceFinding) error
+	GetComplianceFinding(ctx context.Context, id uuid.UUID) (*model.ComplianceFinding, error)
+	ListComplianceFindings(ctx context.Context, frameworkID uuid.UUID, status string) ([]*model.ComplianceFinding, error)
 }

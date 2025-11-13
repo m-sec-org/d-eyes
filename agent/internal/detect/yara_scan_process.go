@@ -10,6 +10,7 @@ import (
 	"github.com/urfave/cli/v2"
 
 	"github.com/m-sec-org/d-eyes/agent/internal"
+	"github.com/m-sec-org/d-eyes/agent/internal/detect/backend"
 	"github.com/m-sec-org/d-eyes/agent/internal/detect/engine"
 	"github.com/m-sec-org/d-eyes/agent/internal/detect/scoring"
 	"github.com/m-sec-org/d-eyes/agent/pkg/color"
@@ -27,6 +28,7 @@ type YaraProcessScanOptions struct {
 	Pid int
 	// 自定义rule
 	RulePath string
+	Backend  string
 	internal.BaseOption
 }
 
@@ -64,16 +66,26 @@ func (scan *YaraProcessScanOptions) InitCommand() []*cli.Command {
 					Usage:       "Specifies the rule file or directory (defaults to embedded set)",
 					Destination: &YaraProcessScanOption.RulePath,
 				},
+				&cli.StringFlag{
+					Name:        "backend",
+					Usage:       "YARA backend (auto|native|portable). Defaults to env D_EYES_YARA_BACKEND or auto.",
+					Destination: &YaraProcessScanOption.Backend,
+				},
 			},
 		},
 	}
 }
 func (scan *YaraProcessScanOptions) Action(_ *cli.Context) error {
-	bundle, err := loadRuleBundle(scan.RulePath)
+	result, err := backend.Load(backend.Options{
+		RulePath: scan.RulePath,
+		Mode:     resolveBackendMode(scan.Backend),
+	})
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Loaded %d rules (engine=%s version=%s)\n", bundle.RuleCount(), bundle.Name(), bundle.Version())
+	bundle := result.Bundle
+	fmt.Printf("Loaded %d rules (backend=%s engine=%s version=%s)\n",
+		bundle.RuleCount(), result.Backend, bundle.Name(), bundle.Version())
 
 	targets, err := scan.resolveTargets()
 	if err != nil {
@@ -105,13 +117,19 @@ func (scan *YaraProcessScanOptions) Action(_ *cli.Context) error {
 		fmt.Println(color.Cyan.Sprintf("Process PID=%d CMD=%s", proc.Pid, exe))
 		for i, match := range matches {
 			res := DetectionResult{
-				RuleName:      match.RuleName,
-				Description:   match.Description,
-				FilePath:      exe,
-				Tags:          match.Tags,
-				MatchedString: extractStringIDs(match.Strings),
+				RuleName:       match.RuleName,
+				Description:    match.Description,
+				FilePath:       exe,
+				Tags:           match.Tags,
+				MatchedString:  extractStringIDs(match.Strings),
+				Partial:        match.Partial,
+				PartialReasons: append([]string{}, match.PartialReasons...),
 			}
 			res.Risk = scoring.Calculate(match.RuleName, match.ScoreHints, match.Tags)
+			if match.Partial {
+				res.Risk.Total *= 0.8
+				res.Risk.Level = res.Risk.Level + " (partial)"
+			}
 			res.Remediation = scoring.ResolveRemediation(match.RuleName, match.Tags)
 			printDetection(res, i+1)
 		}

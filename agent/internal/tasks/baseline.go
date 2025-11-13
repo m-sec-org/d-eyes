@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/m-sec-org/d-eyes/agent/internal/benchmark"
 	"github.com/m-sec-org/d-eyes/agent/internal/benchmarkexec"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
+	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 )
 
 type baselineRunner struct{}
@@ -100,11 +102,22 @@ func (b *baselineRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, 
 	if benchReq.ConfigPath != "" {
 		metadata["baseline_config"] = benchReq.ConfigPath
 	}
+	mergeMetadata(metadata, req.Metadata)
+
+	outputs := []reporting.OutputRecord{{Label: "基线检查", Path: path}}
+	notes := append([]string{}, result.Warnings...)
+	tiOutputs, tiNotes := collectBaselineThreatIntel(ctx, req, result.Checks)
+	if len(tiOutputs) > 0 {
+		outputs = append(outputs, tiOutputs...)
+	}
+	if len(tiNotes) > 0 {
+		notes = append(notes, tiNotes...)
+	}
 
 	return TaskResult{
-		Outputs:  []reporting.OutputRecord{{Label: "基线检查", Path: path}},
+		Outputs:  outputs,
 		Risks:    result.SeverityCount,
-		Notes:    result.Warnings,
+		Notes:    notes,
 		Metadata: metadata,
 	}, nil
 }
@@ -185,5 +198,45 @@ func writeBaselineReport(path, format string, payload any) error {
 		_, err = file.WriteString(builder.String())
 		file.Close()
 		return err
+	}
+}
+
+func collectBaselineThreatIntel(ctx context.Context, req TaskRequest, checks []benchmark.CheckResult) ([]reporting.OutputRecord, []string) {
+	collector := newTICollector(req)
+	if collector == nil {
+		return nil, nil
+	}
+	for _, check := range checks {
+		if !isHighSeverity(check.Severity) {
+			continue
+		}
+		value := strings.TrimSpace(check.ActualValue)
+		if value == "" {
+			continue
+		}
+		context := map[string]string{
+			"check_id":   check.ID,
+			"check_name": check.Name,
+			"severity":   strings.ToLower(string(check.Severity)),
+		}
+		if path := looksLikePath(value); path != "" {
+			collector.LookupFile(ctx, filepath.Clean(path), context)
+		}
+		for _, indicator := range extractIndicators(value) {
+			if indicator.Kind == threatintel.IndicatorHash && strings.EqualFold(indicator.Value, value) {
+				continue
+			}
+			collector.LookupIndicator(ctx, indicator.Kind, indicator.Value, context)
+		}
+	}
+	return collector.Flush("baseline", fmt.Sprintf("%s-threatintel", req.Name), "威胁情报 - 基线")
+}
+
+func isHighSeverity(level benchmark.SeverityLevel) bool {
+	switch strings.ToUpper(string(level)) {
+	case "HIGH", "CRITICAL":
+		return true
+	default:
+		return false
 	}
 }

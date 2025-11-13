@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,6 +60,7 @@ type NetworkConfig struct {
 type RemoteConfig struct {
 	Enabled           bool
 	ServerGRPCAddr    string
+	ServerAPIBase     string
 	AgentToken        string
 	AgentName         string
 	HeartbeatInterval time.Duration
@@ -154,6 +156,7 @@ type Config struct {
 	Sandbox     SandboxConfig
 	Discovery   DiscoveryConfig
 	Tasks       TaskConfig
+	ThreatIntel threatintel.Config
 }
 
 // Default returns a Config populated with built-in defaults.
@@ -198,6 +201,7 @@ func Default() Config {
 		Remote: RemoteConfig{
 			Enabled:           false,
 			ServerGRPCAddr:    "",
+			ServerAPIBase:     "",
 			AgentToken:        "",
 			AgentName:         "",
 			HeartbeatInterval: 10 * time.Second,
@@ -260,6 +264,16 @@ func Default() Config {
 				ScenarioDir:    "",
 			},
 		},
+		ThreatIntel: threatintel.Config{
+			Mode:                 threatintel.ModeHybrid,
+			CacheTTL:             6 * time.Hour,
+			CacheSize:            512,
+			CacheDir:             "",
+			HTTPTimeout:          15 * time.Second,
+			MaxParallelPerSource: 4,
+			OpenTIPBaseURL:       threatintel.DefaultOpenTIPBaseURL,
+			MetaDefenderBaseURL:  threatintel.DefaultMetaDefenderBaseURL,
+		},
 	}
 }
 
@@ -296,6 +310,7 @@ type fileConfig struct {
 	Sandbox     *fileSandboxConfig     `yaml:"sandbox"`
 	Discovery   *fileDiscoveryConfig   `yaml:"discovery"`
 	Tasks       *fileTaskConfig        `yaml:"tasks"`
+	ThreatIntel *fileThreatIntelConfig `yaml:"threat_intel"`
 }
 
 type fileOutputConfig struct {
@@ -337,6 +352,7 @@ type fileNetworkConfig struct {
 type fileRemoteConfig struct {
 	Enabled           *bool              `yaml:"enabled"`
 	ServerGRPCAddr    *string            `yaml:"server_grpc_addr"`
+	ServerAPIBase     *string            `yaml:"server_api_base"`
 	AgentToken        *string            `yaml:"agent_token"`
 	AgentName         *string            `yaml:"agent_name"`
 	HeartbeatInterval *time.Duration     `yaml:"heartbeat_interval"`
@@ -410,6 +426,19 @@ type fileSandboxConfig struct {
 	RequireApproval *bool    `yaml:"require_approval"`
 	LogPath         *string  `yaml:"log_path"`
 	FallbackToHost  *bool    `yaml:"fallback_to_host"`
+}
+
+type fileThreatIntelConfig struct {
+	Mode                 *string        `yaml:"mode"`
+	CacheTTL             *time.Duration `yaml:"cache_ttl"`
+	CacheSize            *int           `yaml:"cache_size"`
+	CacheDir             *string        `yaml:"cache_dir"`
+	HTTPTimeout          *time.Duration `yaml:"http_timeout"`
+	MaxParallelPerSource *int           `yaml:"max_parallel_per_source"`
+	OpenTIPAPIKey        *string        `yaml:"opentip_api_key"`
+	OpenTIPBaseURL       *string        `yaml:"opentip_base_url"`
+	MetaDefenderAPIKey   *string        `yaml:"metadefender_api_key"`
+	MetaDefenderBaseURL  *string        `yaml:"metadefender_base_url"`
 }
 
 func mergeConfig(base Config, overrides fileConfig) Config {
@@ -515,6 +544,9 @@ func mergeConfig(base Config, overrides fileConfig) Config {
 		}
 		if overrides.Remote.ServerGRPCAddr != nil {
 			base.Remote.ServerGRPCAddr = *overrides.Remote.ServerGRPCAddr
+		}
+		if overrides.Remote.ServerAPIBase != nil && strings.TrimSpace(*overrides.Remote.ServerAPIBase) != "" {
+			base.Remote.ServerAPIBase = strings.TrimSpace(*overrides.Remote.ServerAPIBase)
 		}
 		if overrides.Remote.AgentToken != nil {
 			base.Remote.AgentToken = *overrides.Remote.AgentToken
@@ -635,6 +667,38 @@ func mergeConfig(base Config, overrides fileConfig) Config {
 			if overrides.Tasks.BAS.ScenarioDir != nil && strings.TrimSpace(*overrides.Tasks.BAS.ScenarioDir) != "" {
 				base.Tasks.BAS.ScenarioDir = *overrides.Tasks.BAS.ScenarioDir
 			}
+		}
+	}
+	if overrides.ThreatIntel != nil {
+		if overrides.ThreatIntel.Mode != nil {
+			base.ThreatIntel.Mode = threatintel.ParseMode(*overrides.ThreatIntel.Mode)
+		}
+		if overrides.ThreatIntel.CacheTTL != nil && overrides.ThreatIntel.CacheTTL.Seconds() > 0 {
+			base.ThreatIntel.CacheTTL = *overrides.ThreatIntel.CacheTTL
+		}
+		if overrides.ThreatIntel.CacheSize != nil && *overrides.ThreatIntel.CacheSize > 0 {
+			base.ThreatIntel.CacheSize = *overrides.ThreatIntel.CacheSize
+		}
+		if overrides.ThreatIntel.CacheDir != nil {
+			base.ThreatIntel.CacheDir = strings.TrimSpace(*overrides.ThreatIntel.CacheDir)
+		}
+		if overrides.ThreatIntel.HTTPTimeout != nil && overrides.ThreatIntel.HTTPTimeout.Seconds() > 0 {
+			base.ThreatIntel.HTTPTimeout = *overrides.ThreatIntel.HTTPTimeout
+		}
+		if overrides.ThreatIntel.MaxParallelPerSource != nil && *overrides.ThreatIntel.MaxParallelPerSource > 0 {
+			base.ThreatIntel.MaxParallelPerSource = *overrides.ThreatIntel.MaxParallelPerSource
+		}
+		if overrides.ThreatIntel.OpenTIPAPIKey != nil {
+			base.ThreatIntel.OpenTIPAPIKey = strings.TrimSpace(*overrides.ThreatIntel.OpenTIPAPIKey)
+		}
+		if overrides.ThreatIntel.MetaDefenderAPIKey != nil {
+			base.ThreatIntel.MetaDefenderAPIKey = strings.TrimSpace(*overrides.ThreatIntel.MetaDefenderAPIKey)
+		}
+		if overrides.ThreatIntel.OpenTIPBaseURL != nil && strings.TrimSpace(*overrides.ThreatIntel.OpenTIPBaseURL) != "" {
+			base.ThreatIntel.OpenTIPBaseURL = strings.TrimRight(strings.TrimSpace(*overrides.ThreatIntel.OpenTIPBaseURL), "/")
+		}
+		if overrides.ThreatIntel.MetaDefenderBaseURL != nil && strings.TrimSpace(*overrides.ThreatIntel.MetaDefenderBaseURL) != "" {
+			base.ThreatIntel.MetaDefenderBaseURL = strings.TrimRight(strings.TrimSpace(*overrides.ThreatIntel.MetaDefenderBaseURL), "/")
 		}
 	}
 	return base

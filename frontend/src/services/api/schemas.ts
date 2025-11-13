@@ -27,9 +27,7 @@ export const TaskSchema = z.object({
   last_run: TaskRunSchema.optional().nullable(),
 });
 
-export const TaskListResponseSchema = z.object({
-  data: z.array(TaskSchema),
-});
+export const TaskListResponseSchema = z.array(TaskSchema);
 
 export const TaskEventSchema = z.object({
   event: z.string(),
@@ -41,6 +39,7 @@ export const TaskEventSchema = z.object({
   queue_depth: z.number().optional(),
   in_flight: z.number().optional(),
   bas_in_flight: z.number().optional(),
+  bas_queue_depth: z.number().optional(),
   progress: z.number().optional(),
   message: z.string().optional(),
   action: z.string().optional(),
@@ -156,6 +155,27 @@ export const BASScenarioStepSchema = z.object({
   args: z.record(z.any()).optional(),
   timeout_seconds: z.number().optional(),
   require_sandbox: z.boolean().optional(),
+  agent_profile: z.string().optional().nullable(),
+  capabilities: z.array(z.string()).optional(),
+  depends_on: z.array(z.string()).optional(),
+  parallel_group: z.string().optional().nullable(),
+  severity: z.string().optional().nullable(),
+  expect_artifacts: z.boolean().optional(),
+  telemetry_hints: z.record(z.string()).optional(),
+  execution_context: z.record(z.any()).optional(),
+});
+
+export const BASApprovalRuleSchema = z.object({
+  role: z.string(),
+  timeout_seconds: z.number().optional(),
+});
+
+export const BASExecutionPlanSchema = z.object({
+  mode: z.string().optional(),
+  max_parallel: z.number().optional(),
+  retry_limit: z.number().optional(),
+  step_timeout_seconds: z.number().optional(),
+  cross_agent: z.boolean().optional(),
 });
 
 export const BASScenarioSchema = z.object({
@@ -164,10 +184,15 @@ export const BASScenarioSchema = z.object({
   description: z.string().optional().nullable(),
   tags: z.array(z.string()).optional(),
   status: z.enum(['draft', 'pending', 'approved', 'active', 'disabled']),
+  version: z.number().optional(),
   steps: z.array(BASScenarioStepSchema),
   resource_limits: BASResourceLimitSchema,
   network_boundaries: z.array(z.string()).optional(),
   requires_approval: z.boolean().optional(),
+  approval_policy: z.array(BASApprovalRuleSchema).optional(),
+  execution_plan: BASExecutionPlanSchema.optional(),
+  dependencies: z.array(z.string().uuid()).optional(),
+  required_labels: z.array(z.string()).optional(),
   approval: z
     .object({
       approved_by: z.string().optional().nullable(),
@@ -179,6 +204,55 @@ export const BASScenarioSchema = z.object({
   updated_by: z.string().optional().nullable(),
   created_at: z.string().datetime().optional(),
   updated_at: z.string().datetime().optional(),
+  published_at: z.string().datetime().optional().nullable(),
+});
+
+export const BASRunStepSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  status: z.string(),
+  exit_code: z.number(),
+  message: z.string().optional().nullable(),
+  stdout: z.string().optional().nullable(),
+  stderr: z.string().optional().nullable(),
+  sandbox: z.boolean().optional(),
+  started_at: z.string().datetime().optional().nullable(),
+  ended_at: z.string().datetime().optional().nullable(),
+});
+
+export const BASRunReportSchema = z.object({
+  task_id: z.string(),
+  task_type: z.string(),
+  profile: z.string().optional().nullable(),
+  run_id: z.string(),
+  agent_id: z.string(),
+  task_status: z.string(),
+  scenario_id: z.string().optional().nullable(),
+  scenario_name: z.string().optional().nullable(),
+  scenario_tags: z.array(z.string()).optional(),
+  description: z.string().optional().nullable(),
+  steps: z.array(BASRunStepSchema).default([]),
+  summary: z.object({
+    total: z.number(),
+    success: z.number(),
+    failed: z.number(),
+    skipped: z.number(),
+  }),
+  result: z.record(z.any()).optional(),
+  outputs: z
+    .array(
+      z.object({
+        path: z.string(),
+        label: z.string().optional().nullable(),
+      })
+    )
+    .optional(),
+  run_metadata: z.record(z.string()).optional(),
+  exit_code: z.number().optional(),
+  error_code: z.string().optional(),
+  failed_steps: z.array(z.string()).optional(),
+  completed_at: z.string().datetime().optional().nullable(),
+  expires_at: z.string().datetime().optional().nullable(),
 });
 
 export const AuditEventSchema = z.object({
@@ -262,4 +336,217 @@ export const AssetDetailSchema = z.object({
       })
     )
     .default([]),
+});
+
+export const ThreatIntelVerdictSchema = z.object({
+  id: z.string(),
+  indicator: z.string(),
+  kind: z.string().optional().nullable(),
+  source: z.string(),
+  classification: z.string().optional().nullable(),
+  confidence: z.string().optional().nullable(),
+  retrieved_at: z.string().datetime(),
+  expires_at: z.string().datetime().optional().nullable(),
+  metadata: z.record(z.string()).optional(),
+});
+
+export const ThreatIntelIndicatorSchema = z.object({
+  indicator: z.string(),
+  verdicts: z.array(ThreatIntelVerdictSchema).default([]),
+});
+
+export const ThreatIntelLookupResponseSchema = z.object({
+  job_ids: z.array(z.string().uuid()),
+  cached: z.boolean().optional(),
+  verdicts: z.array(ThreatIntelVerdictSchema).optional().default([]),
+});
+
+export const ThreatIntelJobSchema = z.object({
+  id: z.string().uuid(),
+  indicator: z.string().optional().nullable(),
+  kind: z.string().optional().nullable(),
+  source: z.string(),
+  status: z.string(),
+  attempt: z.number().optional(),
+  error: z.string().optional().nullable(),
+  next_run_at: z.string().datetime().optional().nullable(),
+  updated_at: z.string().datetime(),
+});
+
+export const ThreatIntelSampleSchema = z.object({
+  id: z.string().uuid(),
+  hash: z.string().optional().nullable(),
+  filename: z.string().optional().nullable(),
+  size: z.number().optional(),
+  status: z.string(),
+  artifact_ids: z.array(z.string().uuid()).optional(),
+  task_run_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  metadata: z.record(z.string()).optional(),
+  last_error: z.string().optional().nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+  jobs: z.array(ThreatIntelJobSchema).default([]),
+});
+
+export const ThreatIntelEventSchema = z.object({
+  event: z.string(),
+  sample_id: z.string().optional(),
+  job_id: z.string().optional(),
+  indicator: z.string().optional(),
+  source: z.string().optional(),
+  status: z.string().optional(),
+  classification: z.string().optional(),
+  confidence: z.string().optional(),
+  message: z.string().optional(),
+  metadata: z.record(z.string()).optional(),
+  timestamp: z.string().datetime(),
+});
+
+export const AnomalySchema = z.object({
+  id: z.string().uuid(),
+  agent_id: z.string().uuid().nullable().optional(),
+  task_id: z.string().uuid().nullable().optional(),
+  ioc: z.string().nullable().optional(),
+  entities: z.array(z.string()).default([]),
+  severity: z.string(),
+  score: z.number(),
+  summary: z.record(z.any()).optional(),
+  status: z.string(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+});
+
+export const AnomalyListResponseSchema = z.object({
+  items: z.array(AnomalySchema),
+});
+
+export const BehaviorGraphNodeSchema = z.object({
+  id: z.string().uuid(),
+  anomaly_id: z.string().uuid(),
+  type: z.string(),
+  label: z.string().nullable().optional(),
+  properties: z.record(z.any()).optional(),
+  created_at: z.string().datetime(),
+});
+
+export const BehaviorGraphEdgeSchema = z.object({
+  id: z.string().uuid(),
+  anomaly_id: z.string().uuid(),
+  source_node: z.string().uuid(),
+  target_node: z.string().uuid(),
+  type: z.string(),
+  properties: z.record(z.any()).optional(),
+  created_at: z.string().datetime(),
+});
+
+export const AnomalyGraphSchema = z.object({
+  nodes: z.array(BehaviorGraphNodeSchema).default([]),
+  edges: z.array(BehaviorGraphEdgeSchema).default([]),
+});
+
+export const AnomalyEventSchema = z.object({
+  event: z.string(),
+  anomaly: AnomalySchema.optional(),
+  graph: AnomalyGraphSchema.optional(),
+  timestamp: z.string().datetime(),
+});
+
+export const PlaybookTriggerSchema = z.object({
+  type: z.string(),
+  filter: z.record(z.string()).optional(),
+});
+
+export const PlaybookApprovalSchema = z.object({
+  role: z.string(),
+  timeout: z.number().optional().nullable(),
+});
+
+export const PlaybookActionSchema = z.object({
+  type: z.string(),
+  target: z.string().optional().nullable(),
+  task_type: z.string().optional().nullable(),
+  payload: z.record(z.any()).optional().nullable(),
+  command: z.string().optional().nullable(),
+  args: z.record(z.any()).optional().nullable(),
+  metadata: z.record(z.string()).optional().nullable(),
+});
+
+export const PlaybookSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  description: z.string().optional().nullable(),
+  trigger: PlaybookTriggerSchema,
+  conditions: z.array(z.string()).optional().nullable(),
+  approvals: z.array(PlaybookApprovalSchema).optional().nullable(),
+  actions: z.array(PlaybookActionSchema),
+  rollback: z.array(PlaybookActionSchema).optional().nullable(),
+  status: z.string(),
+  version: z.number().optional(),
+  created_by: z.string().optional().nullable(),
+  updated_by: z.string().optional().nullable(),
+  approved_by: z.string().optional().nullable(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+  last_run_at: z.string().datetime().optional().nullable(),
+});
+
+export const PlaybookRunStepSchema = z.object({
+  name: z.string(),
+  type: z.string(),
+  status: z.string(),
+  started_at: z.string().datetime(),
+  completed_at: z.string().datetime().optional().nullable(),
+  error: z.string().optional().nullable(),
+});
+
+export const PlaybookRunSchema = z.object({
+  id: z.string().uuid(),
+  playbook_id: z.string().uuid(),
+  status: z.string(),
+  trigger_type: z.string().optional().nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+  completed_at: z.string().datetime().optional().nullable(),
+  steps: z.array(PlaybookRunStepSchema).optional().nullable(),
+});
+
+export const ComplianceFrameworkSchema = z.object({
+  id: z.string().uuid(),
+  key: z.string(),
+  title: z.string(),
+  version: z.string().optional().nullable(),
+  description: z.string().optional().nullable(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+});
+
+export const ComplianceControlSchema = z.object({
+  id: z.string().uuid(),
+  framework_id: z.string().uuid(),
+  code: z.string(),
+  title: z.string(),
+  severity: z.string(),
+  description: z.string().optional().nullable(),
+  references: z.record(z.string()).optional().nullable(),
+  created_at: z.string().datetime().optional(),
+  updated_at: z.string().datetime().optional(),
+});
+
+export const RemediationNoteSchema = z.object({
+  author: z.string(),
+  note: z.string(),
+  timestamp: z.string().datetime(),
+});
+
+export const ComplianceFindingSchema = z.object({
+  id: z.string().uuid(),
+  framework_id: z.string().uuid(),
+  control_id: z.string().uuid(),
+  asset_ref: z.string().optional().nullable(),
+  status: z.string(),
+  evidence: z.record(z.string()).optional().nullable(),
+  remediation_logs: z.array(RemediationNoteSchema).optional().nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
 });

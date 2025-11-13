@@ -15,7 +15,9 @@ import (
 	"unicode"
 
 	"github.com/m-sec-org/d-eyes/agent/internal/sandbox"
+	telemetrypkg "github.com/m-sec-org/d-eyes/agent/internal/telemetry"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
+	sharedtelemetry "github.com/m-sec-org/d-eyes/server/pkg/telemetry"
 )
 
 //go:embed bas_scenarios/*.json
@@ -190,6 +192,22 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 	report.Summary.Total = len(outcomes)
 	report.Notes = notes
 
+	tiCollector := newTICollector(req)
+	if tiCollector != nil {
+		for _, outcome := range outcomes {
+			ctxInfo := map[string]string{
+				"scenario_id": scenario.ID,
+				"step_id":     outcome.ID,
+				"step_name":   outcome.Name,
+			}
+			for _, text := range []string{outcome.Stdout, outcome.Stderr, outcome.Message} {
+				for _, indicator := range extractIndicators(text) {
+					tiCollector.LookupIndicator(ctx, indicator.Kind, indicator.Value, ctxInfo)
+				}
+			}
+		}
+	}
+
 	summaryPath, err := writeScenarioReport(req, scenario, report)
 	if err != nil {
 		return TaskResult{}, err
@@ -215,6 +233,23 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 	if sandboxFallback {
 		metadata["sandbox_fallback"] = "true"
 	}
+	stepTelemetry, sandboxedCount, fallbackCount := buildBAStepTelemetry(scenario, outcomes)
+	statsPayload := telemetrypkg.SandboxStats{
+		Enabled:        req.Config.Sandbox.Enabled,
+		Required:       req.Config.Sandbox.RequireApproval,
+		Approved:       req.SandboxApproved,
+		StepsSandboxed: sandboxedCount,
+		Fallbacks:      fallbackCount,
+		TotalSteps:     len(outcomes),
+	}
+	if encodedSteps, err := telemetrypkg.EncodeBASteps(stepTelemetry); err == nil && encodedSteps != "" {
+		metadata[sharedtelemetry.MetadataBASteps] = encodedSteps
+	} else if err != nil {
+		notes = append(notes, fmt.Sprintf("BAS 步骤遥测编码失败: %v", err))
+	}
+	if encodedStats, err := telemetrypkg.EncodeSandboxStats(statsPayload); err == nil && encodedStats != "" {
+		metadata[sharedtelemetry.MetadataSandboxStats] = encodedStats
+	}
 	if req.Config.Sandbox.RequireApproval {
 		metadata["sandbox_approval_required"] = "true"
 		if req.SandboxApproved {
@@ -226,8 +261,19 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 		metadata["error_code"] = "bas.step_failed"
 	}
 
+	mergeMetadata(metadata, req.Metadata)
+
 	outputs := []reporting.OutputRecord{
 		{Label: "BAS 场景报告", Path: summaryPath},
+	}
+	if tiCollector != nil {
+		tiOutputs, tiNotes := tiCollector.Flush("bas", fmt.Sprintf("%s-threatintel", req.Name), "威胁情报 - BAS")
+		if len(tiOutputs) > 0 {
+			outputs = append(outputs, tiOutputs...)
+		}
+		if len(tiNotes) > 0 {
+			notes = append(notes, tiNotes...)
+		}
 	}
 
 	var execErr error
@@ -440,6 +486,46 @@ func serializeScenarioSteps(steps []stepOutcome) string {
 		return "[]"
 	}
 	return string(data)
+}
+
+func buildBAStepTelemetry(scenario Scenario, outcomes []stepOutcome) ([]telemetrypkg.BAStepTelemetry, int, int) {
+	payload := make([]telemetrypkg.BAStepTelemetry, 0, len(outcomes))
+	severityMap := make(map[string]string, len(scenario.Steps))
+	for _, step := range scenario.Steps {
+		severityMap[strings.TrimSpace(step.ID)] = strings.ToLower(strings.TrimSpace(step.Severity))
+	}
+	sandboxed := 0
+	fallback := 0
+	for _, outcome := range outcomes {
+		if outcome.Sandboxed {
+			sandboxed++
+		}
+		if outcome.Fallback {
+			fallback++
+		}
+		var durationMs int64
+		if !outcome.StartedAt.IsZero() && !outcome.EndedAt.IsZero() {
+			delta := outcome.EndedAt.Sub(outcome.StartedAt)
+			if delta < 0 {
+				delta = 0
+			}
+			durationMs = delta.Milliseconds()
+		}
+		payload = append(payload, telemetrypkg.BAStepTelemetry{
+			ID:         outcome.ID,
+			Name:       outcome.Name,
+			Status:     outcome.Status,
+			ExitCode:   outcome.ExitCode,
+			Sandbox:    outcome.Sandbox,
+			Sandboxed:  outcome.Sandboxed,
+			Fallback:   outcome.Fallback,
+			Severity:   severityMap[strings.TrimSpace(outcome.ID)],
+			DurationMs: durationMs,
+			StartedAt:  outcome.StartedAt,
+			EndedAt:    outcome.EndedAt,
+		})
+	}
+	return payload, sandboxed, fallback
 }
 
 func loadScenarioFromDir(dir, id string) (Scenario, error) {

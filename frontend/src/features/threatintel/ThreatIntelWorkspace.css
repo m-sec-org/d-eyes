@@ -1,0 +1,147 @@
+.threat-intel-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.threat-intel-grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+@media (min-width: 1200px) {
+  .threat-intel-grid.two-columns {
+    grid-template-columns: 2fr 1fr;
+  }
+}
+
+.ti-card {
+  background: var(--color-surface-card, #fff);
+  border-radius: var(--radius-large, 16px);
+  padding: 1.25rem;
+  box-shadow: var(--shadow-card, 0 8px 30px rgba(15, 23, 42, 0.08));
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ti-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ti-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ti-field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.ti-verdict-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ti-verdict-item {
+  border: 1px solid var(--color-border, #e3e8ef);
+  border-radius: var(--radius-base, 12px);
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ti-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+.ti-sample-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ti-sample-item {
+  border: 1px solid var(--color-border, #e3e8ef);
+  border-radius: var(--radius-base, 12px);
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ti-sample-item button {
+  align-self: flex-start;
+}
+
+.ti-event-feed {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.ti-event-row {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 0.25rem;
+  border-bottom: 1px solid var(--color-border, #e3e8ef);
+}
+
+.ti-event-row strong {
+  font-size: 0.9rem;
+}
+
+.ti-audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.ti-audit-table th,
+.ti-audit-table td {
+  padding: 0.4rem 0.35rem;
+  border-bottom: 1px solid var(--color-border, #e3e8ef);
+}
+
+.ti-audit-table th {
+  text-align: left;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+.ti-lookup-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+}
+
+.ti-lookup-summary code {
+  background: rgba(15, 23, 42, 0.05);
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-base, 12px);
+}
+
+.ti-connection-pill {
+  padding: 0.15rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  border: 1px solid var(--color-border, #e3e8ef);
+}

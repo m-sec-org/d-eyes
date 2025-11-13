@@ -21,8 +21,15 @@ func NewRouter(
 	agentHandler *v1.AgentHandler,
 	auditHandler *v1.AuditHandler,
 	rbacHandler *v1.RBACHandler,
+	artifactHandler *v1.ArtifactHandler,
+	threatIntelHandler *v1.ThreatIntelHandler,
+	behaviorHandler *v1.BehaviorHandler,
+	complianceHandler *v1.ComplianceHandler,
+	playbookHandler *v1.PlaybookHandler,
 	metricsHandler gin.HandlerFunc,
 	taskStreamHandler gin.HandlerFunc,
+	threatStreamHandler gin.HandlerFunc,
+	anomalyStreamHandler gin.HandlerFunc,
 ) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -65,8 +72,29 @@ func NewRouter(
 	if rbacHandler != nil {
 		rbacHandler.RegisterRoutes(apiGroup)
 	}
+	if artifactHandler != nil {
+		artifactHandler.RegisterRoutes(apiGroup)
+	}
+	if threatIntelHandler != nil {
+		threatIntelHandler.RegisterRoutes(apiGroup)
+	}
+	if behaviorHandler != nil {
+		behaviorHandler.RegisterRoutes(apiGroup)
+	}
+	if complianceHandler != nil {
+		complianceHandler.RegisterRoutes(apiGroup)
+	}
+	if playbookHandler != nil {
+		playbookHandler.RegisterRoutes(apiGroup)
+	}
 	if taskStreamHandler != nil {
 		apiGroup.GET("/tasks/stream", taskStreamHandler)
+	}
+	if threatStreamHandler != nil {
+		apiGroup.GET("/threat-intel/stream", threatStreamHandler)
+	}
+	if anomalyStreamHandler != nil {
+		apiGroup.GET("/anomalies/stream", anomalyStreamHandler)
 	}
 
 	return r

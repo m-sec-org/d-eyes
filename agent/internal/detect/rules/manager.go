@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,11 +26,22 @@ type Config struct {
 
 // Manager orchestrates rule loading and hot updates.
 type Manager struct {
-	cfg      Config
-	provider *engine.ThreadSafeProvider
-	mu       sync.Mutex
-	lastHash string
-	lastLoad time.Time
+	cfg         Config
+	provider    *engine.ThreadSafeProvider
+	mu          sync.Mutex
+	lastHash    string
+	lastLoad    time.Time
+	snapshot    Snapshot
+	lastSources map[string][]byte
+}
+
+// Snapshot captures the latest load stats.
+type Snapshot struct {
+	Stats      goengine.BuildStats
+	Version    string
+	Source     string
+	CustomHash string
+	LoadedAt   time.Time
 }
 
 // NewManager returns a ready to use rule manager.
@@ -67,7 +79,7 @@ func (m *Manager) EnsureLoaded() (engine.RuleBundle, error) {
 		return nil, err
 	}
 
-	engineBundle, err := goengine.FromDirectory(files, version)
+	engineBundle, stats, err := goengine.FromDirectory(files, version)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +87,48 @@ func (m *Manager) EnsureLoaded() (engine.RuleBundle, error) {
 	m.provider.Update(engineBundle)
 	m.lastHash = customHash
 	m.lastLoad = time.Now()
+	m.lastSources = cloneSources(files)
+	m.snapshot = Snapshot{
+		Stats:      stats.Clone(),
+		Version:    version,
+		Source:     m.sourceLabel(customHash),
+		CustomHash: customHash,
+		LoadedAt:   m.lastLoad,
+	}
+	log.Printf("yara: bundle loaded source=%s version=%s coverage=%.1f%% files=%d/%d loaded rules=%d skip=%v",
+		m.snapshot.Source,
+		version,
+		stats.Coverage()*100,
+		stats.LoadedRuleFiles,
+		stats.TotalRuleFiles,
+		stats.LoadedRules,
+		stats.SkipReasons,
+	)
 	return engineBundle, nil
+}
+
+// Snapshot returns the latest load snapshot (best effort).
+func (m *Manager) Snapshot() Snapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.snapshot.clone()
+}
+
+// Sources returns a copy of the last loaded rule sources (path -> contents).
+// Returns nil if no bundle has been loaded.
+func (m *Manager) Sources() map[string][]byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.lastSources) == 0 {
+		return nil
+	}
+	out := make(map[string][]byte, len(m.lastSources))
+	for k, v := range m.lastSources {
+		buf := make([]byte, len(v))
+		copy(buf, v)
+		out[k] = buf
+	}
+	return out
 }
 
 func (m *Manager) collectSources(customHash string) (map[string][]byte, string, error) {
@@ -137,6 +190,32 @@ func (m *Manager) collectSources(customHash string) (map[string][]byte, string, 
 		version = time.Now().UTC().Format("20060102T150405Z")
 	}
 	return result, version, nil
+}
+
+func (m *Manager) sourceLabel(customHash string) string {
+	if customHash != "" && m.cfg.CustomDir != "" {
+		return "custom"
+	}
+	return "embedded"
+}
+
+func (s Snapshot) clone() Snapshot {
+	out := s
+	out.Stats = s.Stats.Clone()
+	return out
+}
+
+func cloneSources(src map[string][]byte) map[string][]byte {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string][]byte, len(src))
+	for k, v := range src {
+		buf := make([]byte, len(v))
+		copy(buf, v)
+		dst[k] = buf
+	}
+	return dst
 }
 
 // digestDirectory returns deterministic hash of file names/size/modtime.

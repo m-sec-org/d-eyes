@@ -3,7 +3,10 @@ package v1
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -62,6 +65,8 @@ func (h *BASScenarioHandler) RegisterRoutes(r *gin.RouterGroup) {
 	group.POST("/:id/approve", h.approveScenario)
 	group.POST("/:id/activate", h.activateScenario)
 	group.POST("/:id/deactivate", h.deactivateScenario)
+	group.POST("/:id/publish", h.publishScenario)
+	group.POST("/:id/clone", h.cloneScenario)
 }
 
 func (h *BASScenarioHandler) listScenarios(c *gin.Context) {
@@ -82,7 +87,11 @@ func (h *BASScenarioHandler) createScenario(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	entity := req.toScenario()
+	entity, err := req.toScenario()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	created, err := h.Manager.Create(c.Request.Context(), entity)
 	if err != nil {
 		c.JSON(statusFromScenarioError(err), gin.H{"error": err.Error()})
@@ -120,7 +129,11 @@ func (h *BASScenarioHandler) updateScenario(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	entity := req.toScenario()
+	entity, err := req.toScenario()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	updated, err := h.Manager.Update(c.Request.Context(), id, entity)
 	if err != nil {
 		c.JSON(statusFromScenarioError(err), gin.H{"error": err.Error()})
@@ -202,6 +215,57 @@ func (h *BASScenarioHandler) setStatus(c *gin.Context, status basscenarios.Scena
 	c.JSON(http.StatusOK, item)
 }
 
+func (h *BASScenarioHandler) publishScenario(c *gin.Context) {
+	if !h.requirePermission(c, "bas.manage") {
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		UpdatedBy string `json:"updated_by"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	item, err := h.Manager.Publish(c.Request.Context(), id, body.UpdatedBy)
+	if err != nil {
+		c.JSON(statusFromScenarioError(err), gin.H{"error": err.Error()})
+		return
+	}
+	h.recordAudit(c, "bas.scenario.publish", "bas:"+id.String(), "accepted", nil)
+	c.JSON(http.StatusOK, item)
+}
+
+func (h *BASScenarioHandler) cloneScenario(c *gin.Context) {
+	if !h.requirePermission(c, "bas.manage") {
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		Name      string `json:"name"`
+		CreatedBy string `json:"created_by"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	item, err := h.Manager.Clone(c.Request.Context(), id, body.CreatedBy, body.Name)
+	if err != nil {
+		c.JSON(statusFromScenarioError(err), gin.H{"error": err.Error()})
+		return
+	}
+	h.recordAudit(c, "bas.scenario.clone", "bas:"+id.String(), "accepted", map[string]string{"clone_id": item.ID.String()})
+	c.JSON(http.StatusCreated, item)
+}
+
 type scenarioRequest struct {
 	Name              string                      `json:"name" binding:"required"`
 	Description       string                      `json:"description"`
@@ -212,9 +276,25 @@ type scenarioRequest struct {
 	RequiresApproval  bool                        `json:"requires_approval"`
 	CreatedBy         string                      `json:"created_by"`
 	UpdatedBy         string                      `json:"updated_by"`
+	Dependencies      []string                    `json:"dependencies"`
+	RequiredLabels    []string                    `json:"required_labels"`
+	ApprovalPolicy    []basscenarios.ApprovalRule `json:"approval_policy"`
+	ExecutionPlan     basscenarios.ExecutionPlan  `json:"execution_plan"`
 }
 
-func (r scenarioRequest) toScenario() basscenarios.Scenario {
+func (r scenarioRequest) toScenario() (basscenarios.Scenario, error) {
+	deps := make([]uuid.UUID, 0, len(r.Dependencies))
+	for _, raw := range r.Dependencies {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			return basscenarios.Scenario{}, fmt.Errorf("invalid dependency id %q", raw)
+		}
+		deps = append(deps, id)
+	}
 	return basscenarios.Scenario{
 		Name:              r.Name,
 		Description:       r.Description,
@@ -225,7 +305,11 @@ func (r scenarioRequest) toScenario() basscenarios.Scenario {
 		RequiresApproval:  r.RequiresApproval,
 		CreatedBy:         r.CreatedBy,
 		UpdatedBy:         r.UpdatedBy,
-	}
+		Dependencies:      deps,
+		RequiredLabels:    r.RequiredLabels,
+		ApprovalPolicy:    r.ApprovalPolicy,
+		ExecutionPlan:     r.ExecutionPlan,
+	}, nil
 }
 
 func statusFromScenarioError(err error) int {

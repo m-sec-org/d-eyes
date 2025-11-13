@@ -1,0 +1,46 @@
+.compliance-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.compliance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+
+.compliance-card {
+  border-radius: 16px;
+}
+
+.compliance-card .selected {
+  background: rgba(22, 119, 255, 0.08);
+}
+
+.gap-item {
+  padding: 0.75rem;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  transition: border-color 0.2s ease;
+  cursor: pointer;
+}
+
+.gap-item.active {
+  border-color: rgba(22, 119, 255, 0.4);
+  background: rgba(22, 119, 255, 0.05);
+}
+
+.gap-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.gap-notes {
+  margin: 0.5rem 0 0;
+  padding-left: 1rem;
+  font-size: 0.9rem;
+  color: var(--text-muted, #6b7280);
+}

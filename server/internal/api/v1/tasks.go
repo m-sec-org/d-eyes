@@ -181,7 +181,7 @@ func (h *TaskHandler) createTask(c *gin.Context) {
 	for k, v := range req.Metadata {
 		metadata[k] = v
 	}
-	if h.BASScenarios != nil && strings.EqualFold(req.Type, "bas") {
+	if h.BASScenarios != nil && isBASTaskType(req.Type) {
 		scenarioID := strings.TrimSpace(metadata["scenario_id"])
 		if scenarioID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "bas task requires scenario_id in metadata"})
@@ -201,11 +201,12 @@ func (h *TaskHandler) createTask(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		if scenario.Status == basscenarios.StatusDisabled || scenario.Status == basscenarios.StatusDraft {
+		status := basscenarios.ScenarioStatus(scenario.Status)
+		if status == basscenarios.StatusDisabled || status == basscenarios.StatusDraft {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "scenario not active"})
 			return
 		}
-		if scenario.RequiresApproval && scenario.Status != basscenarios.StatusApproved && scenario.Status != basscenarios.StatusActive {
+		if scenario.RequiresApproval && status != basscenarios.StatusApproved && status != basscenarios.StatusActive {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "scenario not approved"})
 			return
 		}
@@ -223,10 +224,30 @@ func (h *TaskHandler) createTask(c *gin.Context) {
 		if scenario.Approval.ApprovedBy != "" {
 			metadata["sandbox_approved"] = "true"
 		}
-		metadata["scenario_status"] = string(scenario.Status)
+		metadata["scenario_status"] = scenario.Status
+		metadata["scenario_version"] = strconv.Itoa(scenario.Version)
 		if encodedLimits, err := json.Marshal(scenario.ResourceLimits); err == nil {
 			metadata["scenario_limits"] = string(encodedLimits)
 		}
+		if encodedPlan, err := json.Marshal(scenario.ExecutionPlan); err == nil {
+			metadata["scenario_execution_plan"] = string(encodedPlan)
+		}
+		if len(scenario.ApprovalPolicy) > 0 {
+			if encodedPolicy, err := json.Marshal(scenario.ApprovalPolicy); err == nil {
+				metadata["scenario_approval_policy"] = string(encodedPolicy)
+			}
+		}
+		if len(scenario.RequiredLabels) > 0 {
+			metadata["scenario_required_labels"] = strings.Join(scenario.RequiredLabels, ",")
+		}
+		if len(scenario.Dependencies) > 0 {
+			metadata["scenario_dependencies"] = joinUUIDs(scenario.Dependencies)
+		}
+		if scenario.PublishedAt != nil {
+			metadata["scenario_published_at"] = scenario.PublishedAt.Format(time.RFC3339)
+		}
+		metadata["scenario_cross_agent"] = strconv.FormatBool(scenario.ExecutionPlan.CrossAgent)
+		metadata["scenario_plan_mode"] = strings.ToLower(strings.TrimSpace(scenario.ExecutionPlan.Mode))
 	}
 	task := &model.Task{
 		ID:        uuid.New(),
@@ -961,7 +982,7 @@ func (h *TaskHandler) getBASReport(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if task.Type != model.TaskType("bas") {
+	if !isBASTaskType(string(task.Type)) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "task is not bas type"})
 		return
 	}
@@ -1246,4 +1267,20 @@ func splitAndTrimList(raw string) []string {
 		return nil
 	}
 	return result
+}
+
+func isBASTaskType(taskType string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(taskType))
+	return normalized == "bas" || normalized == "bas.advanced"
+}
+
+func joinUUIDs(values []uuid.UUID) string {
+	if len(values) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(values))
+	for _, v := range values {
+		parts = append(parts, v.String())
+	}
+	return strings.Join(parts, ",")
 }
