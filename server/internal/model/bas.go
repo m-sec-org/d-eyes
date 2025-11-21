@@ -8,26 +8,27 @@ import (
 
 // BASScenario captures the persisted definition of a BAS (breach and attack simulation) scenario.
 type BASScenario struct {
-	ID                uuid.UUID                `json:"id"`
-	Name              string                   `json:"name"`
-	Version           int                      `json:"version"`
-	Description       string                   `json:"description,omitempty"`
-	Tags              []string                 `json:"tags,omitempty"`
-	Status            string                   `json:"status"`
-	Steps             []BASScenarioStep        `json:"steps"`
-	ResourceLimits    BASResourceLimits        `json:"resource_limits"`
-	NetworkBoundaries []string                 `json:"network_boundaries,omitempty"`
-	RequiresApproval  bool                     `json:"requires_approval"`
-	Approval          BASScenarioApprovalState `json:"approval"`
-	ApprovalPolicy    []BASApprovalRule        `json:"approval_policy,omitempty"`
-	Dependencies      []uuid.UUID              `json:"dependencies,omitempty"`
-	RequiredLabels    []string                 `json:"required_labels,omitempty"`
-	ExecutionPlan     BASExecutionPlan         `json:"execution_plan"`
-	CreatedBy         string                   `json:"created_by,omitempty"`
-	UpdatedBy         string                   `json:"updated_by,omitempty"`
-	CreatedAt         time.Time                `json:"created_at"`
-	UpdatedAt         time.Time                `json:"updated_at"`
-	PublishedAt       *time.Time               `json:"published_at,omitempty"`
+	ID                uuid.UUID                   `json:"id"`
+	Name              string                      `json:"name"`
+	Version           int                         `json:"version"`
+	Description       string                      `json:"description,omitempty"`
+	Tags              []string                    `json:"tags,omitempty"`
+	Status            string                      `json:"status"`
+	Steps             []BASScenarioStep           `json:"steps"`
+	ResourceLimits    BASResourceLimits           `json:"resource_limits"`
+	NetworkBoundaries []string                    `json:"network_boundaries,omitempty"`
+	RequiresApproval  bool                        `json:"requires_approval"`
+	Approval          BASScenarioApprovalState    `json:"approval"`
+	ApprovalRecords   []BASScenarioApprovalRecord `json:"approval_records,omitempty"`
+	ApprovalPolicy    []BASApprovalRule           `json:"approval_policy,omitempty"`
+	Dependencies      []uuid.UUID                 `json:"dependencies,omitempty"`
+	RequiredLabels    []string                    `json:"required_labels,omitempty"`
+	ExecutionPlan     BASExecutionPlan            `json:"execution_plan"`
+	CreatedBy         string                      `json:"created_by,omitempty"`
+	UpdatedBy         string                      `json:"updated_by,omitempty"`
+	CreatedAt         time.Time                   `json:"created_at"`
+	UpdatedAt         time.Time                   `json:"updated_at"`
+	PublishedAt       *time.Time                  `json:"published_at,omitempty"`
 }
 
 // BASScenarioStep describes a single step within a BAS scenario.
@@ -63,6 +64,20 @@ type BASScenarioApprovalState struct {
 	ApprovedAt *time.Time `json:"approved_at,omitempty"`
 	Notes      string     `json:"notes,omitempty"`
 }
+
+type BASScenarioApprovalRecord struct {
+	Role      string     `json:"role"`
+	Status    string     `json:"status"`
+	Actor     string     `json:"actor,omitempty"`
+	Notes     string     `json:"notes,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+const (
+	ScenarioApprovalPending  = "pending"
+	ScenarioApprovalApproved = "approved"
+	ScenarioApprovalRejected = "rejected"
+)
 
 // BASApprovalRule defines a single approver requirement (mirrors playbook approval rules).
 type BASApprovalRule struct {

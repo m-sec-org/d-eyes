@@ -3,6 +3,7 @@ package v1
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -27,6 +28,8 @@ func (h *PlaybookHandler) RegisterRoutes(r *gin.RouterGroup) {
 	group.POST("", h.createPlaybook)
 	group.GET("", h.listPlaybooks)
 	group.GET(":id", h.getPlaybook)
+	group.GET(":id/approvals", h.listApprovals)
+	group.POST(":id/approvals", h.updateApproval)
 	group.POST(":id/activate", h.activatePlaybook)
 	group.POST(":id/run", h.runPlaybook)
 	group.GET(":id/runs", h.listRuns)
@@ -91,6 +94,53 @@ func (h *PlaybookHandler) getPlaybook(c *gin.Context) {
 	c.JSON(http.StatusOK, pb)
 }
 
+func (h *PlaybookHandler) listApprovals(c *gin.Context) {
+	if !h.requirePermission(c, "playbook.approve") {
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid playbook id"})
+		return
+	}
+	pb, err := h.Manager.Get(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"approvals":       pb.Approvals,
+		"approval_states": pb.ApprovalStates,
+	})
+}
+
+func (h *PlaybookHandler) updateApproval(c *gin.Context) {
+	if !h.requirePermission(c, "playbook.approve") {
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid playbook id"})
+		return
+	}
+	var body struct {
+		Role   string `json:"role" binding:"required"`
+		Action string `json:"action" binding:"required"`
+		Notes  string `json:"notes"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	actor := security.PrincipalFrom(c).User
+	pb, err := h.Manager.UpdateApproval(c.Request.Context(), id, body.Role, actor, body.Action, body.Notes)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, pb)
+}
+
 func (h *PlaybookHandler) activatePlaybook(c *gin.Context) {
 	if !h.requirePermission(c, "playbook.approve") {
 		return
@@ -130,6 +180,10 @@ func (h *PlaybookHandler) runPlaybook(c *gin.Context) {
 	pb, err := h.Manager.Get(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if strings.ToLower(pb.Status) != "active" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "playbook not active"})
 		return
 	}
 	var req runPlaybookRequest

@@ -41,7 +41,7 @@ func TestIntegration_ReportEndpoints(t *testing.T) {
 	}
 	sched := scheduler.New(st, queue, cfg.Scheduler)
 	handler := &v1.TaskHandler{Store: st, Sched: sched}
-	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	type testCase struct {
 		TaskType string

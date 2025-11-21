@@ -23,6 +23,7 @@ import { ThreatIntelWorkspace } from './features/threatintel/ThreatIntelWorkspac
 import { BehaviorAnomalyCenter } from './features/anomalies/BehaviorAnomalyCenter';
 import { ComplianceDashboard } from './features/compliance/ComplianceDashboard';
 import { PlaybookConsole } from './features/playbooks/PlaybookConsole';
+import { PluginMarketplace } from './features/plugins/PluginMarketplace';
 
 function App() {
   const { open, filtered, query, setQuery, toggle, close } = useCommandPalette();
@@ -70,6 +71,14 @@ function App() {
               element={
                 <ProtectedRoute route="/agents" allowedRoles={['admin']}>
                   <AgentDirectory />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/plugins"
+              element={
+                <ProtectedRoute route="/plugins" allowedRoles={['admin']}>
+                  <PluginMarketplace />
                 </ProtectedRoute>
               }
             />

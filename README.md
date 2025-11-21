@@ -223,6 +223,19 @@ Server端采用微服务思想设计，各组件通过接口交互，便于扩�
 - [任务模板 API 说明](docs/task-template-api.md)：模板管理、调度下发与多 Agent 目标配置。
 - [报告中心接口说明](docs/report-center.md)：查询历史任务、导出 JSON/HTML 报告。
 - [运维与扩容指南](docs/operations-guide.md)：部署规划、健康检查、SSE 监控、告警与回滚流程。
+- [插件 SDK 与示例](docs/plugin-sdk.md)：TaskRunner、Manifest、注入接口与最小示例。
+- [观测 API 与指标集成](docs/observability-api.md)：Prometheus/SSE/API 调用清单与告警模板。
+- [运维脚本模板](docs/ops-scripts.md)：部署、回滚、审批巡检脚本样板，可直接接入 CI/CD。
+- [发布说明模板](docs/release-notes-template.md) & [`scripts/check-release-notes.sh`](scripts/check-release-notes.sh)：保证 `docs/release-notes/<version>.md` 与 `docs/changelog.md` 与版本同步。
+- [统一测试矩阵](docs/test-matrix.md) & [`scripts/test-matrix.sh`](scripts/test-matrix.sh)：一次执行 Server/Agent/BAS/前端测试与 Docs 校验。Server 部分需至少完成以下三组命令，确保核心模块、BAS 调度与审批/RBAC 错误分支都被覆盖：
+  - `cd server && go test ./...`
+  - `cd server && go test -run BAS -count=1 ./internal/scheduler ./internal/basscenarios ./internal/store/postgres`
+  - `cd server && go test -run '(BAS\|Playbook\|Plugin\|Cert)' -count=1 ./internal/api/v1`
+- [性能基线指南](docs/perf-baseline.md) & [`scripts/perf-baseline.sh`](scripts/perf-baseline.sh)：依托 Prometheus/`server/tools/perfcheck` 校验调度、TI、BAS、Ops Console 指标。
+- [CI 门禁](docs/ci-gates.md) & [`scripts/ci-gates.sh`](scripts/ci-gates.sh)：一站式运行测试矩阵、覆盖率、插件兼容性、性能基线与发布说明校验。
+- [混沌/失效注入](docs/chaos-guide.md) & `scripts/chaos/*.sh`：模拟 Scheduler/队列/存储/Agent 断连，验证恢复能力。
+- [监控与告警](docs/monitoring-guide.md) & `monitoring/grafana/*`, `monitoring/alerts/*`：提供 Stage4 Prometheus/Grafana 仪表板与 Alertmanager 模板。
+- [日志与 Trace](docs/logging-trace-guide.md) & `scripts/logging/*.sh`：集中化审计日志、追踪任务调度与 SSE Trace 关联。
 - [阶段二发布 Checklist](docs/release-checklist.md)：回归测试、性能/安全评估与上线记录模板。
 
 ## 4. 开发规范
@@ -372,6 +385,9 @@ remote:
   server_grpc_addr: 127.0.0.1:9090
   agent_token: your_token
   agent_name: your_agent_name
+  labels:
+    network_boundary: dmz
+    tenant: soc-blue
 ```
 
 3. 启动Agent：
@@ -379,7 +395,17 @@ remote:
 d-eyes remote
 ```
 
-## 6. 贡献指南
+## 6. 核心服务注入
+
+为了方便测试与高级扩展，Agent 暴露了三个核心 service 的注入接口：
+
+- `tasks.SetThreatIntelProvider`：允许替换默认的 `threatintel.Manager` 构造逻辑，可用于注入 fake provider 或自研情报后端。
+- `sandbox.SetControllerFactory`：替换沙箱控制器工厂，实现第三方沙箱执行器或纯内存 mock。
+- `detect/rules.SetRuleEngineFactory`：注入自定义 YARA 规则引擎，便于在测试中使用合成规则或实验性引擎。
+
+不调用这些 setter 时，CLI 与远程运行仍使用默认实现，行为保持一致。
+
+## 7. 贡献指南
 
 我们欢迎社区贡献！如果您有兴趣参与D-Eyes的开发，请遵循以下步骤：
 
@@ -391,6 +417,6 @@ d-eyes remote
 
 详细的贡献指南请参考项目文档。
 
-## 7. 许可证
+## 8. 许可证
 
 本项目采用开源许可证，详见LICENSE文件。

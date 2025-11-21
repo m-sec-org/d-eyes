@@ -24,6 +24,7 @@ cd server && go test ./...
 - [ ] 使用 `server/tools/loadtest` 对 REST 接口压测（默认 50 并发、持续 5 分钟），监控 `/metrics` 中 `task_queue_depth`、`tasks_in_flight`，确认无明显堆积。
 - [ ] SSE `/api/v1/tasks/stream` 在 5 分钟压测内保持稳定连接；若经反向代理，确保 Keep-Alive 超时 > 300s。
 - [ ] 记录当前资源占用（CPU/内存/磁盘），作为后续扩容基线。
+- [ ] 运行 `scripts/perf-baseline.sh`（依赖 `PROM_URL`）校验调度/Agent CPU·内存·IO P95 与任务失败率；若超出阈值，阻断发布。
 
 ## 4. 安全与审计
 - [ ] BAS 审批流：验证未审批任务会返回错误码 65，审批后可执行，并在 `audit.log` 中生成记录。
@@ -38,6 +39,7 @@ cd server && go test ./...
 ## 6. 发布记录
 - [ ] 填写版本号、Git Commit、构建产物（Agent/Server 二进制、容器镜像）。
 - [ ] 输出阶段性 Release Note：概述模板管理、SSE 监控、报告中心、沙箱安全等新能力，可引用 `docs/report-center.md`、`docs/task-template-api.md` 等文档。
+- [ ] 使用 `docs/release-notes-template.md` 生成 `docs/release-notes/<version>.md`，并运行 `scripts/check-release-notes.sh` 确认 `docs/changelog.md` 已包含对应版本。
 - [ ] 将本 Checklist、测试结果和 Release Note 归档到运维知识库或 Wiki，作为阶段二验收凭证。
 
 完成以上步骤后，可宣告里程碑 F5（验收回归）达成，并进入后续规划。

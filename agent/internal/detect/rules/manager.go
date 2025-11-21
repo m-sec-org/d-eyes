@@ -28,6 +28,7 @@ type Config struct {
 type Manager struct {
 	cfg         Config
 	provider    *engine.ThreadSafeProvider
+	factory     RuleEngineFactory
 	mu          sync.Mutex
 	lastHash    string
 	lastLoad    time.Time
@@ -49,6 +50,7 @@ func NewManager(cfg Config) *Manager {
 	return &Manager{
 		cfg:      cfg,
 		provider: &engine.ThreadSafeProvider{},
+		factory:  getRuleEngineFactory(),
 	}
 }
 
@@ -79,7 +81,7 @@ func (m *Manager) EnsureLoaded() (engine.RuleBundle, error) {
 		return nil, err
 	}
 
-	engineBundle, stats, err := goengine.FromDirectory(files, version)
+	engineBundle, stats, err := m.factory.FromSources(files, version)
 	if err != nil {
 		return nil, err
 	}
@@ -257,4 +259,41 @@ func digestDirectory(dir string) (string, error) {
 	}
 	sum := hash.Sum(nil)
 	return hex.EncodeToString(sum), nil
+}
+
+// RuleEngineFactory builds rule bundles from raw files.
+type RuleEngineFactory interface {
+	FromSources(files map[string][]byte, version string) (engine.RuleBundle, goengine.BuildStats, error)
+}
+
+var (
+	ruleEngineFactory RuleEngineFactory = defaultRuleEngineFactory{}
+	ruleFactoryMu     sync.RWMutex
+)
+
+// SetRuleEngineFactory overrides the global factory (nil restores default).
+func SetRuleEngineFactory(factory RuleEngineFactory) {
+	ruleFactoryMu.Lock()
+	defer ruleFactoryMu.Unlock()
+	if factory == nil {
+		ruleEngineFactory = defaultRuleEngineFactory{}
+		return
+	}
+	ruleEngineFactory = factory
+}
+
+func getRuleEngineFactory() RuleEngineFactory {
+	ruleFactoryMu.RLock()
+	defer ruleFactoryMu.RUnlock()
+	return ruleEngineFactory
+}
+
+type defaultRuleEngineFactory struct{}
+
+func (defaultRuleEngineFactory) FromSources(files map[string][]byte, version string) (engine.RuleBundle, goengine.BuildStats, error) {
+	bundle, stats, err := goengine.FromDirectory(files, version)
+	if err != nil {
+		return nil, stats, err
+	}
+	return bundle, stats, nil
 }

@@ -7,11 +7,24 @@ import (
 	"github.com/m-sec-org/d-eyes/agent/internal/agent"
 )
 
-func main() {
-	rt := agent.NewRuntime()
-	code, err := rt.Run(os.Args)
+type runtimeRunner interface {
+	Run(args []string) (int, error)
+}
+
+var (
+	runtimeFactory = func() runtimeRunner { return agent.NewRuntime() }
+	exitFunc       = os.Exit
+)
+
+func runAgentCLI(args []string) int {
+	rt := runtimeFactory()
+	code, err := rt.Run(args)
 	if err != nil {
 		log.Printf("agent terminated with error: %v\n", err)
 	}
-	os.Exit(code)
+	return code
+}
+
+func main() {
+	exitFunc(runAgentCLI(os.Args))
 }

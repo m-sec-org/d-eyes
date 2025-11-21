@@ -7,22 +7,23 @@ import (
 )
 
 type Playbook struct {
-	ID          uuid.UUID          `json:"id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description,omitempty"`
-	Version     int                `json:"version"`
-	Trigger     PlaybookTrigger    `json:"trigger"`
-	Conditions  []string           `json:"conditions,omitempty"`
-	Approvals   []PlaybookApproval `json:"approvals,omitempty"`
-	Actions     []PlaybookAction   `json:"actions"`
-	Rollback    []PlaybookAction   `json:"rollback,omitempty"`
-	Status      string             `json:"status"`
-	CreatedBy   string             `json:"created_by"`
-	UpdatedBy   string             `json:"updated_by,omitempty"`
-	ApprovedBy  string             `json:"approved_by,omitempty"`
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
-	LastRunAt   *time.Time         `json:"last_run_at,omitempty"`
+	ID             uuid.UUID               `json:"id"`
+	Name           string                  `json:"name"`
+	Description    string                  `json:"description,omitempty"`
+	Version        int                     `json:"version"`
+	Trigger        PlaybookTrigger         `json:"trigger"`
+	Conditions     []string                `json:"conditions,omitempty"`
+	Approvals      []PlaybookApproval      `json:"approvals,omitempty"`
+	ApprovalStates []PlaybookApprovalState `json:"approval_states,omitempty"`
+	Actions        []PlaybookAction        `json:"actions"`
+	Rollback       []PlaybookAction        `json:"rollback,omitempty"`
+	Status         string                  `json:"status"`
+	CreatedBy      string                  `json:"created_by"`
+	UpdatedBy      string                  `json:"updated_by,omitempty"`
+	ApprovedBy     string                  `json:"approved_by,omitempty"`
+	CreatedAt      time.Time               `json:"created_at"`
+	UpdatedAt      time.Time               `json:"updated_at"`
+	LastRunAt      *time.Time              `json:"last_run_at,omitempty"`
 }
 
 type PlaybookTrigger struct {
@@ -34,6 +35,20 @@ type PlaybookApproval struct {
 	Role    string        `json:"role"`
 	Timeout time.Duration `json:"timeout,omitempty"`
 }
+
+type PlaybookApprovalState struct {
+	Role      string    `json:"role"`
+	Status    string    `json:"status"`
+	Actor     string    `json:"actor,omitempty"`
+	Notes     string    `json:"notes,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+const (
+	PlaybookApprovalPending  = "pending"
+	PlaybookApprovalApproved = "approved"
+	PlaybookApprovalRejected = "rejected"
+)
 
 type PlaybookAction struct {
 	Type     string                 `json:"type"`

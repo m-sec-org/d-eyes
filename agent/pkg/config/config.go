@@ -68,6 +68,8 @@ type RemoteConfig struct {
 	CacheDir          string
 	TLS               RemoteTLSConfig
 	Sandbox           SandboxConfig
+	Adaptive          AdaptiveConfig
+	Labels            map[string]string
 }
 
 type RemoteTLSConfig struct {
@@ -88,6 +90,18 @@ type SandboxConfig struct {
 	RequireApproval bool
 	LogPath         string
 	FallbackToHost  bool
+}
+
+// AdaptiveConfig 定义自适应调度与资源策略。
+type AdaptiveConfig struct {
+	CPUCeilPercent      float64
+	BackoffInitial      time.Duration
+	BackoffMax          time.Duration
+	PriorityBoostLow    float64
+	PriorityBoostHigh   float64
+	MinPollInterval     time.Duration
+	MaxPollInterval     time.Duration
+	MinCPUResumePercent float64
 }
 
 type DiscoveryConfig struct {
@@ -218,6 +232,19 @@ func Default() Config {
 				RequireApproval: false,
 				LogPath:         "",
 				FallbackToHost:  true,
+			},
+			Adaptive: AdaptiveConfig{
+				CPUCeilPercent:      75,
+				MinCPUResumePercent: 55,
+				BackoffInitial:      2 * time.Second,
+				BackoffMax:          15 * time.Second,
+				MinPollInterval:     1 * time.Second,
+				MaxPollInterval:     10 * time.Second,
+				PriorityBoostLow:    0.5,
+				PriorityBoostHigh:   1.5,
+			},
+			Labels: map[string]string{
+				"mode": "remote",
 			},
 		},
 		Sandbox: SandboxConfig{
@@ -350,16 +377,18 @@ type fileNetworkConfig struct {
 }
 
 type fileRemoteConfig struct {
-	Enabled           *bool              `yaml:"enabled"`
-	ServerGRPCAddr    *string            `yaml:"server_grpc_addr"`
-	ServerAPIBase     *string            `yaml:"server_api_base"`
-	AgentToken        *string            `yaml:"agent_token"`
-	AgentName         *string            `yaml:"agent_name"`
-	HeartbeatInterval *time.Duration     `yaml:"heartbeat_interval"`
-	TaskPollInterval  *time.Duration     `yaml:"task_poll_interval"`
-	CacheDir          *string            `yaml:"cache_dir"`
-	TLS               *fileRemoteTLS     `yaml:"tls"`
-	Sandbox           *fileSandboxConfig `yaml:"sandbox"`
+	Enabled           *bool               `yaml:"enabled"`
+	ServerGRPCAddr    *string             `yaml:"server_grpc_addr"`
+	ServerAPIBase     *string             `yaml:"server_api_base"`
+	AgentToken        *string             `yaml:"agent_token"`
+	AgentName         *string             `yaml:"agent_name"`
+	HeartbeatInterval *time.Duration      `yaml:"heartbeat_interval"`
+	TaskPollInterval  *time.Duration      `yaml:"task_poll_interval"`
+	CacheDir          *string             `yaml:"cache_dir"`
+	TLS               *fileRemoteTLS      `yaml:"tls"`
+	Sandbox           *fileSandboxConfig  `yaml:"sandbox"`
+	Adaptive          *fileAdaptiveConfig `yaml:"adaptive"`
+	Labels            map[string]string   `yaml:"labels"`
 }
 
 type fileRemoteTLS struct {
@@ -367,6 +396,17 @@ type fileRemoteTLS struct {
 	CertFile *string `yaml:"cert_file"`
 	KeyFile  *string `yaml:"key_file"`
 	CAFile   *string `yaml:"ca_file"`
+}
+
+type fileAdaptiveConfig struct {
+	CPUCeilPercent      *float64       `yaml:"cpu_ceil_percent"`
+	MinCPUResumePercent *float64       `yaml:"min_cpu_resume_percent"`
+	BackoffInitial      *time.Duration `yaml:"backoff_initial"`
+	BackoffMax          *time.Duration `yaml:"backoff_max"`
+	MinPollInterval     *time.Duration `yaml:"min_poll_interval"`
+	MaxPollInterval     *time.Duration `yaml:"max_poll_interval"`
+	PriorityBoostLow    *float64       `yaml:"priority_boost_low"`
+	PriorityBoostHigh   *float64       `yaml:"priority_boost_high"`
 }
 
 type fileDiscoveryConfig struct {
@@ -563,6 +603,12 @@ func mergeConfig(base Config, overrides fileConfig) Config {
 		if overrides.Remote.CacheDir != nil {
 			base.Remote.CacheDir = *overrides.Remote.CacheDir
 		}
+		if overrides.Remote.Labels != nil {
+			base.Remote.Labels = make(map[string]string, len(overrides.Remote.Labels))
+			for k, v := range overrides.Remote.Labels {
+				base.Remote.Labels[k] = v
+			}
+		}
 		if overrides.Remote.TLS != nil {
 			if overrides.Remote.TLS.Enabled != nil {
 				base.Remote.TLS.Enabled = *overrides.Remote.TLS.Enabled
@@ -607,6 +653,32 @@ func mergeConfig(base Config, overrides fileConfig) Config {
 			}
 			if overrides.Remote.Sandbox.FallbackToHost != nil {
 				base.Remote.Sandbox.FallbackToHost = *overrides.Remote.Sandbox.FallbackToHost
+			}
+		}
+		if overrides.Remote.Adaptive != nil {
+			if overrides.Remote.Adaptive.CPUCeilPercent != nil {
+				base.Remote.Adaptive.CPUCeilPercent = *overrides.Remote.Adaptive.CPUCeilPercent
+			}
+			if overrides.Remote.Adaptive.MinCPUResumePercent != nil {
+				base.Remote.Adaptive.MinCPUResumePercent = *overrides.Remote.Adaptive.MinCPUResumePercent
+			}
+			if overrides.Remote.Adaptive.BackoffInitial != nil {
+				base.Remote.Adaptive.BackoffInitial = *overrides.Remote.Adaptive.BackoffInitial
+			}
+			if overrides.Remote.Adaptive.BackoffMax != nil {
+				base.Remote.Adaptive.BackoffMax = *overrides.Remote.Adaptive.BackoffMax
+			}
+			if overrides.Remote.Adaptive.MinPollInterval != nil {
+				base.Remote.Adaptive.MinPollInterval = *overrides.Remote.Adaptive.MinPollInterval
+			}
+			if overrides.Remote.Adaptive.MaxPollInterval != nil {
+				base.Remote.Adaptive.MaxPollInterval = *overrides.Remote.Adaptive.MaxPollInterval
+			}
+			if overrides.Remote.Adaptive.PriorityBoostLow != nil {
+				base.Remote.Adaptive.PriorityBoostLow = *overrides.Remote.Adaptive.PriorityBoostLow
+			}
+			if overrides.Remote.Adaptive.PriorityBoostHigh != nil {
+				base.Remote.Adaptive.PriorityBoostHigh = *overrides.Remote.Adaptive.PriorityBoostHigh
 			}
 		}
 	}

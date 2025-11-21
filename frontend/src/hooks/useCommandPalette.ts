@@ -123,6 +123,14 @@ const seedCommands: CommandItem[] = [
     route: '/reports',
     keywords: ['report', '报告'],
   },
+  {
+    id: 'view-plugins',
+    type: 'view',
+    label: '打开插件市场',
+    description: '安装/升级第三方插件',
+    route: '/plugins',
+    keywords: ['plugin', '插件'],
+  },
 ];
 
 export function useCommandPalette() {

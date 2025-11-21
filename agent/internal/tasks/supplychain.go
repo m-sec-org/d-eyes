@@ -3,22 +3,51 @@ package tasks
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/m-sec-org/d-eyes/agent/internal/tasks/taskcache"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 )
 
+const (
+	supplyChainCacheNamespace = "supplychain.generate"
+)
+
+var (
+	supplyChainCacheTTL         = 6 * time.Hour
+	supplyChainManifestCacheTTL = 24 * time.Hour
+)
+
+type supplyChainCollector interface {
+	Generate(ctx context.Context, req TaskRequest) (TaskResult, error)
+	Capture(ctx context.Context, req TaskRequest) (TaskResult, error)
+}
+
 type supplyChainRunner struct{}
+type collectorWrappedRunner struct {
+	collector supplyChainCollector
+}
 
 func SupplyChainRunner() TaskRunner {
 	return &supplyChainRunner{}
+}
+
+func SupplyChainRunnerWithCollector(c supplyChainCollector) TaskRunner {
+	if c == nil {
+		return SupplyChainRunner()
+	}
+	return &collectorWrappedRunner{collector: c}
 }
 
 func (s *supplyChainRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error) {
@@ -31,6 +60,16 @@ func (s *supplyChainRunner) Run(ctx context.Context, req TaskRequest) (TaskResul
 	}
 }
 
+func (r *collectorWrappedRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error) {
+	mode := strings.ToLower(getStringFlag(req.Flags, "mode", "generate"))
+	switch mode {
+	case "capture":
+		return r.collector.Capture(ctx, req)
+	default:
+		return r.collector.Generate(ctx, req)
+	}
+}
+
 func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (TaskResult, error) {
 	paths := splitList(getStringFlag(req.Flags, "path", ""))
 	filePath := getStringFlag(req.Flags, "file", "")
@@ -40,6 +79,22 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 
 	components := make([]componentRecord, 0)
 	notes := make([]string, 0)
+	outputType := normalizeOutputType(getStringFlag(req.Flags, "type", "json"))
+	cacheKey := supplyChainCacheKey(paths, filePath, outputType)
+	if cached, ok, err := restoreSupplyChainCache(req, cacheKey, outputType); err == nil && ok {
+		return cached, nil
+	} else if err != nil {
+		notes = append(notes, fmt.Sprintf("供应链缓存恢复失败: %v", err))
+	}
+
+	var manifestIdx *manifestCache
+	if cache, err := loadManifestCache(cacheKey, supplyChainManifestCacheTTL); err == nil {
+		manifestIdx = cache
+	} else if err != nil {
+		notes = append(notes, fmt.Sprintf("增量索引加载失败: %v", err))
+	}
+
+	stats := manifestStats{}
 
 	for _, p := range paths {
 		select {
@@ -47,7 +102,7 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 			return TaskResult{}, ctx.Err()
 		default:
 		}
-		found, err := scanProjectManifests(ctx, p)
+		found, err := scanProjectManifests(ctx, p, manifestIdx, &stats)
 		if err != nil {
 			notes = append(notes, fmt.Sprintf("扫描 %s 失败: %v", p, err))
 			continue
@@ -61,7 +116,7 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 			return TaskResult{}, ctx.Err()
 		default:
 		}
-		found, err := scanManifestFile(filePath)
+		found, err := scanManifestFile(filePath, manifestIdx, &stats)
 		if err != nil {
 			notes = append(notes, fmt.Sprintf("解析 %s 失败: %v", filePath, err))
 		} else {
@@ -69,7 +124,11 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 		}
 	}
 
-	outputType := normalizeOutputType(getStringFlag(req.Flags, "type", "json"))
+	if manifestIdx != nil {
+		if err := manifestIdx.Save(); err != nil {
+			notes = append(notes, fmt.Sprintf("增量索引写入失败: %v", err))
+		}
+	}
 
 	record, metadata, err := writeSupplyChainReport(req, "generate", outputType, components, notes)
 	if err != nil {
@@ -79,6 +138,29 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 	risks := map[string]int{}
 	if len(components) > 0 {
 		risks["low"] = len(components)
+	}
+
+	if stats.Total() > 0 {
+		notes = append(notes, fmt.Sprintf("复用 %d 个 manifest，重新解析 %d 个", stats.Reused, stats.Refreshed))
+	}
+
+	cacheNamespace := supplyChainCacheNamespace
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	metadata["cache.manifest_total"] = strconv.Itoa(stats.Total())
+	metadata["cache.manifest_reused"] = strconv.Itoa(stats.Reused)
+	metadata["cache.manifest_refreshed"] = strconv.Itoa(stats.Refreshed)
+	if stats.Total() > 0 {
+		ratio := float64(stats.Reused) / float64(stats.Total())
+		metadata["cache.reuse_ratio"] = fmt.Sprintf("%.2f", ratio)
+	}
+	setCacheMetadata(metadata, cacheNamespace, cacheKey, "manifest-delta", supplyChainCacheTTL)
+
+	cacheMeta := cloneStringMap(metadata)
+	embedRiskMetadata(cacheMeta, risks)
+	if err := taskcache.SaveFile(cacheNamespace, cacheKey, record.Path, cacheMeta); err != nil {
+		notes = append(notes, fmt.Sprintf("供应链缓存写入失败: %v", err))
 	}
 
 	return TaskResult{
@@ -122,13 +204,64 @@ type componentRecord struct {
 	Path    string `json:"path,omitempty"`
 }
 
-func scanProjectManifests(ctx context.Context, root string) ([]componentRecord, error) {
+type manifestStats struct {
+	Reused    int
+	Refreshed int
+}
+
+func (m manifestStats) Total() int {
+	return m.Reused + m.Refreshed
+}
+
+func supplyChainCacheKey(paths []string, filePath, outputType string) string {
+	parts := []string{outputType}
+	ordered := append([]string(nil), paths...)
+	sort.Strings(ordered)
+	parts = append(parts, ordered...)
+	if filePath != "" {
+		parts = append(parts, "file:"+filePath)
+	}
+	raw := strings.Join(parts, "|")
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func restoreSupplyChainCache(req TaskRequest, cacheKey, outputType string) (TaskResult, bool, error) {
+	file, path, err := req.Manager.CreateFile("supplychain", req.Name+"-generate", outputType)
+	if err != nil {
+		return TaskResult{}, false, err
+	}
+	file.Close()
+	taskcache.PurgeExpired(supplyChainCacheNamespace, supplyChainCacheTTL)
+	meta, ok, err := taskcache.RestoreTo(supplyChainCacheNamespace, cacheKey, supplyChainCacheTTL, path)
+	if err != nil || !ok {
+		_ = os.Remove(path)
+		return TaskResult{}, ok, err
+	}
+	markCacheHit(meta, supplyChainCacheTTL)
+	result := TaskResult{
+		Outputs:  []reporting.OutputRecord{{Label: "供应链报告", Path: path}},
+		Notes:    []string{"命中供应链缓存"},
+		Metadata: meta,
+		Risks:    metadataToRisk(meta),
+	}
+	if len(result.Risks) == 0 {
+		if countStr := meta["component_count"]; countStr != "" {
+			if n, err := strconv.Atoi(countStr); err == nil && n > 0 {
+				result.Risks = map[string]int{"low": n}
+			}
+		}
+	}
+	return result, true, nil
+}
+
+func scanProjectManifests(ctx context.Context, root string, idx *manifestCache, stats *manifestStats) ([]componentRecord, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return scanManifestFile(root)
+		return scanManifestFile(root, idx, stats)
 	}
 
 	var records []componentRecord
@@ -148,37 +281,56 @@ func scanProjectManifests(ctx context.Context, root string) ([]componentRecord, 
 			return nil
 		}
 		switch strings.ToLower(filepath.Base(path)) {
-		case "package.json":
-			found, err := parsePackageJSON(path)
+		case "package.json", "requirements.txt", "go.mod", "pom.xml":
+			found, err := scanManifestFile(path, idx, stats)
 			if err != nil {
 				return err
 			}
 			records = append(records, found...)
-		case "requirements.txt":
-			records = append(records, parseRequirementsFile(path, "requirements.txt")...)
-		case "go.mod":
-			records = append(records, parseGoMod(path)...)
-		case "pom.xml":
-			records = append(records, parseMavenPom(path)...)
 		}
 		return nil
 	})
 	return records, err
 }
 
-func scanManifestFile(path string) ([]componentRecord, error) {
+func scanManifestFile(path string, idx *manifestCache, stats *manifestStats) ([]componentRecord, error) {
+	var fingerprint string
+	var fpErr error
+	if idx != nil {
+		fingerprint, fpErr = fileFingerprint(path)
+		if fpErr == nil {
+			if cached, ok := idx.Lookup(path, fingerprint); ok {
+				if stats != nil {
+					stats.Reused++
+				}
+				return cached, nil
+			}
+		}
+	}
+	var comps []componentRecord
+	var err error
 	switch strings.ToLower(filepath.Base(path)) {
 	case "package.json":
-		return parsePackageJSON(path)
+		comps, err = parsePackageJSON(path)
 	case "requirements.txt":
-		return parseRequirementsFile(path, "requirements.txt"), nil
+		comps = parseRequirementsFile(path, "requirements.txt")
 	case "go.mod":
-		return parseGoMod(path), nil
+		comps = parseGoMod(path)
 	case "pom.xml":
-		return parseMavenPom(path), nil
+		comps = parseMavenPom(path)
 	default:
 		return nil, fmt.Errorf("不支持的 manifest 类型: %s", path)
 	}
+	if err != nil {
+		return nil, err
+	}
+	if stats != nil {
+		stats.Refreshed++
+	}
+	if idx != nil && fpErr == nil {
+		idx.Update(path, fingerprint, comps)
+	}
+	return comps, nil
 }
 
 func parsePackageJSON(path string) ([]componentRecord, error) {

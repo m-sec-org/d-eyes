@@ -16,10 +16,29 @@ import (
 	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 )
 
-type baselineRunner struct{}
+type baselineExecutor interface {
+	Execute(ctx context.Context, req benchmarkexec.Request) (benchmarkexec.Result, error)
+}
+
+type baselineRunner struct {
+	executor baselineExecutor
+}
 
 func BaselineRunner() TaskRunner {
-	return &baselineRunner{}
+	return BaselineRunnerWithExecutor(nil)
+}
+
+func BaselineRunnerWithExecutor(exec baselineExecutor) TaskRunner {
+	if exec == nil {
+		exec = defaultBaselineExecutor{}
+	}
+	return &baselineRunner{executor: exec}
+}
+
+type defaultBaselineExecutor struct{}
+
+func (defaultBaselineExecutor) Execute(ctx context.Context, req benchmarkexec.Request) (benchmarkexec.Result, error) {
+	return benchmarkexec.Execute(ctx, req)
 }
 
 func (b *baselineRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error) {
@@ -66,7 +85,8 @@ func (b *baselineRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, 
 	if benchReq.Timeout <= 0 {
 		benchReq.Timeout = req.Config.Performance.Timeout
 	}
-	result, err := benchmarkexec.Execute(ctx, benchReq)
+	exec := b.executor
+	result, err := exec.Execute(ctx, benchReq)
 	if err != nil {
 		return TaskResult{}, err
 	}

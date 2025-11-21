@@ -19,6 +19,7 @@ var (
 	stringAssignRe  = regexp.MustCompile(`^\s*(\$[A-Za-z0-9_]+)\s*=\s*(.+)$`)
 	tagLineRe       = regexp.MustCompile(`^tags\s*=\s*(.+)$`)
 	tokenWhitespace = regexp.MustCompile(`\s+`)
+	metadataExprRe  = regexp.MustCompile(`\b(pe|elf|mach|dotnet|cuckoo)\.[A-Za-z0-9_\.]+`)
 )
 
 type parserState int
@@ -383,4 +384,28 @@ func parseCSV(raw string) []string {
 		result = append(result, item)
 	}
 	return result
+}
+
+func replaceMetadataConditions(condition string, placeholders *[]*Precondition) (string, []string) {
+	partial := make([]string, 0)
+	result := metadataExprRe.ReplaceAllStringFunc(condition, func(match string) string {
+		groups := metadataExprRe.FindStringSubmatch(match)
+		if len(groups) != 2 {
+			return match
+		}
+		family := strings.ToLower(groups[1])
+		placeholder := fmt.Sprintf("__pc%d", len(*placeholders))
+		*placeholders = append(*placeholders, &Precondition{
+			Placeholder: placeholder,
+			Eval: func(_ []byte, meta *metadata.FileMetadata) bool {
+				if meta == nil {
+					return false
+				}
+				return meta.SupportsFamily(family)
+			},
+		})
+		partial = append(partial, fmt.Sprintf("metadata:%s", family))
+		return placeholder
+	})
+	return result, partial
 }

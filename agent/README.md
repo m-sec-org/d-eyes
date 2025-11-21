@@ -142,7 +142,10 @@ remote:
   agent_name: edge-node-01
   heartbeat_interval: 10s
   task_poll_interval: 2s
- cache_dir: ~/.d-eyes/cache
+  cache_dir: ~/.d-eyes/cache
+  labels:
+    network_boundary: dmz
+    tenant: soc-blue
 ```
 
 远程模式会将待回传结果写入本地缓存目录（默认 `~/.d-eyes/cache`），断线后自动重试。执行链路与 CLI 完全复用同一套 `TaskRunner`/`TaskRequest` 规范，区别在于：
@@ -287,12 +290,67 @@ Agent 采用清晰的模块化结构设计，代码组织如下：
 - 欢迎通过 Issue / PR 反馈需求或贡献模块
 - 参考 `docs/` 目录中的设计文档与指南
 
+### 覆盖率验证
+
+- **远程链路 100%**：
+
+  ```bash
+  cd agent
+  go test ./internal/agent/... ./internal/agent/remote/... \
+    -covermode=count \
+    -coverpkg=github.com/m-sec-org/d-eyes/agent/internal/agent,github.com/m-sec-org/d-eyes/agent/internal/agent/remote \
+    -coverprofile=coverage-agent-remote.out
+
+  go tool cover -func coverage-agent-remote.out | tail -n 1
+  ```
+
+  输出末行需为 `total: ... 100.0%`，否则补齐缺失用例。
+
+- **CLI 覆盖率**（respond/audit/inventory/supplychain/baseline/bas/remote）：
+
+  ```bash
+  cd agent
+  go test ./internal/agent \
+    -run CLI \
+    -covermode=count \
+    -coverpkg=github.com/m-sec-org/d-eyes/agent/internal/agent \
+    -coverprofile=coverage-agent-cli.out
+
+  go tool cover -func coverage-agent-cli.out | tail -n 1
+  ```
+
+  确认 `total` 行为 100%，以防 CLI 命令与远程模式出现偏差。
+
+- **核心任务 / 检测模块**（tasks、threatintel、检测后端）：
+
+  ```bash
+  cd agent
+  go test ./internal/tasks ./pkg/threatintel ./internal/detect/backend ./internal/detect/engine/goengine/... \
+    -covermode=count \
+    -coverpkg=github.com/m-sec-org/d-eyes/agent/internal/tasks,github.com/m-sec-org/d-eyes/agent/pkg/threatintel,github.com/m-sec-org/d-eyes/agent/internal/detect/backend,github.com/m-sec-org/d-eyes/agent/internal/detect/engine/goengine,github.com/m-sec-org/d-eyes/agent/internal/detect/engine/goengine/metadata \
+    -coverprofile=coverage-core.out
+
+  go tool cover -func coverage-core.out | tail -n 1
+  ```
+
+  该命令确保任务 Runner、威胁情报、YARA 纯 Go 引擎均保持 100% 覆盖，提交前务必通过。
+
 ## 相关文档
 
 - [插件开发指南](docs/PLUGIN_GUIDE.md)：了解如何开发自定义检测插件
-- [编译指南](/docs/编译指南.md)：Agent 编译和部署说明
-- [应急响应插件编写](/docs/应急响应-插件编写.md)：应急响应插件开发指南
+- [编译指南](../docs/编译指南.md)：Agent 编译和部署说明
+- [应急响应插件编写](../docs/应急响应-插件编写.md)：应急响应插件开发指南
 
 ## 许可证
 
-项目采用开源许可证，详见 [LICENSE](./LICENSE)。
+项目采用开源许可证，详见 [LICENSE](../LICENSE)。
+
+- **核心覆盖率**（tasks + threatintel + detect + assets/sbom + CLI）：
+
+  ```bash
+  cd agent
+  go test ./... -coverpkg=./... -coverprofile=coverage-full.out
+  go tool cover -func coverage-full.out | tail -n 1
+  ```
+
+  确保 `total` 行显示 100%，并在 CI 中强制执行上述命令。

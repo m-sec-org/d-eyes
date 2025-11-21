@@ -128,7 +128,8 @@ func TestLeaseTask_RespectsAgentConcurrency(t *testing.T) {
 	task2 := &model.Task{ID: uuid.New(), Type: model.TaskType("respond"), Priority: 2, Status: model.TaskStatusPending}
 	require.NoError(t, st.CreateTask(ctx, task1))
 	require.NoError(t, st.CreateTask(ctx, task2))
-	require.NoError(t, sched.PrimeFromStore(ctx))
+	require.NoError(t, sched.EnqueueTask(ctx, task1))
+	require.NoError(t, sched.EnqueueTask(ctx, task2))
 
 	firstTask, firstRun, err := sched.LeaseTask(ctx, agent)
 	require.NoError(t, err)
@@ -146,6 +147,152 @@ func TestLeaseTask_RespectsAgentConcurrency(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, task2.ID, nextTask.ID)
 	require.NotNil(t, nextRun)
+}
+
+func TestLeaseTask_BASPolicyEnforcement(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewInMemoryStore()
+	queue := memory.New()
+	sched := scheduler.New(st, queue, config.SchedulerConfig{
+		LeaseTTL:             time.Second,
+		MaxRetries:           1,
+		HeartbeatTimeout:     time.Second,
+		QueueCapacity:        10,
+		LeasePollInterval:    time.Millisecond,
+		MaxAgentConcurrency:  2,
+		GlobalMaxConcurrency: 0,
+	})
+
+	task := &model.Task{
+		ID:       uuid.New(),
+		Type:     model.TaskType("bas"),
+		Priority: 1,
+		Status:   model.TaskStatusPending,
+		Metadata: map[string]string{
+			"network_boundaries":       "dmz,prod",
+			"scenario_required_labels": "zone=dmz,tenant=blue",
+		},
+	}
+	require.NoError(t, st.CreateTask(ctx, task))
+	require.NoError(t, sched.PrimeFromStore(ctx))
+
+	agentNoBoundary := &model.Agent{
+		ID:           uuid.New(),
+		Name:         "agent-no-boundary",
+		Capabilities: []string{"bas"},
+		Labels:       map[string]string{"zone": "lab"},
+		Status:       model.AgentStatusOnline,
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agentNoBoundary))
+
+	leasedTask, run, err := sched.LeaseTask(ctx, agentNoBoundary)
+	require.ErrorIs(t, err, scheduler.ErrNoTaskAvailable)
+	require.Nil(t, leasedTask)
+	require.Nil(t, run)
+
+	agentMissingLabel := &model.Agent{
+		ID:           uuid.New(),
+		Name:         "agent-missing-label",
+		Capabilities: []string{"bas"},
+		Labels:       map[string]string{"network_boundary": "dmz"},
+		Status:       model.AgentStatusOnline,
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agentMissingLabel))
+
+	leasedTask, run, err = sched.LeaseTask(ctx, agentMissingLabel)
+	require.ErrorIs(t, err, scheduler.ErrNoTaskAvailable)
+	require.Nil(t, leasedTask)
+	require.Nil(t, run)
+
+	agentMatches := &model.Agent{
+		ID:           uuid.New(),
+		Name:         "agent-matches",
+		Capabilities: []string{"bas"},
+		Labels: map[string]string{
+			"network_boundary": "prod",
+			"tenant":           "blue",
+			"zone":             "dmz",
+		},
+		Status:        model.AgentStatusOnline,
+		LastHeartbeat: time.Now(),
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agentMatches))
+
+	leasedTask, run, err = sched.LeaseTask(ctx, agentMatches)
+	require.NoError(t, err)
+	require.NotNil(t, leasedTask)
+	require.Equal(t, task.ID, leasedTask.ID)
+	require.NotNil(t, run)
+}
+
+func TestLeaseTask_BASMaxConcurrencyQueuesTask(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewInMemoryStore()
+	queue := memory.New()
+	cfg := config.SchedulerConfig{
+		LeaseTTL:             time.Second,
+		MaxRetries:           1,
+		HeartbeatTimeout:     time.Second,
+		QueueCapacity:        10,
+		LeasePollInterval:    time.Millisecond,
+		MaxAgentConcurrency:  2,
+		GlobalMaxConcurrency: 0,
+		BASMaxConcurrency:    1,
+	}
+	sched := scheduler.New(st, queue, cfg)
+
+	reg := prometheus.NewRegistry()
+	m := metrics.New(reg)
+	sched.SetMetrics(m)
+
+	task1 := &model.Task{
+		ID:        uuid.New(),
+		Type:      model.TaskType("bas"),
+		Priority:  1,
+		Status:    model.TaskStatusPending,
+		CreatedAt: time.Now().Add(-time.Second),
+	}
+	task2 := &model.Task{
+		ID:        uuid.New(),
+		Type:      model.TaskType("bas"),
+		Priority:  2,
+		Status:    model.TaskStatusPending,
+		CreatedAt: time.Now().Add(-2 * time.Second),
+	}
+	require.NoError(t, st.CreateTask(ctx, task1))
+	require.NoError(t, st.CreateTask(ctx, task2))
+	require.NoError(t, sched.PrimeFromStore(ctx))
+
+	agent1 := &model.Agent{ID: uuid.New(), Name: "agent-1", Capabilities: []string{"bas"}, Status: model.AgentStatusOnline, LastHeartbeat: time.Now()}
+	agent2 := &model.Agent{ID: uuid.New(), Name: "agent-2", Capabilities: []string{"bas"}, Status: model.AgentStatusOnline, LastHeartbeat: time.Now()}
+	require.NoError(t, st.UpsertAgent(ctx, agent1))
+	require.NoError(t, st.UpsertAgent(ctx, agent2))
+
+	firstTask, firstRun, err := sched.LeaseTask(ctx, agent1)
+	require.NoError(t, err)
+	pendingID := task2.ID
+	if firstTask.ID == task2.ID {
+		pendingID = task1.ID
+	}
+
+	_, _, err = sched.LeaseTask(ctx, agent2)
+	require.ErrorIs(t, err, scheduler.ErrNoTaskAvailable)
+
+	depth, err := queue.Len(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), depth)
+	require.Equal(t, 1.0, counterValue(t, reg, "d_eyes_bas_queue_backlog", nil))
+
+	require.NoError(t, sched.MarkRunStarted(ctx, firstRun.LeaseID))
+	runStored, err := st.GetTaskRunByLease(ctx, firstRun.LeaseID)
+	require.NoError(t, err)
+	require.NoError(t, sched.CompleteTask(ctx, runStored, model.TaskStatusSucceeded, nil, "", nil, 0, "", nil))
+
+	secondTask, secondRun, err := sched.LeaseTask(ctx, agent2)
+	require.NoError(t, err)
+	require.Equal(t, pendingID, secondTask.ID)
+	require.NotNil(t, secondRun)
+	require.Equal(t, 0.0, counterValue(t, reg, "d_eyes_bas_queue_backlog", nil))
 }
 
 func TestHandleLeaseTimeout_MaxRetries(t *testing.T) {

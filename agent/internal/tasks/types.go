@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
@@ -42,6 +43,38 @@ type TaskResult struct {
 	Risks    map[string]int
 	Notes    []string
 	Metadata map[string]string
+}
+
+type threatIntelManagerProvider interface {
+	NewManager(cfg threatintel.Config) (*threatintel.Manager, error)
+}
+
+var (
+	tiProvider     threatIntelManagerProvider = defaultThreatIntelManagerProvider{}
+	tiProviderLock sync.RWMutex
+)
+
+// SetThreatIntelProvider allows tests to override ThreatIntel manager creation.
+func SetThreatIntelProvider(p threatIntelManagerProvider) {
+	tiProviderLock.Lock()
+	defer tiProviderLock.Unlock()
+	if p == nil {
+		tiProvider = defaultThreatIntelManagerProvider{}
+		return
+	}
+	tiProvider = p
+}
+
+func getThreatIntelProvider() threatIntelManagerProvider {
+	tiProviderLock.RLock()
+	defer tiProviderLock.RUnlock()
+	return tiProvider
+}
+
+type defaultThreatIntelManagerProvider struct{}
+
+func (defaultThreatIntelManagerProvider) NewManager(cfg threatintel.Config) (*threatintel.Manager, error) {
+	return threatintel.NewManager(cfg)
 }
 
 // ApplyDefaults 根据全局配置补充缺省值
@@ -109,7 +142,8 @@ func (r *TaskRequest) initThreatIntel() {
 	if cfg.CacheDir == "" {
 		cfg.CacheDir = defaultThreatIntelCacheDir()
 	}
-	manager, err := threatintel.NewManager(cfg)
+	provider := getThreatIntelProvider()
+	manager, err := provider.NewManager(cfg)
 	if err != nil {
 		var note string
 		switch err {

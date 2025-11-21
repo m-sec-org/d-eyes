@@ -6,8 +6,17 @@ import (
 	"github.com/m-sec-org/d-eyes/agent/internal/agent"
 )
 
+type runtimeRunner interface {
+	Run(args []string) (int, error)
+}
+
+var (
+	rootRuntimeFactory = func() runtimeRunner { return agent.NewRuntime() }
+	rootExitFunc       = os.Exit
+)
+
 func main() {
-	rt := agent.NewRuntime()
+	rt := rootRuntimeFactory()
 	code, _ := rt.Run(os.Args)
-	os.Exit(code)
+	rootExitFunc(code)
 }

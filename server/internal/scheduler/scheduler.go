@@ -25,6 +25,8 @@ var (
 	ErrAgentAtCapacity = errors.New("scheduler: agent at capacity")
 )
 
+const maxTaskEligibilityScan = 64
+
 // Scheduler manages task leasing and dispatching.
 type Scheduler struct {
 	store store.Store
@@ -110,12 +112,32 @@ func (s *Scheduler) LeaseTask(ctx context.Context, agent *model.Agent) (task *mo
 		}
 	}()
 
-	task, err = s.dequeueTask(ctx, agent.Capabilities)
-	if err != nil {
-		return nil, nil, err
-	}
-	if task == nil {
-		return nil, nil, ErrNoTaskAvailable
+	skippedTasks := make(map[uuid.UUID]struct{})
+	for {
+		task, err = s.dequeueTask(ctx, agent.Capabilities)
+		if err != nil {
+			return nil, nil, err
+		}
+		if task == nil {
+			return nil, nil, ErrNoTaskAvailable
+		}
+		if _, seen := skippedTasks[task.ID]; seen {
+			if err := s.requeueTask(ctx, task); err != nil {
+				return nil, nil, err
+			}
+			return nil, nil, ErrNoTaskAvailable
+		}
+		if eligible, _ := s.agentEligibleForTask(agent, task); eligible {
+			break
+		}
+		skippedTasks[task.ID] = struct{}{}
+		if err := s.requeueTask(ctx, task); err != nil {
+			return nil, nil, err
+		}
+		task = nil
+		if len(skippedTasks) >= maxTaskEligibilityScan {
+			return nil, nil, ErrNoTaskAvailable
+		}
 	}
 
 	if !s.reserveBAS(task.Type) {
@@ -493,6 +515,162 @@ func metadataBool(metadata map[string]string, key string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Scheduler) agentEligibleForTask(agent *model.Agent, task *model.Task) (bool, string) {
+	if agent == nil || task == nil {
+		return false, "invalid agent or task"
+	}
+	if task.Type != model.TaskType("bas") {
+		return true, ""
+	}
+	metadata := task.Metadata
+	if metadata == nil {
+		return true, ""
+	}
+	if boundaries := splitCSV(metadataValue(metadata, "network_boundaries", "")); len(boundaries) > 0 {
+		if !agentMatchesBoundaries(agent, boundaries) {
+			return false, "network boundary mismatch"
+		}
+	}
+	if required := splitCSV(metadataValue(metadata, "scenario_required_labels", "")); len(required) > 0 {
+		if !agentMatchesLabelRequirements(agent, required) {
+			return false, "required labels missing"
+		}
+	}
+	return true, ""
+}
+
+func agentMatchesBoundaries(agent *model.Agent, boundaries []string) bool {
+	if len(boundaries) == 0 {
+		return true
+	}
+	agentValues := agentBoundaryValues(agent)
+	if len(agentValues) == 0 {
+		return false
+	}
+	allowed := make(map[string]struct{}, len(boundaries))
+	for _, boundary := range boundaries {
+		value := strings.ToLower(strings.TrimSpace(boundary))
+		switch value {
+		case "", "any", "all", "*":
+			return true
+		}
+		allowed[value] = struct{}{}
+	}
+	for _, candidate := range agentValues {
+		if _, ok := allowed[strings.ToLower(candidate)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func agentBoundaryValues(agent *model.Agent) []string {
+	if agent == nil || len(agent.Labels) == 0 {
+		return nil
+	}
+	keys := []string{"network_boundary", "network.boundary", "network_boundaries", "zone"}
+	values := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if raw, ok := agent.Labels[key]; ok {
+			values = append(values, splitCSV(raw)...)
+		}
+	}
+	return values
+}
+
+func agentMatchesLabelRequirements(agent *model.Agent, raw []string) bool {
+	reqs := parseLabelRequirements(raw)
+	if len(reqs) == 0 {
+		return true
+	}
+	labels := normaliseLabels(agent)
+	for _, req := range reqs {
+		actual, ok := labels[req.key]
+		if !ok {
+			return false
+		}
+		if req.value == "" {
+			continue
+		}
+		if !labelValueMatches(actual, req.value) {
+			return false
+		}
+	}
+	return true
+}
+
+type labelRequirement struct {
+	key   string
+	value string
+}
+
+func parseLabelRequirements(values []string) []labelRequirement {
+	result := make([]labelRequirement, 0, len(values))
+	for _, raw := range values {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		key := trimmed
+		val := ""
+		if idx := strings.IndexAny(trimmed, "=:"); idx >= 0 {
+			key = trimmed[:idx]
+			val = trimmed[idx+1:]
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		val = strings.ToLower(strings.TrimSpace(val))
+		if key == "" {
+			continue
+		}
+		result = append(result, labelRequirement{key: key, value: val})
+	}
+	return result
+}
+
+func normaliseLabels(agent *model.Agent) map[string]string {
+	result := make(map[string]string)
+	if agent == nil || len(agent.Labels) == 0 {
+		return result
+	}
+	for k, v := range agent.Labels {
+		key := strings.ToLower(strings.TrimSpace(k))
+		if key == "" {
+			continue
+		}
+		result[key] = strings.ToLower(strings.TrimSpace(v))
+	}
+	return result
+}
+
+func labelValueMatches(actual, expected string) bool {
+	if expected == "" {
+		return true
+	}
+	for _, candidate := range splitCSV(actual) {
+		if strings.EqualFold(candidate, expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';'
+	})
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
 }
 
 func chooseErrorMessage(values ...string) string {

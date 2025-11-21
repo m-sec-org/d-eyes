@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ type Metadata struct {
 type HeartbeatPayload struct {
 	Load         float64
 	RunningTasks []string
+	Metadata     map[string]string
 }
 
 // Client 负责维护与 Server 的 gRPC 链接以及会话。
@@ -42,7 +44,10 @@ type Client struct {
 
 	mu      sync.RWMutex
 	agentID string
+	dialer  contextDialer
 }
+
+type contextDialer func(context.Context, string) (net.Conn, error)
 
 // NewClient 根据配置构造 Client 实例。
 func NewClient(cfg RemoteConfig) *Client {
@@ -50,6 +55,13 @@ func NewClient(cfg RemoteConfig) *Client {
 		cfg.HeartbeatInterval = 10 * time.Second
 	}
 	return &Client{cfg: cfg}
+}
+
+// SetDialer 允许为测试场景注入自定义网络拨号器。
+func (c *Client) SetDialer(d contextDialer) {
+	c.mu.Lock()
+	c.dialer = d
+	c.mu.Unlock()
 }
 
 // Connect 建立 gRPC 连接。
@@ -61,6 +73,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if d := c.getDialer(); d != nil {
+		opts = append(opts, grpc.WithContextDialer(d))
+	}
 	conn, err := grpc.DialContext(ctx, c.cfg.ServerGRPCAddr, opts...)
 	if err != nil {
 		return fmt.Errorf("remote client: dial failed: %w", err)
@@ -68,6 +83,12 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.conn = conn
 	c.agentSvc = serverpb.NewAgentServiceClient(conn)
 	return nil
+}
+
+func (c *Client) getDialer() contextDialer {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.dialer
 }
 
 // Close 关闭底层连接。
@@ -144,6 +165,8 @@ func (c *Client) StartHeartbeat(ctx context.Context, payloadCh <-chan HeartbeatP
 				telemetryData := &serverpb.HeartbeatTelemetry{
 					LatencyMs:      latencyMs,
 					CpuPercent:     telemetry.LatestCPUPercent(),
+					MemoryPercent:  telemetry.LatestMemoryPercent(),
+					IoUtilPercent:  telemetry.LatestIOUtilization(),
 					BlockedActions: telemetry.CurrentBlockedActions(),
 				}
 				req := &serverpb.HeartbeatRequest{

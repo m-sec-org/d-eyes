@@ -38,6 +38,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: 'Playbooks', route: '/playbooks', icon: '🧩', roles: ['admin'] },
       { label: '报告中心', route: '/reports', icon: '📝', roles: ['admin'] },
       { label: '系统配置', route: '/settings', icon: '⚙️', roles: ['admin'] },
+      { label: '插件市场', route: '/plugins', icon: '🧩', roles: ['admin'] },
       { label: '日志审计', route: '/audit', icon: '📜', roles: ['auditor', 'admin'] },
       { label: 'UI 指南', route: '/ui-guide', icon: '🎨', roles: ['admin'] },
     ],

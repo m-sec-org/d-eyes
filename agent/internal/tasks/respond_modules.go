@@ -15,14 +15,36 @@ import (
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/process"
 
+	"github.com/m-sec-org/d-eyes/agent/internal/tasks/taskcache"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 )
 
+const (
+	respondFileScanNamespace = "respond.filescan"
+	respondFileScanCacheTTL  = 30 * time.Minute
+)
+
 type moduleResult struct {
-	Outputs []reporting.OutputRecord
-	Risks   map[string]int
-	Notes   []string
+	Outputs  []reporting.OutputRecord
+	Risks    map[string]int
+	Notes    []string
+	Metadata map[string]string
+}
+
+type fileScanSummary struct {
+	Targets          []string         `json:"targets"`
+	ScannedFiles     int              `json:"scanned_files"`
+	SuspiciousFiles  int              `json:"suspicious_files"`
+	SampleSuspicious []suspiciousFile `json:"sample_suspicious"`
+	Errors           []string         `json:"errors"`
+}
+
+type suspiciousFile struct {
+	Path     string    `json:"path"`
+	Reason   string    `json:"reason"`
+	Size     int64     `json:"size"`
+	Modified time.Time `json:"modified"`
 }
 
 func runHostSummary(ctx context.Context, req TaskRequest) (moduleResult, error) {
@@ -72,21 +94,14 @@ func runFileScan(ctx context.Context, req TaskRequest) (moduleResult, error) {
 	}
 	const maxSamples = 50
 	notes := make([]string, 0)
-	type suspiciousFile struct {
-		Path     string    `json:"path"`
-		Reason   string    `json:"reason"`
-		Size     int64     `json:"size"`
-		Modified time.Time `json:"modified"`
+	taskcache.PurgeExpired(respondFileScanNamespace, respondFileScanCacheTTL)
+	cacheKey := respondCacheKey("filescan", req)
+	if cached, ok, err := restoreFileScanFromCache(req, cacheKey); err == nil && ok {
+		return cached, nil
+	} else if err != nil {
+		notes = append(notes, fmt.Sprintf("文件扫描缓存恢复失败: %v", err))
 	}
-	summary := struct {
-		Targets          []string         `json:"targets"`
-		ScannedFiles     int              `json:"scanned_files"`
-		SuspiciousFiles  int              `json:"suspicious_files"`
-		SampleSuspicious []suspiciousFile `json:"sample_suspicious"`
-		Errors           []string         `json:"errors"`
-	}{
-		Targets: targets,
-	}
+	summary := fileScanSummary{Targets: targets}
 	suspiciousSamples := make([]suspiciousFile, 0, maxSamples)
 	suspiciousCount := 0
 	extensions := map[string]string{
@@ -190,11 +205,55 @@ func runFileScan(ctx context.Context, req TaskRequest) (moduleResult, error) {
 			notes = append(notes, tiNotes...)
 		}
 	}
+	cacheMeta := cloneStringMap(req.Metadata)
+	if cacheMeta == nil {
+		cacheMeta = make(map[string]string)
+	}
+	cacheMeta["scanned_files"] = fmt.Sprintf("%d", summary.ScannedFiles)
+	cacheMeta["suspicious_files"] = fmt.Sprintf("%d", summary.SuspiciousFiles)
+	setCacheMetadata(cacheMeta, respondFileScanNamespace, cacheKey, "filesystem-full", respondFileScanCacheTTL)
+	embedRiskMetadata(cacheMeta, risk)
+	_ = taskcache.SaveFile(respondFileScanNamespace, cacheKey, path, cacheMeta)
+
 	return moduleResult{
-		Outputs: outputs,
-		Risks:   risk,
-		Notes:   notes,
+		Outputs:  outputs,
+		Risks:    risk,
+		Notes:    notes,
+		Metadata: cacheMeta,
 	}, nil
+}
+
+func restoreFileScanFromCache(req TaskRequest, cacheKey string) (moduleResult, bool, error) {
+	file, path, err := req.Manager.CreateFile("respond", req.Name+"-filescan", "json")
+	if err != nil {
+		return moduleResult{}, false, err
+	}
+	file.Close()
+	meta, ok, err := taskcache.RestoreTo(respondFileScanNamespace, cacheKey, respondFileScanCacheTTL, path)
+	if err != nil || !ok {
+		_ = os.Remove(path)
+		return moduleResult{}, ok, err
+	}
+	markCacheHit(meta, respondFileScanCacheTTL)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return moduleResult{}, false, err
+	}
+	var summary fileScanSummary
+	if err := json.Unmarshal(data, &summary); err != nil {
+		return moduleResult{}, false, err
+	}
+	risks := metadataToRisk(meta)
+	if len(risks) == 0 && summary.SuspiciousFiles > 0 {
+		risks = map[string]int{"high": summary.SuspiciousFiles}
+	}
+	notes := []string{"命中文件扫描缓存，跳过磁盘遍历"}
+	return moduleResult{
+		Outputs:  []reporting.OutputRecord{{Label: "文件扫描", Path: path}},
+		Risks:    risks,
+		Notes:    notes,
+		Metadata: meta,
+	}, true, nil
 }
 
 func runNetworkAnalysis(ctx context.Context, req TaskRequest) (moduleResult, error) {

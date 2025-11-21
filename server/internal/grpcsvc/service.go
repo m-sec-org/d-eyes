@@ -132,6 +132,11 @@ func (s *Service) Heartbeat(stream pb.AgentService_HeartbeatServer) error {
 		}
 		if s.metrics != nil {
 			s.metrics.Heartbeats.Inc()
+			if telemetry != nil {
+				s.metrics.AgentCPUPercent.Observe(telemetry.GetCpuPercent())
+				s.metrics.AgentMemoryPercent.Observe(telemetry.GetMemoryPercent())
+				s.metrics.AgentIOUtilPercent.Observe(telemetry.GetIoUtilPercent())
+			}
 		}
 	}
 }
@@ -343,6 +348,7 @@ func extractTelemetryMetadata(md map[string]string) map[string]string {
 		sharedtelemetry.MetadataUserSessions,
 		sharedtelemetry.MetadataBASteps,
 		sharedtelemetry.MetadataSandboxStats,
+		sharedtelemetry.MetadataTaskResources,
 	}
 	result := make(map[string]string)
 	for _, key := range keys {

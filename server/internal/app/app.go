@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -22,16 +23,19 @@ import (
 	"github.com/m-sec-org/d-eyes/server/internal/auditlog"
 	"github.com/m-sec-org/d-eyes/server/internal/basscenarios"
 	"github.com/m-sec-org/d-eyes/server/internal/behavior"
+	"github.com/m-sec-org/d-eyes/server/internal/certmanager"
 	"github.com/m-sec-org/d-eyes/server/internal/config"
 	"github.com/m-sec-org/d-eyes/server/internal/grpcsvc"
 	"github.com/m-sec-org/d-eyes/server/internal/logger"
 	"github.com/m-sec-org/d-eyes/server/internal/metrics"
 	"github.com/m-sec-org/d-eyes/server/internal/monitor"
 	"github.com/m-sec-org/d-eyes/server/internal/playbook"
+	"github.com/m-sec-org/d-eyes/server/internal/plugins"
 	"github.com/m-sec-org/d-eyes/server/internal/queueprovider"
 	"github.com/m-sec-org/d-eyes/server/internal/rbac"
 	"github.com/m-sec-org/d-eyes/server/internal/reporttemplates"
 	"github.com/m-sec-org/d-eyes/server/internal/scheduler"
+	"github.com/m-sec-org/d-eyes/server/internal/security"
 	"github.com/m-sec-org/d-eyes/server/internal/store"
 	"github.com/m-sec-org/d-eyes/server/internal/storeprovider"
 	"github.com/m-sec-org/d-eyes/server/internal/streams"
@@ -63,6 +67,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 	log.Info("queue primed from persistent tasks")
 	heartbeatStop := monitor.StartHeartbeat(ctx, st, cfg.Scheduler, log)
 	defer heartbeatStop()
+	selfHealStop := sched.StartSelfHeal(ctx, log)
+	defer selfHealStop()
 
 	reg := prometheus.NewRegistry()
 	metricsCollector := metrics.New(reg)
@@ -146,6 +152,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	taskStream := streams.NewTaskHub()
 	sched.SetTaskHub(taskStream)
 	taskStreamHandler := streams.SSEHandler(taskStream)
+	defer taskStream.Close()
 
 	taskCatalogManager, err := taskcatalog.NewManager(taskcatalog.Config{PersistPath: cfg.TaskCatalog.PersistPath}, log)
 	if err != nil {
@@ -169,6 +176,26 @@ func Run(ctx context.Context, cfg config.Config) error {
 	templateHandler := &v1.TemplateHandler{Manager: templateManager}
 	reportHandler := &v1.ReportHandler{Store: st, Templates: reportTemplateManager, Audit: auditLogManager}
 	catalogHandler := &v1.TaskCatalogHandler{Catalog: taskCatalogManager}
+	pluginManager := plugins.NewManager()
+	pluginStream := streams.NewTaskHub()
+	defer pluginStream.Close()
+	pluginManager.UseHook(func(evt plugins.Event) {
+		if pluginStream == nil {
+			return
+		}
+		meta := map[string]string{
+			"version": evt.Manifest.Version,
+		}
+		if evt.Reason != "" {
+			meta["reason"] = evt.Reason
+		}
+		pluginStream.Publish(streams.TaskEvent{
+			Event:    "plugin." + evt.Type,
+			TaskID:   evt.Manifest.Name,
+			Message:  evt.Reason,
+			Metadata: meta,
+		})
+	})
 	basHandler := &v1.BASScenarioHandler{Manager: basScenarioManager, RBAC: rbacEnforcer, Audit: auditLogManager}
 	agentHandler := &v1.AgentHandler{Store: st, RBAC: rbacEnforcer}
 	auditHandler := &v1.AuditHandler{Logs: auditLogManager}
@@ -190,18 +217,68 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer playbookEngine.Stop()
 	}
 	playbookHandler := &v1.PlaybookHandler{Manager: playbookManager, Engine: playbookEngine, RBAC: rbacEnforcer}
-	router := api.NewRouter(cfg, taskHandler, templateHandler, reportHandler, catalogHandler, basHandler, agentHandler, auditHandler, rbacHandler, artifactHandler, threatIntelHandler, behaviorHandler, complianceHandler, playbookHandler, metricsHandler, taskStreamHandler, threatStreamHandler, anomalyStreamHandler)
+	pluginHandler := &v1.PluginHandler{Manager: pluginManager, Stream: pluginStream}
+	mfaStore := security.NewMFAStore(cfg.Security.MFA)
+	certManager, err := certmanager.New(cfg.Security.PKI, log)
+	if err != nil {
+		return fmt.Errorf("init cert manager: %w", err)
+	}
+	securityHandler := &v1.SecurityHandler{MFAStore: mfaStore}
+	opsHandler := &v1.OpsHandler{Scheduler: sched}
 
-	grpcServer, err := newGRPCServer(cfg, st, sched, log, metricsCollector, artifactManager, tiOrchestrator, behaviorRecorder, behaviorAnalyzer, behaviorGraph)
+	router := api.NewRouter(
+		cfg,
+		taskHandler,
+		templateHandler,
+		reportHandler,
+		catalogHandler,
+		pluginHandler,
+		basHandler,
+		agentHandler,
+		auditHandler,
+		rbacHandler,
+		artifactHandler,
+		threatIntelHandler,
+		behaviorHandler,
+		complianceHandler,
+		playbookHandler,
+		&v1.CertHandler{Manager: certManager},
+		securityHandler,
+		opsHandler,
+		mfaStore,
+		metricsHandler,
+		taskStreamHandler,
+		threatStreamHandler,
+		anomalyStreamHandler,
+	)
+
+	var tlsConfig *tls.Config
+	if certManager != nil {
+		tlsConfig = certManager.TLSConfig()
+	} else if cfg.Server.TLS.Enabled {
+		cert, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+		if err != nil {
+			return fmt.Errorf("load tls cert: %w", err)
+		}
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+	}
+
+	grpcServer, err := newGRPCServer(cfg, st, sched, log, metricsCollector, artifactManager, tiOrchestrator, behaviorRecorder, behaviorAnalyzer, behaviorGraph, tlsConfig)
 	if err != nil {
 		return err
 	}
 
-	httpSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: router}
+	httpSrv := &http.Server{Addr: cfg.Server.HTTPAddr, Handler: router, TLSConfig: tlsConfig}
 
 	go func() {
-		log.Info("http server listening", "addr", cfg.Server.HTTPAddr)
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Info("http server listening", "addr", cfg.Server.HTTPAddr, "tls", tlsConfig != nil)
+		var err error
+		if tlsConfig != nil {
+			err = httpSrv.ListenAndServeTLS("", "")
+		} else {
+			err = httpSrv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			log.Error("http server error", "error", err)
 		}
 	}()
@@ -230,9 +307,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 	return nil
 }
 
-func newGRPCServer(cfg config.Config, st store.Store, sched *scheduler.Scheduler, log *slog.Logger, metricsCollector *metrics.Metrics, artifactManager *artifacts.Manager, ti *threatintel.Orchestrator, behaviorRecorder *behavior.Recorder, behaviorAnalyzer *behavior.Analyzer, behaviorGraph *behavior.GraphService) (*grpc.Server, error) {
+func newGRPCServer(cfg config.Config, st store.Store, sched *scheduler.Scheduler, log *slog.Logger, metricsCollector *metrics.Metrics, artifactManager *artifacts.Manager, ti *threatintel.Orchestrator, behaviorRecorder *behavior.Recorder, behaviorAnalyzer *behavior.Analyzer, behaviorGraph *behavior.GraphService, tlsConfig *tls.Config) (*grpc.Server, error) {
 	var serverOpts []grpc.ServerOption
-	if cfg.Server.TLS.Enabled {
+	if tlsConfig != nil {
+		serverOpts = append(serverOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
+	} else if cfg.Server.TLS.Enabled {
 		creds, err := credentials.NewServerTLSFromFile(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load tls cert: %w", err)

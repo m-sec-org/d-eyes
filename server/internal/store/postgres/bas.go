@@ -29,21 +29,22 @@ func (p *PostgresStore) CreateBASScenario(ctx context.Context, scenario *model.B
 	stepsJSON, _ := json.Marshal(scenario.Steps)
 	limitsJSON, _ := json.Marshal(scenario.ResourceLimits)
 	approvalJSON, _ := json.Marshal(scenario.Approval)
+	recordsJSON, _ := json.Marshal(scenario.ApprovalRecords)
 	policyJSON, _ := json.Marshal(scenario.ApprovalPolicy)
 	planJSON, _ := json.Marshal(scenario.ExecutionPlan)
 	_, err := p.pool.Exec(ctx, `
         INSERT INTO bas_scenarios (
             id, name, version, description, tags, status, steps, resource_limits,
-            network_boundaries, requires_approval, approval_state, approval_policy,
+            network_boundaries, requires_approval, approval_state, approval_records, approval_policy,
             dependencies, required_labels, execution_plan, created_by, updated_by,
             created_at, updated_at, published_at
         )
         VALUES (
             $1,$2,$3,$4,$5,$6,$7,$8,
-            $9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
+            $9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21
         )`,
 		scenario.ID, scenario.Name, scenario.Version, scenario.Description, scenario.Tags, scenario.Status,
-		stepsJSON, limitsJSON, scenario.NetworkBoundaries, scenario.RequiresApproval, approvalJSON, policyJSON,
+		stepsJSON, limitsJSON, scenario.NetworkBoundaries, scenario.RequiresApproval, approvalJSON, recordsJSON, policyJSON,
 		scenario.Dependencies, scenario.RequiredLabels, planJSON, scenario.CreatedBy, scenario.UpdatedBy,
 		scenario.CreatedAt, scenario.UpdatedAt, scenario.PublishedAt,
 	)
@@ -61,17 +62,18 @@ func (p *PostgresStore) UpdateBASScenario(ctx context.Context, scenario *model.B
 	stepsJSON, _ := json.Marshal(scenario.Steps)
 	limitsJSON, _ := json.Marshal(scenario.ResourceLimits)
 	approvalJSON, _ := json.Marshal(scenario.Approval)
+	recordsJSON, _ := json.Marshal(scenario.ApprovalRecords)
 	policyJSON, _ := json.Marshal(scenario.ApprovalPolicy)
 	planJSON, _ := json.Marshal(scenario.ExecutionPlan)
 	_, err := p.pool.Exec(ctx, `
         UPDATE bas_scenarios SET
             name=$2, version=$3, description=$4, tags=$5, status=$6,
             steps=$7, resource_limits=$8, network_boundaries=$9, requires_approval=$10,
-            approval_state=$11, approval_policy=$12, dependencies=$13, required_labels=$14,
-            execution_plan=$15, created_by=$16, updated_by=$17, created_at=$18, updated_at=$19, published_at=$20
+            approval_state=$11, approval_records=$12, approval_policy=$13, dependencies=$14, required_labels=$15,
+            execution_plan=$16, created_by=$17, updated_by=$18, created_at=$19, updated_at=$20, published_at=$21
         WHERE id=$1`,
 		scenario.ID, scenario.Name, scenario.Version, scenario.Description, scenario.Tags, scenario.Status,
-		stepsJSON, limitsJSON, scenario.NetworkBoundaries, scenario.RequiresApproval, approvalJSON, policyJSON,
+		stepsJSON, limitsJSON, scenario.NetworkBoundaries, scenario.RequiresApproval, approvalJSON, recordsJSON, policyJSON,
 		scenario.Dependencies, scenario.RequiredLabels, planJSON, scenario.CreatedBy, scenario.UpdatedBy,
 		scenario.CreatedAt, scenario.UpdatedAt, scenario.PublishedAt,
 	)
@@ -84,7 +86,7 @@ func (p *PostgresStore) UpdateBASScenario(ctx context.Context, scenario *model.B
 func (p *PostgresStore) GetBASScenario(ctx context.Context, id uuid.UUID) (*model.BASScenario, error) {
 	row := p.pool.QueryRow(ctx, `
         SELECT id, name, version, description, tags, status, steps, resource_limits,
-               network_boundaries, requires_approval, approval_state, approval_policy,
+               network_boundaries, requires_approval, approval_state, approval_records, approval_policy,
                dependencies, required_labels, execution_plan, created_by, updated_by,
                created_at, updated_at, published_at
         FROM bas_scenarios WHERE id = $1`, id)
@@ -94,7 +96,7 @@ func (p *PostgresStore) GetBASScenario(ctx context.Context, id uuid.UUID) (*mode
 func (p *PostgresStore) ListBASScenarios(ctx context.Context) ([]*model.BASScenario, error) {
 	rows, err := p.pool.Query(ctx, `
         SELECT id, name, version, description, tags, status, steps, resource_limits,
-               network_boundaries, requires_approval, approval_state, approval_policy,
+               network_boundaries, requires_approval, approval_state, approval_records, approval_policy,
                dependencies, required_labels, execution_plan, created_by, updated_by,
                created_at, updated_at, published_at
         FROM bas_scenarios`)
@@ -129,10 +131,10 @@ func (p *PostgresStore) DeleteBASScenario(ctx context.Context, id uuid.UUID) err
 
 func scanBASScenario(row pgx.Row) (*model.BASScenario, error) {
 	var scenario model.BASScenario
-	var stepsJSON, limitsJSON, approvalJSON, policyJSON, planJSON []byte
+	var stepsJSON, limitsJSON, approvalJSON, recordsJSON, policyJSON, planJSON []byte
 	if err := row.Scan(
 		&scenario.ID, &scenario.Name, &scenario.Version, &scenario.Description, &scenario.Tags, &scenario.Status,
-		&stepsJSON, &limitsJSON, &scenario.NetworkBoundaries, &scenario.RequiresApproval, &approvalJSON, &policyJSON,
+		&stepsJSON, &limitsJSON, &scenario.NetworkBoundaries, &scenario.RequiresApproval, &approvalJSON, &recordsJSON, &policyJSON,
 		&scenario.Dependencies, &scenario.RequiredLabels, &planJSON, &scenario.CreatedBy, &scenario.UpdatedBy,
 		&scenario.CreatedAt, &scenario.UpdatedAt, &scenario.PublishedAt,
 	); err != nil {
@@ -144,6 +146,7 @@ func scanBASScenario(row pgx.Row) (*model.BASScenario, error) {
 	_ = json.Unmarshal(stepsJSON, &scenario.Steps)
 	_ = json.Unmarshal(limitsJSON, &scenario.ResourceLimits)
 	_ = json.Unmarshal(approvalJSON, &scenario.Approval)
+	_ = json.Unmarshal(recordsJSON, &scenario.ApprovalRecords)
 	_ = json.Unmarshal(policyJSON, &scenario.ApprovalPolicy)
 	_ = json.Unmarshal(planJSON, &scenario.ExecutionPlan)
 	return &scenario, nil

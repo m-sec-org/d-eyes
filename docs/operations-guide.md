@@ -53,6 +53,30 @@ templates:
 
 Agent 需配置 `remote.server_grpc_addr`、`sandbox` 等信息，可参考 `docs/bas-sandbox-guide.md`。
 
+### 1.4 RBAC/MFA & Playbook 审批
+
+- **细粒度权限**：`security.rbac.policies` 支持 `tasks.read/tasks.create/tasks.cancel/tasks.retry/tasks.actions`、`reports.view`、`playbook.execute/playbook.approve`、`bas.view/bas.manage` 等粒度，默认 `operator` 具备日常操作权限，`admin` 仍然是 ALL (`"*"`）。调整策略后无需重启即可生效。
+- **多因子认证**：启用 `security.mfa.enabled=true` 后，Server 会对 `security.mfa.required_roles`（默认 `admin`）强制校验 `security.mfa.header`（默认 `X-MFA-Code`）中的验证码。  
+  - 可在 `security.mfa.secrets` 中配置 `user:code` 或 `role:admin:code`/`default:code`，也可通过环境变量 `D_EYES_MFA_SECRETS="alice:123456,role:admin:999000"` 注入。  
+  - 运维可调用 `GET /api/v1/security/mfa` 查看当前启用状态，并通过 `POST /api/v1/security/mfa/secrets` 动态下发（或指定 `remote_url`，让 Server 从 Vault/Secrets Manager 拉取 JSON `{"user":"code"}`），避免重启。  
+  - 请求需携带 `X-User`/`X-User-Role` + `X-MFA-Code` 才能访问敏感接口（例如证书轮换、Playbook 审批）。
+- **Playbook 审批链**：每个 Playbook 的 `approvals` 字段定义顺序审批角色，新增的 `approval_states` 会在 `/api/v1/playbooks/:id/approvals` 返回；`POST /api/v1/playbooks/:id/approvals` 可执行 `approve`/`reject`。全部审批通过后 `status=approved`，才能通过 `/playbooks/:id/activate` 激活并运行。
+- **自愈与 DR**：调度器内置 `self_heal_interval` 定期回收离线 Agent 的任务，也可通过 `POST /api/v1/ops/self-heal` 手动触发；跨地域步骤详见 `docs/dr-runbook.md`。
+
+### 1.5 BAS 场景审批与安全策略
+
+- **审批 API**：`POST /api/v1/bas-scenarios/:id/publish` 将草稿推进到待审批状态，审批者可调用 `GET /bas-scenarios/:id/approvals` 查看策略与历史，再通过 `POST /bas-scenarios/:id/approvals`（或 `POST /bas-scenarios/:id/approve`）逐条完成 `approve/reject`。审批记录会写入 `approval_records` 列，并同步到 Ops Console 卡片。
+- **Playbook 审批**：同样适用于 `Playbook` 审批链路，详见 `docs/playbook-approvals.md`。
+- **网络边界**：BAS 场景的 `network_boundaries` 必须填写（例如 `dmz,prod`），调度器仅会把任务派发给 `remote.labels.network_boundary` 与之匹配的 Agent。未配置或不匹配会导致 `ErrNoTaskAvailable`，并保持队列安全。
+- **资源阈值**：`resource_limits`（目标数量、并发、最长执行、CPU 上限）在审批前应对齐并写入场景，Server 会在任务创建及审计中同步这些信息，便于复核 `perfcheck` 告警。
+- **标签约束**：`scenario_required_labels` 支持 `key=value` 或 `key` 形式，调度器会比对 Agent 在 `remote.labels` 中的声明（`tenant=blue`、`zone=dmz` 等）。所有条件满足后才允许执行，避免误入高权限节点。
+- **审计字段**：每次 BAS 运行都会在 `audit.log_path` 记录 `sandbox_approval_required`、`sandbox_approved`、`sandbox_fallback`、`scenario_id/name` 等字段，审计平台可根据 `ApprovalGranted=false`、`SandboxFallback=true` 触发告警。
+- **配置指引**：参见 `docs/bas-sandbox-guide.md` 中的示例配置与 `remote.labels` 说明，确保 Agent 在接入 Server 前就声明所属网络边界与租户标签，Ops Console 卡片也会同步展示差异以便排查。
+- **辅助资料**：可在 `docs/observability-api.md` 获取观测 API 清单，在 `docs/ops-scripts.md` 复用部署/回滚脚本模板。
+- **仪表板与告警**：`monitoring/grafana/stage4-dashboard.json` 与 `monitoring/alerts/stage4-alerts.yaml` 的使用方法见 `docs/monitoring-guide.md`。
+- **日志与 Trace**：集中化方案、任务调度追踪脚本参考 `docs/logging-trace-guide.md`。
+- **性能基线**：发布前执行 `scripts/perf-baseline.sh`（详见 `docs/perf-baseline.md`）校验调度、TI、BAS、Ops Console 指标。
+
 ## 2. 可观测性
 
 ### 2.1 健康检查

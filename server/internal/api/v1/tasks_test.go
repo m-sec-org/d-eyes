@@ -48,7 +48,31 @@ func setupTestRouter(t *testing.T) (*gin.Engine, store.Store, *scheduler.Schedul
 	sched := scheduler.New(st, queue, cfg.Scheduler)
 	handler := &v1.TaskHandler{Store: st, Sched: sched}
 	reportHandler := &v1.ReportHandler{Store: st}
-	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, reportHandler, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := api.NewRouter(
+		cfg,
+		handler,
+		&v1.TemplateHandler{},
+		reportHandler,
+		nil, // catalog
+		nil, // plugin
+		nil, // bas
+		nil, // agent
+		nil, // audit
+		nil, // rbac
+		nil, // artifact
+		nil, // threat intel
+		nil, // behavior
+		nil, // compliance
+		nil, // playbook
+		nil, // cert
+		nil, // security
+		nil, // ops
+		nil, // mfa store
+		nil, // metrics handler
+		nil, // task stream
+		nil, // threat stream
+		nil, // anomaly stream
+	)
 	return router, st, sched
 }
 
@@ -70,7 +94,12 @@ func newTestBASManager(t *testing.T) *basscenarios.Manager {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 	basStore := store.NewInMemoryStore()
-	mgr, err := basscenarios.NewManager(basscenarios.Config{Store: basStore}, log)
+	mgr, err := basscenarios.NewManager(basscenarios.Config{
+		Store: basStore,
+		DefaultApprovalPolicy: []basscenarios.ApprovalRule{
+			{Role: "secops", TimeoutSeconds: 3600},
+		},
+	}, log)
 	require.NoError(t, err)
 	return mgr
 }
@@ -189,7 +218,31 @@ func TestTaskCreateValidatesProfilePayload(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := &v1.TaskHandler{Store: st, Sched: sched, Catalog: catalog}
-	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := api.NewRouter(
+		cfg,
+		handler,
+		&v1.TemplateHandler{},
+		&v1.ReportHandler{Store: st},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
 
 	makeRequest := func(payload map[string]any) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(payload)
@@ -251,7 +304,31 @@ func TestCreateBASTaskRequiresApprovedScenario(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := &v1.TaskHandler{Store: st, Sched: sched, BASScenarios: basMgr}
-	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, &v1.BASScenarioHandler{Manager: basMgr}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := api.NewRouter(
+		cfg,
+		handler,
+		&v1.TemplateHandler{},
+		&v1.ReportHandler{Store: st},
+		nil,
+		nil,
+		&v1.BASScenarioHandler{Manager: basMgr},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
 
 	buildRequest := func() *http.Request {
 		body, _ := json.Marshal(map[string]any{

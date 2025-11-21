@@ -9,20 +9,35 @@ import (
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 )
 
-type respondRunner struct{}
+type RespondModuleSelector func(profile string) []respondModule
+
+type respondRunner struct {
+	selectModules RespondModuleSelector
+}
 
 func RespondRunner() TaskRunner {
-	return &respondRunner{}
+	return RespondRunnerWithSelector(nil)
+}
+
+func RespondRunnerWithSelector(selector RespondModuleSelector) TaskRunner {
+	if selector == nil {
+		selector = selectRespondProfile
+	}
+	return &respondRunner{selectModules: selector}
 }
 
 func (r *respondRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error) {
 	if req.Manager == nil {
 		return TaskResult{}, errors.New("report manager missing")
 	}
+	selector := r.selectModules
+	if selector == nil {
+		selector = selectRespondProfile
+	}
 	profile := strings.ToLower(req.Profile)
-	modules := selectRespondProfile(profile)
+	modules := selector(profile)
 	if len(modules) == 0 {
-		modules = selectRespondProfile("default")
+		modules = selector("default")
 	}
 	outputs := make([]reporting.OutputRecord, 0)
 	notes := make([]string, 0)

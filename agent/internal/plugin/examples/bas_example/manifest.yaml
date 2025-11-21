@@ -1,0 +1,19 @@
+apiVersion: v1
+name: bas-example
+version: 0.1.0
+entry: ./bas-example.so
+artifactDigest: FILL_ME_WITH_SHA256
+tasks:
+  - name: bas-example
+    kind: bas
+    capabilities: ["bas", "sandbox"]
+metadata:
+  sandbox: required
+resources:
+  cpu: 400m
+  memory: 256Mi
+  timeout: 10m
+signature:
+  algorithm: ed25519
+  publicKey: UPDATE_ME
+  value: UPDATE_ME

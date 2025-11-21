@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 )
 
+var executable = os.Executable
+
 func InitLog() {
 	const FileName = "d-eyes.logs"
-	if ExecPath, err := os.Executable(); err == nil {
+	if ExecPath, err := executable(); err == nil {
 		join := filepath.Join(filepath.Dir(ExecPath), FileName)
 		f, _ := os.Create(join)
 		// 需要log同时输出到控制台的话就把这个加进去

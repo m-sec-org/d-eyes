@@ -491,6 +491,45 @@ LIMIT 1`
 	return &run, nil
 }
 
+func (p *PostgresStore) ListTaskRunsByAgent(ctx context.Context, agentID uuid.UUID, statuses []model.TaskStatus, limit int) ([]*model.TaskRun, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	query := `SELECT id, task_id, task_type, agent_id, lease_id, lease_expires, started_at, finished_at, status, error_message, summary, result_metadata, exit_code, error_code, expires_at, retry_sequence
+FROM task_runs WHERE agent_id=$1`
+	args := []interface{}{agentID}
+	argPos := 2
+	if len(statuses) > 0 {
+		statusVals := make([]string, 0, len(statuses))
+		for _, st := range statuses {
+			statusVals = append(statusVals, string(st))
+		}
+		query += fmt.Sprintf(" AND status = ANY($%d)", argPos)
+		args = append(args, statusVals)
+		argPos++
+	}
+	query += fmt.Sprintf(" ORDER BY lease_expires ASC LIMIT $%d", argPos)
+	args = append(args, limit)
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list task runs by agent: %w", err)
+	}
+	defer rows.Close()
+	var runs []*model.TaskRun
+	for rows.Next() {
+		var run model.TaskRun
+		var metadata []byte
+		if err := rows.Scan(&run.ID, &run.TaskID, &run.TaskType, &run.AgentID, &run.LeaseID, &run.LeaseExpires, &run.StartedAt, &run.FinishedAt, &run.Status, &run.ErrorMessage, &run.Summary, &metadata, &run.ExitCode, &run.ErrorCode, &run.ExpiresAt, &run.RetrySequence); err != nil {
+			return nil, fmt.Errorf("scan task run: %w", err)
+		}
+		if len(metadata) > 0 {
+			_ = json.Unmarshal(metadata, &run.Metadata)
+		}
+		runs = append(runs, &run)
+	}
+	return runs, nil
+}
+
 func (p *PostgresStore) Ping(ctx context.Context) error {
 	return p.pool.Ping(ctx)
 }

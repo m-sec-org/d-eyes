@@ -46,8 +46,29 @@ type TLSConfig struct {
 }
 
 type SecurityConfig struct {
-	AgentToken string   `yaml:"agent_token"`
-	APIKeys    []string `yaml:"api_keys"`
+	AgentToken string    `yaml:"agent_token"`
+	APIKeys    []string  `yaml:"api_keys"`
+	PKI        PKIConfig `yaml:"pki"`
+	MFA        MFAConfig `yaml:"mfa"`
+}
+
+type PKIConfig struct {
+	Enabled           bool          `yaml:"enabled"`
+	StorageDir        string        `yaml:"storage_dir"`
+	CommonName        string        `yaml:"common_name"`
+	Organization      string        `yaml:"organization"`
+	ServerDNSNames    []string      `yaml:"server_dns_names"`
+	ServerIPs         []string      `yaml:"server_ips"`
+	ServerCertTTL     time.Duration `yaml:"server_cert_ttl"`
+	AgentCertTTL      time.Duration `yaml:"agent_cert_ttl"`
+	RequireClientCert bool          `yaml:"require_client_cert"`
+}
+
+type MFAConfig struct {
+	Enabled       bool              `yaml:"enabled"`
+	Header        string            `yaml:"header"`
+	RequiredRoles []string          `yaml:"required_roles"`
+	Secrets       map[string]string `yaml:"secrets"`
 }
 
 type DatabaseConfig struct {
@@ -78,6 +99,8 @@ type SchedulerConfig struct {
 	GlobalMaxConcurrency int           `yaml:"global_max_concurrency"`
 	ResultRetention      time.Duration `yaml:"result_retention"`
 	BASMaxConcurrency    int           `yaml:"bas_max_concurrency"`
+	SelfHealInterval     time.Duration `yaml:"self_heal_interval"`
+	SelfHealBatch        int           `yaml:"self_heal_batch"`
 }
 
 type MetricsConfig struct {
@@ -220,6 +243,22 @@ func Default() Config {
 		Security: SecurityConfig{
 			AgentToken: "changeme",
 			APIKeys:    []string{"changeme"},
+			PKI: PKIConfig{
+				Enabled:           false,
+				StorageDir:        "./tmp/pki",
+				CommonName:        "d-eyes.local",
+				Organization:      "d-eyes",
+				ServerDNSNames:    []string{"localhost"},
+				ServerCertTTL:     90 * 24 * time.Hour,
+				AgentCertTTL:      30 * 24 * time.Hour,
+				RequireClientCert: false,
+			},
+			MFA: MFAConfig{
+				Enabled:       false,
+				Header:        "X-MFA-Code",
+				RequiredRoles: []string{"admin"},
+				Secrets:       map[string]string{},
+			},
 		},
 		Database: DatabaseConfig{
 			DSN:          "",
@@ -246,6 +285,8 @@ func Default() Config {
 			GlobalMaxConcurrency: 0,
 			ResultRetention:      24 * time.Hour,
 			BASMaxConcurrency:    1,
+			SelfHealInterval:     time.Minute,
+			SelfHealBatch:        200,
 		},
 		Metrics: MetricsConfig{
 			Enabled: true,
@@ -296,7 +337,7 @@ func Default() Config {
 		},
 		RBAC: RBACConfig{
 			Policies: []RBACPolicy{
-				{Role: "operator", Permissions: []string{"tasks.view", "reports.view", "audit.view", "playbook.execute"}},
+				{Role: "operator", Permissions: []string{"tasks.read", "tasks.create", "tasks.retry", "tasks.cancel", "tasks.actions", "reports.view", "audit.view", "playbook.execute", "bas.view"}},
 				{Role: "auditor", Permissions: []string{"audit.view", "reports.view", "playbook.execute"}},
 				{Role: "admin", Permissions: []string{"*"}},
 			},
@@ -442,6 +483,83 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Artifact.MaxSize = n
 		}
 	}
+	if v := os.Getenv("D_EYES_MFA_ENABLED"); v != "" {
+		cfg.Security.MFA.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("D_EYES_MFA_HEADER"); v != "" {
+		cfg.Security.MFA.Header = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("D_EYES_MFA_REQUIRED_ROLES"); v != "" {
+		parts := strings.Split(v, ",")
+		cfg.Security.MFA.RequiredRoles = cfg.Security.MFA.RequiredRoles[:0]
+		for _, p := range parts {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				cfg.Security.MFA.RequiredRoles = append(cfg.Security.MFA.RequiredRoles, trimmed)
+			}
+		}
+	}
+	if v := os.Getenv("D_EYES_MFA_SECRETS"); v != "" {
+		if cfg.Security.MFA.Secrets == nil {
+			cfg.Security.MFA.Secrets = make(map[string]string)
+		}
+		for _, pair := range strings.Split(v, ",") {
+			if pair = strings.TrimSpace(pair); pair == "" {
+				continue
+			}
+			parts := strings.SplitN(pair, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key := strings.ToLower(strings.TrimSpace(parts[0]))
+			secret := strings.TrimSpace(parts[1])
+			if key != "" && secret != "" {
+				cfg.Security.MFA.Secrets[key] = secret
+			}
+		}
+	}
+	if v := os.Getenv("D_EYES_PKI_ENABLED"); v != "" {
+		cfg.Security.PKI.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("D_EYES_PKI_DIR"); v != "" {
+		cfg.Security.PKI.StorageDir = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("D_EYES_PKI_COMMON_NAME"); v != "" {
+		cfg.Security.PKI.CommonName = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("D_EYES_PKI_ORG"); v != "" {
+		cfg.Security.PKI.Organization = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("D_EYES_PKI_SERVER_DNS"); v != "" {
+		parts := strings.Split(v, ",")
+		cfg.Security.PKI.ServerDNSNames = cfg.Security.PKI.ServerDNSNames[:0]
+		for _, p := range parts {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				cfg.Security.PKI.ServerDNSNames = append(cfg.Security.PKI.ServerDNSNames, trimmed)
+			}
+		}
+	}
+	if v := os.Getenv("D_EYES_PKI_SERVER_IPS"); v != "" {
+		parts := strings.Split(v, ",")
+		cfg.Security.PKI.ServerIPs = cfg.Security.PKI.ServerIPs[:0]
+		for _, p := range parts {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				cfg.Security.PKI.ServerIPs = append(cfg.Security.PKI.ServerIPs, trimmed)
+			}
+		}
+	}
+	if v := os.Getenv("D_EYES_PKI_REQUIRE_CLIENT_CERT"); v != "" {
+		cfg.Security.PKI.RequireClientCert = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("D_EYES_PKI_SERVER_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.Security.PKI.ServerCertTTL = d
+		}
+	}
+	if v := os.Getenv("D_EYES_PKI_AGENT_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.Security.PKI.AgentCertTTL = d
+		}
+	}
 	if v := os.Getenv("D_EYES_TI_ENABLED"); v != "" {
 		cfg.ThreatIntel.Enabled = strings.EqualFold(v, "true") || v == "1"
 	}
@@ -518,6 +636,31 @@ func (c Config) Validate() error {
 	}
 	if c.BAS.CacheTTL < 0 {
 		return errors.New("bas.cache_ttl must be >= 0")
+	}
+	if c.Security.PKI.Enabled {
+		if strings.TrimSpace(c.Security.PKI.StorageDir) == "" {
+			return errors.New("security.pki.storage_dir must be set when pki enabled")
+		}
+		if c.Security.PKI.ServerCertTTL <= 0 {
+			return errors.New("security.pki.server_cert_ttl must be positive")
+		}
+		if c.Security.PKI.AgentCertTTL <= 0 {
+			return errors.New("security.pki.agent_cert_ttl must be positive")
+		}
+		if len(c.Security.PKI.ServerDNSNames) == 0 {
+			return errors.New("security.pki.server_dns_names must have at least one entry")
+		}
+	}
+	if c.Security.MFA.Enabled {
+		if strings.TrimSpace(c.Security.MFA.Header) == "" {
+			return errors.New("security.mfa.header must be set when mfa enabled")
+		}
+		if len(c.Security.MFA.RequiredRoles) == 0 {
+			return errors.New("security.mfa.required_roles must include at least one role when mfa enabled")
+		}
+		if len(c.Security.MFA.Secrets) == 0 {
+			return errors.New("security.mfa.secrets must include at least one entry when mfa enabled")
+		}
 	}
 	return nil
 }

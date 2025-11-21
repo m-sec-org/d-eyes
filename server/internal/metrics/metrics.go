@@ -15,6 +15,9 @@ type Metrics struct {
 	TaskRunDuration     prometheus.Histogram
 	TasksInFlight       prometheus.Gauge
 	TaskStatus          *prometheus.GaugeVec
+	AgentCPUPercent     prometheus.Histogram
+	AgentMemoryPercent  prometheus.Histogram
+	AgentIOUtilPercent  prometheus.Histogram
 	BASRuns             *prometheus.CounterVec
 	BASSandboxFallbacks *prometheus.CounterVec
 	BASApprovals        *prometheus.CounterVec
@@ -78,6 +81,27 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name:      "tasks_status_count",
 			Help:      "Number of tasks in each status as observed by the scheduler.",
 		}, []string{"status"}),
+		AgentCPUPercent: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "d_eyes",
+			Subsystem: "server",
+			Name:      "agent_cpu_percent",
+			Help:      "Distribution of agent-reported CPU percent from heartbeats.",
+			Buckets:   []float64{1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100},
+		}),
+		AgentMemoryPercent: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "d_eyes",
+			Subsystem: "server",
+			Name:      "agent_memory_percent",
+			Help:      "Distribution of agent-reported memory percent from heartbeats.",
+			Buckets:   []float64{10, 20, 30, 40, 50, 60, 70, 80, 90, 100},
+		}),
+		AgentIOUtilPercent: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "d_eyes",
+			Subsystem: "server",
+			Name:      "agent_io_util_percent",
+			Help:      "Distribution of agent-reported IO utilization percent from heartbeats.",
+			Buckets:   []float64{1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100},
+		}),
 		BASRuns: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "d_eyes",
 			Subsystem: "bas",
@@ -144,6 +168,9 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.TaskRunDuration,
 		m.TasksInFlight,
 		m.TaskStatus,
+		m.AgentCPUPercent,
+		m.AgentMemoryPercent,
+		m.AgentIOUtilPercent,
 		m.BASRuns,
 		m.BASSandboxFallbacks,
 		m.BASApprovals,

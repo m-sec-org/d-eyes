@@ -1,0 +1,89 @@
+{
+  "title": "D-Eyes Stage4 Ops",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "title": "Agent CPU P95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(d_eyes_server_agent_cpu_percent_bucket[5m]))"
+        }
+      ],
+      "thresholds": [
+        {
+          "value": 80,
+          "color": "red"
+        }
+      ]
+    },
+    {
+      "title": "Agent Memory P95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(d_eyes_server_agent_memory_percent_bucket[5m]))"
+        }
+      ],
+      "thresholds": [
+        {
+          "value": 85,
+          "color": "orange"
+        }
+      ]
+    },
+    {
+      "title": "Scheduler Queue Depth",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "d_eyes_server_task_queue_depth"
+        }
+      ]
+    },
+    {
+      "title": "Task Failure Rate",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(rate(d_eyes_server_tasks_completed_total{status=\"failed\"}[5m])) / sum(rate(d_eyes_server_tasks_completed_total[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "thresholds": {
+          "steps": [
+            {
+              "value": 0,
+              "color": "green"
+            },
+            {
+              "value": 0.01,
+              "color": "red"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Threat Intel Queue",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(d_eyes_server_ti_requests_total[5m])"
+        }
+      ]
+    },
+    {
+      "title": "BAS Scenario Success",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "increase(d_eyes_bas_scenarios_total{status=\"failed\"}[1h])"
+        }
+      ]
+    }
+  ]
+}

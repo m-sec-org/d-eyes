@@ -25,6 +25,85 @@ var (
 	taskRegistry   = make(map[string]taskCommandDefinition)
 )
 
+// RunnerFactory 构建各任务的 Runner，允许在测试或插件中注入自定义依赖。
+type RunnerFactory interface {
+	RespondRunner() tasks.TaskRunner
+	AuditRunner() tasks.TaskRunner
+	InventoryRunner() tasks.TaskRunner
+	SupplyChainRunner() tasks.TaskRunner
+	BaselineRunner() tasks.TaskRunner
+	BASRunner() tasks.TaskRunner
+	ActionRunner() tasks.TaskRunner
+}
+
+type defaultRunnerFactory struct{}
+
+// DefaultRunnerFactory 返回生产环境使用的默认 Runner 工厂。
+func DefaultRunnerFactory() RunnerFactory {
+	return defaultRunnerFactory{}
+}
+
+func (defaultRunnerFactory) RespondRunner() tasks.TaskRunner {
+	return tasks.RespondRunnerWithSelector(nil)
+}
+
+func (defaultRunnerFactory) AuditRunner() tasks.TaskRunner {
+	return tasks.AuditRunner()
+}
+
+func (defaultRunnerFactory) InventoryRunner() tasks.TaskRunner {
+	return tasks.InventoryRunnerWithExecutor(nil)
+}
+
+func (defaultRunnerFactory) SupplyChainRunner() tasks.TaskRunner {
+	return tasks.SupplyChainRunnerWithCollector(nil)
+}
+
+func (defaultRunnerFactory) BaselineRunner() tasks.TaskRunner {
+	return tasks.BaselineRunnerWithExecutor(nil)
+}
+
+func (defaultRunnerFactory) BASRunner() tasks.TaskRunner {
+	return tasks.BASRunnerWithDeps(nil, nil, nil)
+}
+
+func (defaultRunnerFactory) ActionRunner() tasks.TaskRunner {
+	return tasks.ActionTaskRunner()
+}
+
+func ensureRunnerFactory(factory RunnerFactory) RunnerFactory {
+	if factory == nil {
+		return DefaultRunnerFactory()
+	}
+	return factory
+}
+
+func registerDefaultTasks(factory RunnerFactory) []taskCommandDefinition {
+	defs := defaultTaskDefinitions(factory)
+	for _, def := range defs {
+		registerTaskDefinition(def)
+	}
+	return defs
+}
+
+// EnsureDefaultTaskRunners 确保全局任务注册表使用指定工厂生成的 Runner。
+func EnsureDefaultTaskRunners(factory RunnerFactory) {
+	registerDefaultTasks(factory)
+}
+
+func applyTaskDefinitions(defs []taskCommandDefinition) map[string]taskCommandDefinition {
+	prev := make(map[string]taskCommandDefinition, len(defs))
+	taskRegistryMu.Lock()
+	defer taskRegistryMu.Unlock()
+	for _, def := range defs {
+		if existing, ok := taskRegistry[def.Name]; ok {
+			prev[def.Name] = existing
+		}
+		taskRegistry[def.Name] = def
+	}
+	return prev
+}
+
 // App 提供向后兼容的默认 CLI 实例。
 var App = NewApp()
 
@@ -64,8 +143,7 @@ GLOBAL OPTIONS:
 		},
 	}
 
-	for _, def := range defaultTaskDefinitions() {
-		registerTaskDefinition(def)
+	for _, def := range registerDefaultTasks(nil) {
 		app.Commands = append(app.Commands, newTaskCommand(def))
 	}
 
@@ -131,14 +209,15 @@ GLOBAL OPTIONS:
 	return app
 }
 
-func defaultTaskDefinitions() []taskCommandDefinition {
+func defaultTaskDefinitions(factory RunnerFactory) []taskCommandDefinition {
+	factory = ensureRunnerFactory(factory)
 	return []taskCommandDefinition{
 		{
 			Name:        "respond",
 			Usage:       "综合各模块能力执行综合安全分析任务",
 			Description: "面向安全事件的快速排查流程，包含恶意文件扫描、网络连接分析等子任务组合。",
 			Category:    "Operations",
-			Runner:      tasks.RespondRunner(),
+			Runner:      factory.RespondRunner(),
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:  "targets",
@@ -151,14 +230,14 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 			Usage:       "执行合规审计任务",
 			Description: "聚焦操作系统、账号和配置的基线审计流程，输出整改建议。",
 			Category:    "Operations",
-			Runner:      tasks.AuditRunner(),
+			Runner:      factory.AuditRunner(),
 		},
 		{
 			Name:        "inventory",
 			Usage:       "执行资产梳理任务",
 			Description: "对网络范围进行主机与端口巡检，生成资产清单。",
 			Category:    "Operations",
-			Runner:      tasks.InventoryRunner(),
+			Runner:      factory.InventoryRunner(),
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:  "targets",
@@ -187,7 +266,7 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 			Usage:       "执行供应链安全任务",
 			Description: "生成或采集 SBOM 清单，分析依赖风险。",
 			Category:    "Operations",
-			Runner:      tasks.SupplyChainRunner(),
+			Runner:      factory.SupplyChainRunner(),
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:  "mode",
@@ -216,7 +295,7 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 			Usage:       "执行基线检查任务",
 			Description: "调度系统安全基线检查，输出风险统计与修复建议。",
 			Category:    "Operations",
-			Runner:      tasks.BaselineRunner(),
+			Runner:      factory.BaselineRunner(),
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:  "scope",
@@ -233,7 +312,7 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 			Usage:       "执行 BAS（攻击模拟）任务",
 			Description: "运行预定义或自定义的攻击场景，验证防御与响应能力。",
 			Category:    "Operations",
-			Runner:      tasks.BASRunner(),
+			Runner:      factory.BASRunner(),
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					Name:  "scenario",
@@ -266,15 +345,63 @@ func defaultTaskDefinitions() []taskCommandDefinition {
 			Usage:       "执行来自 Server 的响应动作",
 			Description: "由自动化 Playbook 调度的即时操作，例如隔离进程、阻断网络等。",
 			Category:    "Automation",
-			Runner:      tasks.ActionTaskRunner(),
+			Runner:      factory.ActionRunner(),
 		},
 	}
 }
 
 func registerTaskDefinition(def taskCommandDefinition) {
+	applyTaskDefinitions([]taskCommandDefinition{def})
+}
+
+// OverrideRunnerFactoryForTesting 允许测试场景批量替换内置 Runner，返回恢复函数。
+func OverrideRunnerFactoryForTesting(factory RunnerFactory) func() {
+	if factory == nil {
+		panic("override runner factory: factory is nil")
+	}
+	defs := defaultTaskDefinitions(factory)
+	prev := applyTaskDefinitions(defs)
+	return func() {
+		taskRegistryMu.Lock()
+		defer taskRegistryMu.Unlock()
+		for _, def := range defs {
+			if original, ok := prev[def.Name]; ok {
+				taskRegistry[def.Name] = original
+			} else {
+				delete(taskRegistry, def.Name)
+			}
+		}
+	}
+}
+
+// OverrideTaskRunnerForTesting 替换指定任务的 Runner，返回恢复函数，仅供单元测试调用。
+func OverrideTaskRunnerForTesting(name string, runner tasks.TaskRunner) func() {
+	if strings.TrimSpace(name) == "" {
+		panic("override task runner: name is empty")
+	}
+	if runner == nil {
+		panic("override task runner: runner is nil")
+	}
 	taskRegistryMu.Lock()
-	defer taskRegistryMu.Unlock()
-	taskRegistry[def.Name] = def
+	prev, existed := taskRegistry[name]
+	taskRegistry[name] = taskCommandDefinition{
+		Name:        name,
+		Usage:       prev.Usage,
+		Description: prev.Description,
+		Category:    prev.Category,
+		Runner:      runner,
+		Flags:       prev.Flags,
+	}
+	taskRegistryMu.Unlock()
+	return func() {
+		taskRegistryMu.Lock()
+		defer taskRegistryMu.Unlock()
+		if existed {
+			taskRegistry[name] = prev
+			return
+		}
+		delete(taskRegistry, name)
+	}
 }
 
 // RegisterCommand 注册插件到默认 App。
@@ -365,7 +492,11 @@ func newTaskCommand(def taskCommandDefinition) *cli.Command {
 				manager = reporting.NewManager(override)
 			}
 			SetQuietMode(req.Quiet)
-			return tasks.Execute(c.Context, def.Name, def.Runner, req, manager)
+			runner := def.Runner
+			if resolved, ok := TaskRunnerByName(def.Name); ok && resolved != nil {
+				runner = resolved
+			}
+			return tasks.Execute(c.Context, def.Name, runner, req, manager)
 		},
 	}
 }

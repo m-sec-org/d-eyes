@@ -2,22 +2,46 @@ package tasks
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/m-sec-org/d-eyes/agent/internal/assets"
 	"github.com/m-sec-org/d-eyes/agent/internal/progress"
+	"github.com/m-sec-org/d-eyes/agent/internal/tasks/taskcache"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 )
 
-type inventoryRunner struct{}
+const (
+	inventoryCacheNamespace       = "inventory.scan"
+	inventoryTargetCacheNamespace = "inventory.scan.targets"
+)
+
+var inventoryCacheTTL = 6 * time.Hour
+
+type inventoryExecutor interface {
+	ScanTarget(ctx context.Context, target string, opts assets.ScanOptions, req TaskRequest) (inventoryReport, error)
+}
+
+type inventoryRunner struct {
+	executor inventoryExecutor
+}
 
 func InventoryRunner() TaskRunner {
-	return &inventoryRunner{}
+	return InventoryRunnerWithExecutor(nil)
+}
+
+func InventoryRunnerWithExecutor(exec inventoryExecutor) TaskRunner {
+	if exec == nil {
+		exec = defaultInventoryExecutor{}
+	}
+	return &inventoryRunner{executor: exec}
 }
 
 func (r *inventoryRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error) {
@@ -41,23 +65,31 @@ func (r *inventoryRunner) Run(ctx context.Context, req TaskRequest) (TaskResult,
 		"targets":      strings.Join(targets, ","),
 		"scan_scope":   profile,
 	}
+	cacheKey := inventoryCacheKey(profile, targets, baseOptions, req.Flags)
+	if cached, ok, err := restoreInventoryFromCache(req, cacheKey); err == nil && ok {
+		return cached, nil
+	} else if err != nil {
+		resultMetadata["cache.restore_error"] = err.Error()
+	}
 
+	exec := r.executor
 	for _, target := range targets {
 		select {
 		case <-ctx.Done():
 			return TaskResult{Outputs: outputs, Risks: riskTotals, Notes: []string{"任务被取消"}}, ctx.Err()
 		default:
 		}
-		report, err := r.scanTarget(ctx, target, baseOptions, req)
+		report, err := exec.ScanTarget(ctx, target, baseOptions, req)
 		if err != nil {
 			return TaskResult{}, err
 		}
 		results = append(results, report)
 		outputs = append(outputs, report.OutputRecord)
 		accumulateRisk(riskTotals, report.Risks)
+		cacheInventoryTarget(cacheKey, report)
 	}
 
-	if summaryRecord, summaryMeta, err := writeInventorySummary(req, results, riskTotals, targets); err == nil && summaryRecord.Path != "" {
+	if summaryRecord, summaryMeta, err := writeInventorySummary(req, results, riskTotals, targets, cacheKey, profile); err == nil && summaryRecord.Path != "" {
 		outputs = append(outputs, summaryRecord)
 		for k, v := range summaryMeta {
 			resultMetadata[k] = v
@@ -77,9 +109,12 @@ type inventoryReport struct {
 	Ports        []assets.PortInfo
 	OutputRecord reporting.OutputRecord
 	Risks        map[string]int
+	Path         string
 }
 
-func (r *inventoryRunner) scanTarget(ctx context.Context, target string, opts assets.ScanOptions, req TaskRequest) (inventoryReport, error) {
+type defaultInventoryExecutor struct{}
+
+func (defaultInventoryExecutor) ScanTarget(ctx context.Context, target string, opts assets.ScanOptions, req TaskRequest) (inventoryReport, error) {
 	scanner := assets.CreateScannerFromOptions(opts)
 	if scanner == nil {
 		return inventoryReport{}, fmt.Errorf("无法创建扫描器")
@@ -159,6 +194,7 @@ func (r *inventoryRunner) scanTarget(ctx context.Context, target string, opts as
 			Path:  path,
 		},
 		Risks: risks,
+		Path:  path,
 	}, nil
 }
 
@@ -209,7 +245,7 @@ func buildInventoryOptions(profile string, flags map[string]any) assets.ScanOpti
 	return options
 }
 
-func writeInventorySummary(req TaskRequest, reports []inventoryReport, risks map[string]int, targets []string) (reporting.OutputRecord, map[string]string, error) {
+func writeInventorySummary(req TaskRequest, reports []inventoryReport, risks map[string]int, targets []string, cacheKey, profile string) (reporting.OutputRecord, map[string]string, error) {
 	file, path, err := req.Manager.CreateFile("inventory", req.Name+"-summary", "json")
 	if err != nil {
 		return reporting.OutputRecord{}, nil, err
@@ -267,12 +303,17 @@ func writeInventorySummary(req TaskRequest, reports []inventoryReport, risks map
 		return reporting.OutputRecord{}, nil, err
 	}
 	meta := map[string]string{
-		"summary_path": path,
-		"total_hosts":  fmt.Sprintf("%d", totalHosts),
-		"total_ports":  fmt.Sprintf("%d", totalPorts),
-		"targets":      strings.Join(targets, ","),
-		"target_count": fmt.Sprintf("%d", len(targets)),
+		"summary_path":       path,
+		"total_hosts":        fmt.Sprintf("%d", totalHosts),
+		"total_ports":        fmt.Sprintf("%d", totalPorts),
+		"targets":            strings.Join(targets, ","),
+		"target_count":       fmt.Sprintf("%d", len(targets)),
+		"profile":            profile,
+		"cache.target_names": strings.Join(targets, ","),
 	}
+	embedRiskMetadata(meta, risks)
+	setCacheMetadata(meta, inventoryCacheNamespace, cacheKey, "inventory-full", inventoryCacheTTL)
+	_ = taskcache.SaveFile(inventoryCacheNamespace, cacheKey, path, meta)
 	return reporting.OutputRecord{Label: "资产扫描汇总", Path: path}, meta, nil
 }
 
@@ -349,4 +390,111 @@ func optionsToMap(o assets.ScanOptions) map[string]any {
 		"debug":          o.Debug,
 		"concurrency":    o.Concurrency,
 	}
+}
+
+func inventoryCacheKey(profile string, targets []string, opts assets.ScanOptions, flags map[string]any) string {
+	normalizedTargets := append([]string(nil), targets...)
+	sort.Strings(normalizedTargets)
+	builder := strings.Builder{}
+	builder.WriteString(strings.ToLower(profile))
+	builder.WriteString("|targets=")
+	builder.WriteString(strings.Join(normalizedTargets, ","))
+	builder.WriteString("|ports=")
+	builder.WriteString(opts.Ports)
+	builder.WriteString("|method=")
+	builder.WriteString(opts.ScanMethod)
+	builder.WriteString("|discovery=")
+	builder.WriteString(opts.DiscoveryMethod)
+	builder.WriteString("|flags=")
+	builder.WriteString(hashFlags(flags))
+	sum := sha256.Sum256([]byte(builder.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+func cacheInventoryTarget(cacheKey string, report inventoryReport) {
+	if report.OutputRecord.Path == "" {
+		return
+	}
+	meta := map[string]string{
+		"target": report.Target,
+		"label":  report.OutputRecord.Label,
+	}
+	embedRiskMetadata(meta, report.Risks)
+	setCacheMetadata(meta, inventoryTargetCacheNamespace, inventoryTargetCacheKey(cacheKey, report.Target), "inventory-target", inventoryCacheTTL)
+	_ = taskcache.SaveFile(inventoryTargetCacheNamespace, inventoryTargetCacheKey(cacheKey, report.Target), report.OutputRecord.Path, meta)
+}
+
+func restoreInventoryFromCache(req TaskRequest, cacheKey string) (TaskResult, bool, error) {
+	file, path, err := req.Manager.CreateFile("inventory", req.Name+"-summary", "json")
+	if err != nil {
+		return TaskResult{}, false, err
+	}
+	file.Close()
+	meta, ok, err := taskcache.RestoreTo(inventoryCacheNamespace, cacheKey, inventoryCacheTTL, path)
+	if err != nil || !ok {
+		_ = os.Remove(path)
+		return TaskResult{}, ok, err
+	}
+	markCacheHit(meta, inventoryCacheTTL)
+	resultMetadata := cloneStringMap(meta)
+	if resultMetadata == nil {
+		resultMetadata = make(map[string]string)
+	}
+	targets := parseCachedTargets(meta["cache.target_names"])
+	outputs := make([]reporting.OutputRecord, 0, len(targets)+1)
+	riskTotals := metadataToRisk(meta)
+	for _, target := range targets {
+		out, risks, ok, err := restoreInventoryTargetArtifact(req, cacheKey, target)
+		if err != nil || !ok {
+			_ = os.Remove(path)
+			return TaskResult{}, ok, err
+		}
+		outputs = append(outputs, out)
+		accumulateRisk(riskTotals, risks)
+	}
+	outputs = append(outputs, reporting.OutputRecord{Label: "资产扫描汇总", Path: path})
+	return TaskResult{
+		Outputs:  outputs,
+		Risks:    riskTotals,
+		Metadata: resultMetadata,
+		Notes:    []string{"命中资产扫描缓存"},
+	}, true, nil
+}
+
+func restoreInventoryTargetArtifact(req TaskRequest, cacheKey, target string) (reporting.OutputRecord, map[string]int, bool, error) {
+	file, path, err := req.Manager.CreateFile("inventory", fmt.Sprintf("%s-%s", req.Name, sanitizeFileComponent(target)), "json")
+	if err != nil {
+		return reporting.OutputRecord{}, nil, false, err
+	}
+	file.Close()
+	meta, ok, err := taskcache.RestoreTo(inventoryTargetCacheNamespace, inventoryTargetCacheKey(cacheKey, target), inventoryCacheTTL, path)
+	if err != nil || !ok {
+		_ = os.Remove(path)
+		return reporting.OutputRecord{}, nil, ok, err
+	}
+	markCacheHit(meta, inventoryCacheTTL)
+	label := meta["label"]
+	if label == "" {
+		label = fmt.Sprintf("资产扫描：%s", target)
+	}
+	return reporting.OutputRecord{Label: label, Path: path}, metadataToRisk(meta), true, nil
+}
+
+func inventoryTargetCacheKey(cacheKey, target string) string {
+	return cacheKey + "|" + strings.ToLower(strings.TrimSpace(target))
+}
+
+func parseCachedTargets(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	items := strings.Split(raw, ",")
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }

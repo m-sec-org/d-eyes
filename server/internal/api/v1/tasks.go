@@ -206,7 +206,7 @@ func (h *TaskHandler) createTask(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "scenario not active"})
 			return
 		}
-		if scenario.RequiresApproval && status != basscenarios.StatusApproved && status != basscenarios.StatusActive {
+		if scenario.RequiresApproval && !basscenarios.IsScenarioApproved(scenario) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "scenario not approved"})
 			return
 		}
@@ -224,6 +224,8 @@ func (h *TaskHandler) createTask(c *gin.Context) {
 		if scenario.Approval.ApprovedBy != "" {
 			metadata["sandbox_approved"] = "true"
 		}
+		metadata["sandbox_policy_id"] = scenario.ID.String()
+		metadata["sandbox_policy_version"] = strconv.Itoa(scenario.Version)
 		metadata["scenario_status"] = scenario.Status
 		metadata["scenario_version"] = strconv.Itoa(scenario.Version)
 		if encodedLimits, err := json.Marshal(scenario.ResourceLimits); err == nil {
@@ -280,6 +282,9 @@ func (h *TaskHandler) createTask(c *gin.Context) {
 }
 
 func (h *TaskHandler) listTasks(c *gin.Context) {
+	if !h.requirePermission(c, "tasks.read") {
+		return
+	}
 	ctx := c.Request.Context()
 	limit := 20
 	if v := c.Query("limit"); v != "" {
@@ -313,6 +318,9 @@ func (h *TaskHandler) listTasks(c *gin.Context) {
 }
 
 func (h *TaskHandler) getTask(c *gin.Context) {
+	if !h.requirePermission(c, "tasks.read") {
+		return
+	}
 	ctx := c.Request.Context()
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -337,6 +345,9 @@ func (h *TaskHandler) getTask(c *gin.Context) {
 }
 
 func (h *TaskHandler) getTaskVisuals(c *gin.Context) {
+	if !h.requirePermission(c, "tasks.read") {
+		return
+	}
 	ctx := c.Request.Context()
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -469,6 +480,9 @@ type supplyChainReportResponse struct {
 }
 
 func (h *TaskHandler) getSupplyChainReport(c *gin.Context) {
+	if !h.requirePermission(c, "reports.view") {
+		return
+	}
 	ctx := c.Request.Context()
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -630,7 +644,7 @@ type taskActionRequest struct {
 }
 
 func (h *TaskHandler) handleTaskAction(c *gin.Context) {
-	if !h.requirePermission(c, "tasks.intervene") {
+	if !h.requirePermission(c, "tasks.actions") {
 		return
 	}
 	id, err := uuid.Parse(c.Param("id"))
@@ -760,6 +774,9 @@ type respondReportResponse struct {
 }
 
 func (h *TaskHandler) getRespondReport(c *gin.Context) {
+	if !h.requirePermission(c, "reports.view") {
+		return
+	}
 	ctx := c.Request.Context()
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -893,6 +910,9 @@ type basReportResponse struct {
 }
 
 func (h *TaskHandler) getBaselineReport(c *gin.Context) {
+	if !h.requirePermission(c, "reports.view") {
+		return
+	}
 	ctx := c.Request.Context()
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -967,6 +987,9 @@ func (h *TaskHandler) getBaselineReport(c *gin.Context) {
 }
 
 func (h *TaskHandler) getBASReport(c *gin.Context) {
+	if !h.requirePermission(c, "reports.view") {
+		return
+	}
 	ctx := c.Request.Context()
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -1072,6 +1095,9 @@ type inventoryReportResponse struct {
 }
 
 func (h *TaskHandler) getInventoryReport(c *gin.Context) {
+	if !h.requirePermission(c, "reports.view") {
+		return
+	}
 	ctx := c.Request.Context()
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {

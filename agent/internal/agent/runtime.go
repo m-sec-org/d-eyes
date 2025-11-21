@@ -16,20 +16,46 @@ import (
 
 // Runtime 封装 CLI 运行入口，便于复用/集成。
 type Runtime struct {
-	App *cli.App
+	App                  *cli.App
+	runnerFactory        internal.RunnerFactory
+	runnerFactoryRestore func()
+}
+
+type runtimeOptions struct {
+	runnerFactory internal.RunnerFactory
+}
+
+// RuntimeOption 自定义 Runtime 行为（目前支持 Runner 工厂注入）。
+type RuntimeOption func(*runtimeOptions)
+
+// WithRunnerFactory 允许调用方为 CLI 注入自定义 Runner 工厂（主要用于测试）。
+func WithRunnerFactory(factory internal.RunnerFactory) RuntimeOption {
+	return func(opts *runtimeOptions) {
+		opts.runnerFactory = factory
+	}
 }
 
 // NewRuntime 创建新的运行时，默认复用 internal.App。
-func NewRuntime() *Runtime {
+func NewRuntime(opts ...RuntimeOption) *Runtime {
+	config := runtimeOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&config)
+		}
+	}
 	app := internal.App
 	ensureRemoteCommand(app)
-	return &Runtime{App: app}
+	return &Runtime{App: app, runnerFactory: config.runnerFactory}
 }
 
 // Run 执行 CLI 应用，返回退出码与错误。
 func (r *Runtime) Run(args []string) (int, error) {
 	if r.App == nil {
 		return 1, errors.New("agent runtime: cli app is nil")
+	}
+	if r.runnerFactory != nil {
+		r.applyRunnerFactory()
+		defer r.restoreRunnerFactory()
 	}
 
 	logo.ShowLogo()
@@ -52,6 +78,21 @@ func (r *Runtime) Run(args []string) (int, error) {
 		fmt.Println(color.Green.Sprintf("Thank you for using d-eyes, this run took %f seconds.", time.Since(start).Seconds()))
 	}
 	return 0, nil
+}
+
+func (r *Runtime) applyRunnerFactory() {
+	if r.runnerFactoryRestore != nil || r.runnerFactory == nil {
+		return
+	}
+	r.runnerFactoryRestore = internal.OverrideRunnerFactoryForTesting(r.runnerFactory)
+}
+
+func (r *Runtime) restoreRunnerFactory() {
+	if r.runnerFactoryRestore == nil {
+		return
+	}
+	r.runnerFactoryRestore()
+	r.runnerFactoryRestore = nil
 }
 
 func ensureRemoteCommand(app *cli.App) {

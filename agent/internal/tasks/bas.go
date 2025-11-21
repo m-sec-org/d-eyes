@@ -23,11 +23,47 @@ import (
 //go:embed bas_scenarios/*.json
 var embeddedBAScenarios embed.FS
 
-type basRunner struct{}
+type scenarioLoader interface {
+	Load(req TaskRequest) (Scenario, error)
+}
+
+type sandboxExecutor interface {
+	Execute(ctx context.Context, scenario Scenario, step ScenarioStep, approved bool) stepOutcome
+}
+
+type sandboxExecutorFactory interface {
+	New(cfg sandbox.Config, enabled bool) sandboxExecutor
+}
+
+type telemetryEncoder interface {
+	BuildSteps(scenario Scenario, outcomes []stepOutcome) ([]telemetrypkg.BAStepTelemetry, int, int)
+	EncodeSteps([]telemetrypkg.BAStepTelemetry) (string, error)
+	EncodeStats(telemetrypkg.SandboxStats) (string, error)
+}
+
+type basRunner struct {
+	loader         scenarioLoader
+	sandboxFactory sandboxExecutorFactory
+	telemetry      telemetryEncoder
+}
 
 // BASRunner returns a TaskRunner for BAS scenarios.
 func BASRunner() TaskRunner {
-	return &basRunner{}
+	return BASRunnerWithDeps(nil, nil, nil)
+}
+
+// BASRunnerWithDeps allows tests to inject custom dependencies.
+func BASRunnerWithDeps(loader scenarioLoader, factory sandboxExecutorFactory, encoder telemetryEncoder) TaskRunner {
+	if loader == nil {
+		loader = defaultScenarioLoader{}
+	}
+	if factory == nil {
+		factory = defaultSandboxExecutorFactory{}
+	}
+	if encoder == nil {
+		encoder = defaultTelemetryEncoder{}
+	}
+	return &basRunner{loader: loader, sandboxFactory: factory, telemetry: encoder}
 }
 
 type Scenario struct {
@@ -82,8 +118,46 @@ type scenarioReport struct {
 	Notes []string `json:"notes,omitempty"`
 }
 
+type defaultScenarioLoader struct{}
+
+func (defaultScenarioLoader) Load(req TaskRequest) (Scenario, error) {
+	return loadScenario(req)
+}
+
+type defaultSandboxExecutorFactory struct{}
+
+func (defaultSandboxExecutorFactory) New(cfg sandbox.Config, enabled bool) sandboxExecutor {
+	return &sandboxManagerExecutor{
+		controller:     sandbox.NewController(cfg),
+		sandboxEnabled: enabled,
+	}
+}
+
+type sandboxManagerExecutor struct {
+	controller     sandbox.Controller
+	sandboxEnabled bool
+}
+
+func (s *sandboxManagerExecutor) Execute(ctx context.Context, scenario Scenario, step ScenarioStep, approved bool) stepOutcome {
+	return executeScenarioStep(ctx, scenario, step, s.controller, s.sandboxEnabled, approved)
+}
+
+type defaultTelemetryEncoder struct{}
+
+func (defaultTelemetryEncoder) BuildSteps(scenario Scenario, outcomes []stepOutcome) ([]telemetrypkg.BAStepTelemetry, int, int) {
+	return buildBAStepTelemetry(scenario, outcomes)
+}
+
+func (defaultTelemetryEncoder) EncodeSteps(steps []telemetrypkg.BAStepTelemetry) (string, error) {
+	return telemetrypkg.EncodeBASteps(steps)
+}
+
+func (defaultTelemetryEncoder) EncodeStats(stats telemetrypkg.SandboxStats) (string, error) {
+	return telemetrypkg.EncodeSandboxStats(stats)
+}
+
 func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error) {
-	scenario, err := loadScenario(req)
+	scenario, err := b.loader.Load(req)
 	if err != nil {
 		return TaskResult{}, err
 	}
@@ -91,7 +165,7 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 		return TaskResult{}, errors.New("bas scenario has no steps")
 	}
 
-	manager := sandbox.NewManager(sandbox.Config{
+	sandboxCfg := sandbox.Config{
 		Enabled:        req.Config.Sandbox.Enabled,
 		Runtime:        req.Config.Sandbox.Runtime,
 		RuntimeBinary:  req.Config.Sandbox.RuntimeBinary,
@@ -101,7 +175,8 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 		Denied:         append([]string(nil), req.Config.Sandbox.DeniedCommands...),
 		LogPath:        req.Config.Sandbox.LogPath,
 		FallbackToHost: req.Config.Sandbox.FallbackToHost,
-	})
+	}
+	executor := b.sandboxFactory.New(sandboxCfg, req.Config.Sandbox.Enabled)
 	outcomes := make([]stepOutcome, 0, len(scenario.Steps))
 	riskTotals := make(map[string]int)
 	notes := make([]string, 0)
@@ -138,7 +213,7 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 			continue
 		}
 
-		outcome := executeScenarioStep(ctx, scenario, step, manager, req.Config.Sandbox.Enabled, req.SandboxApproved)
+		outcome := executor.Execute(ctx, scenario, step, req.SandboxApproved)
 		outcomes = append(outcomes, outcome)
 		if outcome.Sandboxed {
 			sandboxUsed = true
@@ -233,7 +308,7 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 	if sandboxFallback {
 		metadata["sandbox_fallback"] = "true"
 	}
-	stepTelemetry, sandboxedCount, fallbackCount := buildBAStepTelemetry(scenario, outcomes)
+	stepsTelemetry, sandboxedCount, fallbackCount := b.telemetry.BuildSteps(scenario, outcomes)
 	statsPayload := telemetrypkg.SandboxStats{
 		Enabled:        req.Config.Sandbox.Enabled,
 		Required:       req.Config.Sandbox.RequireApproval,
@@ -242,12 +317,12 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 		Fallbacks:      fallbackCount,
 		TotalSteps:     len(outcomes),
 	}
-	if encodedSteps, err := telemetrypkg.EncodeBASteps(stepTelemetry); err == nil && encodedSteps != "" {
+	if encodedSteps, err := b.telemetry.EncodeSteps(stepsTelemetry); err == nil && encodedSteps != "" {
 		metadata[sharedtelemetry.MetadataBASteps] = encodedSteps
 	} else if err != nil {
 		notes = append(notes, fmt.Sprintf("BAS 步骤遥测编码失败: %v", err))
 	}
-	if encodedStats, err := telemetrypkg.EncodeSandboxStats(statsPayload); err == nil && encodedStats != "" {
+	if encodedStats, err := b.telemetry.EncodeStats(statsPayload); err == nil && encodedStats != "" {
 		metadata[sharedtelemetry.MetadataSandboxStats] = encodedStats
 	}
 	if req.Config.Sandbox.RequireApproval {
@@ -399,7 +474,7 @@ func scenarioFileName(scenario Scenario) string {
 	return "bas-scenario"
 }
 
-func executeScenarioStep(ctx context.Context, scenario Scenario, step ScenarioStep, manager *sandbox.Manager, sandboxEnabled bool, approved bool) stepOutcome {
+func executeScenarioStep(ctx context.Context, scenario Scenario, step ScenarioStep, controller sandbox.Controller, sandboxEnabled bool, approved bool) stepOutcome {
 	start := time.Now()
 	outcome := stepOutcome{
 		ID:        step.ID,
@@ -434,7 +509,7 @@ func executeScenarioStep(ctx context.Context, scenario Scenario, step ScenarioSt
 		SandboxApproved: approved,
 		Identifier:      fmt.Sprintf("%s:%s:%s", strings.TrimSpace(scenario.ID), strings.TrimSpace(step.ID), step.Name),
 	}
-	runResult, err := manager.Run(ctx, runRequest)
+	runResult, err := controller.Run(ctx, runRequest)
 	outcome.EndedAt = runResult.FinishedAt
 	outcome.Stdout = runResult.Stdout
 	outcome.Stderr = runResult.Stderr

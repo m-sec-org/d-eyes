@@ -363,6 +363,52 @@ func (m *memoryStore) GetLatestTaskRun(_ context.Context, taskID uuid.UUID) (*mo
 	return latest, nil
 }
 
+func (m *memoryStore) ListTaskRunsByAgent(_ context.Context, agentID uuid.UUID, statuses []model.TaskStatus, limit int) ([]*model.TaskRun, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	statusSet := make(map[model.TaskStatus]struct{}, len(statuses))
+	for _, st := range statuses {
+		statusSet[st] = struct{}{}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	results := make([]*model.TaskRun, 0, limit)
+	for _, run := range m.taskRuns {
+		if run.AgentID != agentID {
+			continue
+		}
+		if len(statusSet) > 0 {
+			if _, ok := statusSet[run.Status]; !ok {
+				continue
+			}
+		}
+		copy := *run
+		if run.Metadata != nil {
+			copy.Metadata = cloneMap(run.Metadata)
+		}
+		results = append(results, &copy)
+		if len(results) >= limit {
+			break
+		}
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].LeaseExpires.Before(results[j].LeaseExpires)
+	})
+	return results, nil
+}
+
+func cloneMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(src))
+	for k, v := range src {
+		copy[k] = v
+	}
+	return copy
+}
+
 func (m *memoryStore) SaveArtifacts(_ context.Context, artifacts []model.Artifact) error {
 	if len(artifacts) == 0 {
 		return nil
@@ -770,6 +816,9 @@ func (m *memoryStore) CreatePlaybook(_ context.Context, playbook *model.Playbook
 	if playbook.Approvals != nil {
 		cp.Approvals = append([]model.PlaybookApproval(nil), playbook.Approvals...)
 	}
+	if playbook.ApprovalStates != nil {
+		cp.ApprovalStates = append([]model.PlaybookApprovalState(nil), playbook.ApprovalStates...)
+	}
 	m.playbooks[cp.ID] = &cp
 	return nil
 }
@@ -796,6 +845,9 @@ func (m *memoryStore) UpdatePlaybook(_ context.Context, playbook *model.Playbook
 	if playbook.Approvals != nil {
 		playbook.Approvals = append([]model.PlaybookApproval(nil), playbook.Approvals...)
 	}
+	if playbook.ApprovalStates != nil {
+		playbook.ApprovalStates = append([]model.PlaybookApprovalState(nil), playbook.ApprovalStates...)
+	}
 	playbook.UpdatedAt = time.Now()
 	*existing = *playbook
 	return nil
@@ -821,6 +873,9 @@ func (m *memoryStore) GetPlaybook(_ context.Context, id uuid.UUID) (*model.Playb
 	if playbook.Approvals != nil {
 		cp.Approvals = append([]model.PlaybookApproval(nil), playbook.Approvals...)
 	}
+	if playbook.ApprovalStates != nil {
+		cp.ApprovalStates = append([]model.PlaybookApprovalState(nil), playbook.ApprovalStates...)
+	}
 	return &cp, nil
 }
 
@@ -844,6 +899,9 @@ func (m *memoryStore) ListPlaybooks(_ context.Context, limit int) ([]*model.Play
 		}
 		if pb.Approvals != nil {
 			cp.Approvals = append([]model.PlaybookApproval(nil), pb.Approvals...)
+		}
+		if pb.ApprovalStates != nil {
+			cp.ApprovalStates = append([]model.PlaybookApprovalState(nil), pb.ApprovalStates...)
 		}
 		results = append(results, &cp)
 	}
@@ -1511,6 +1569,9 @@ func cloneBASScenario(src *model.BASScenario) *model.BASScenario {
 	}
 	if src.ApprovalPolicy != nil {
 		cp.ApprovalPolicy = append([]model.BASApprovalRule(nil), src.ApprovalPolicy...)
+	}
+	if src.ApprovalRecords != nil {
+		cp.ApprovalRecords = append([]model.BASScenarioApprovalRecord(nil), src.ApprovalRecords...)
 	}
 	return &cp
 }

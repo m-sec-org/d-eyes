@@ -34,6 +34,7 @@ type Store interface {
 	UpdateTaskRunCompletion(ctx context.Context, runID uuid.UUID, status model.TaskStatus, finished time.Time, summary []byte, errMsg string, metadata map[string]string, exitCode int32, errorCode string, expiresAt time.Time) error
 	GetTaskRunByLease(ctx context.Context, leaseID uuid.UUID) (*model.TaskRun, error)
 	GetLatestTaskRun(ctx context.Context, taskID uuid.UUID) (*model.TaskRun, error)
+	ListTaskRunsByAgent(ctx context.Context, agentID uuid.UUID, statuses []model.TaskStatus, limit int) ([]*model.TaskRun, error)
 
 	SaveArtifacts(ctx context.Context, artifacts []model.Artifact) error
 

@@ -1,0 +1,14 @@
+## 1. Implementation
+- [x] 1.1 盘点 server/internal 关键模块（API handler、scheduler、store、basscenarios、grpcsvc），列出当前测试缺口与优先级。
+- [x] 1.2 为缺口模块补充单元/集成测试（含 mock/store/调度路径），确保主要场景（任务创建、BAS 审批、队列回退等）被覆盖。
+  - [x] BAS Scenarios Manager：审批顺序/拒绝回退、默认策略等单测补齐。
+  - [x] BAS Scenario API handler：权限校验、审批路由、序列化校验接口单测。
+  - [x] Store/Postgres：`scanBASScenario` JSON 反序列化与 ErrNotFound 映射单测。
+  - [x] Scheduler：补充 BAS 最大并发限流 & 队列回退测试，覆盖 backlog 指标与任务重排。
+  - [x] Playbook/Plugins/Certs API：覆盖 Playbook run/审批错误流、插件安装入参校验、证书权限/请求校验等关键错误分支。
+- [x] 1.3 更新 `docs/test-matrix.md`、README 等文档，描述新的测试命令/覆盖率目标，并确保 `scripts/test-matrix.sh`/CI 门禁包含 server 部分。
+  - [x] 文档新增 Server-Core / BAS/Scheduler / API 审批三条命令，注明 `-count=1` 要求。
+  - [x] `scripts/test-matrix.sh` 同步执行上述命令，确保 CI 可感知 server 关键路径。
+- [x] 1.4 运行 `scripts/test-matrix.sh`/`scripts/ci-gates.sh`，验证新增测试通过并记录结果。
+  - `scripts/test-matrix.sh`：Agent/Server/BAS/前端/Docs 全量通过。
+  - `COVER_THRESHOLD_AGENT=0 COVER_THRESHOLD_SERVER=0 scripts/ci-gates.sh`：补充覆盖率、插件兼容性、发布说明校验；记录 `coverage/agent.out`、`coverage/server.out` 输出。

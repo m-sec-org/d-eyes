@@ -1,0 +1,62 @@
+groups:
+  - name: d-eyes-stage4
+    rules:
+      - alert: AgentCpuP95High
+        expr: histogram_quantile(0.95, rate(d_eyes_server_agent_cpu_percent_bucket[5m])) > 80
+        for: 10m
+        labels:
+          severity: warning
+          component: agent
+        annotations:
+          summary: Agent CPU P95 超过 80%
+          description: 调度器检测到 Agent CPU 压力升高，请检查限速/任务分片。
+
+      - alert: AgentMemoryP95High
+        expr: histogram_quantile(0.95, rate(d_eyes_server_agent_memory_percent_bucket[5m])) > 85
+        for: 10m
+        labels:
+          severity: warning
+          component: agent
+        annotations:
+          summary: Agent 内存 P95 超过 85%
+          description: 可能存在缓存泄露或任务分配不均衡。
+
+      - alert: TaskFailureRateHigh
+        expr: sum(rate(d_eyes_server_tasks_completed_total{status="failed"}[5m])) / sum(rate(d_eyes_server_tasks_completed_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+          component: scheduler
+        annotations:
+          summary: 任务失败率超过 1%
+          description: 自动阻断发布并触发回滚流程。
+
+      - alert: QueueDepthGrowing
+        expr: d_eyes_server_task_queue_depth > 200
+        for: 15m
+        labels:
+          severity: warning
+          component: scheduler
+        annotations:
+          summary: Scheduler 队列深度连续 15 分钟超过 200
+          description: 检查 Agent 数量和任务提交速率。
+
+      - alert: TIRequestFailure
+        expr: rate(d_eyes_server_ti_requests_failed_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: threat-intel
+        annotations:
+          summary: Threat Intel 请求失败
+          description: 某个 TI Provider 响应异常，请检查 API Key / 网络。
+
+      - alert: BASSuccessDrop
+        expr: increase(d_eyes_bas_scenarios_total{status="failed"}[30m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          component: bas
+        annotations:
+          summary: BAS 场景出现失败
+          description: 查看审计日志或 Ops Console BAS 面板定位失败原因。

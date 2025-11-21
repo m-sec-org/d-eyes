@@ -1,0 +1,4 @@
+current: stage4
+releases:
+  - name: stage4
+    notes: "Stage 4 优化阶段文档快照，覆盖插件、Playbook、运维与 BAS 指南。"

@@ -1,0 +1,41 @@
+.plugin-marketplace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.plugin-marketplace header h1 {
+  margin: 0;
+}
+
+.plugin-form textarea {
+  width: 100%;
+  border: 1px solid #dcdcdc;
+  border-radius: 8px;
+  padding: 12px;
+  font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
+}
+
+.plugin-form button {
+  margin-top: 8px;
+}
+
+.plugin-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.plugin-table th,
+.plugin-table td {
+  padding: 8px;
+  border-bottom: 1px solid #eee;
+  text-align: left;
+}
+
+.plugin-alert {
+  background: #fff4e5;
+  color: #8a6d3b;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #f0e1c2;
+}

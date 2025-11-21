@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/m-sec-org/d-eyes/agent/internal/model"
+	"github.com/m-sec-org/d-eyes/agent/internal/telemetry"
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
 	"github.com/m-sec-org/d-eyes/agent/pkg/exit"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
@@ -36,7 +37,10 @@ func ExecuteWithResult(ctx context.Context, name string, runner TaskRunner, req 
 	}
 	req.Manager = manager
 	start := time.Now()
+	tracker := telemetry.NewTaskResourceTracker()
 	result, err := runner.Run(ctx, req)
+	resourceStats := tracker.Snapshot()
+	result.Metadata = telemetry.AppendTaskResourceMetadata(result.Metadata, resourceStats)
 
 	status := "完成"
 	switch {

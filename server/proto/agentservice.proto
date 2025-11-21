@@ -28,6 +28,7 @@ message HeartbeatRequest {
   repeated string running_tasks = 3;
   int64 timestamp = 4;
   HeartbeatTelemetry telemetry = 5;
+  map<string, string> metadata = 6;
 }
 
 message HeartbeatResponse {
@@ -37,6 +38,8 @@ message HeartbeatResponse {
 message HeartbeatTelemetry {
   double latency_ms = 1;
   double cpu_percent = 2;
+  double io_util_percent = 4;
+  double memory_percent = 5;
   repeated string blocked_actions = 3;
 }
 

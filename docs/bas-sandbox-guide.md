@@ -24,6 +24,13 @@ sudo chmod +x /usr/local/bin/runsc
 ## 2. Agent 配置示例
 
 ```yaml
+remote:
+  enabled: true
+  server_grpc_addr: 127.0.0.1:9090
+  agent_token: changeme
+  labels:
+    network_boundary: dmz
+    tenant: soc-blue
 sandbox:
   enabled: true
   runtime: gvisor
@@ -52,6 +59,12 @@ tasks:
 - `require_approval: true` 时，远程任务需在 metadata 中携带 `sandbox_approved=true`，CLI 可通过 `--sandbox-approve` 快速审批。
 - `fallback_to_host: true` 允许在 gVisor 不可用时回退宿主执行，并在元数据与审计日志中标记。
 - `allowed_commands` / `denied_commands` 控制可执行二进制；若 `allowed_commands` 非空，则表示白名单模式。
+
+### 2.1 网络边界与标签要求
+
+- `remote.labels.network_boundary` 用于声明 Agent 所在的安全域（示例：`dmz`、`prod-subnet`）。Server 会读取 BAS 场景中的 `network_boundaries` 字段，只将任务调度到标签匹配的 Agent，避免跨域误执行。
+- `scenario_required_labels`（在场景编辑页或 API 中填写）使用 `key=value` 或 `key` 格式描述附加约束，例如 `tenant=blue`、`zone=dmz`。Agent 需在 `remote.labels` 中提供相应键值，否则调度器会拒绝租约并记录审计。
+- 若误配导致不满足条件，可在 Ops Console 中查看场景卡片的“边界/标签要求”并修正 Agent 配置；`scheduler` 会自动重排队列，无需重启。
 
 ## 3. 运行时审批与 CLI 开关
 

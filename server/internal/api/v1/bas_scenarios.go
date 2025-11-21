@@ -63,6 +63,8 @@ func (h *BASScenarioHandler) RegisterRoutes(r *gin.RouterGroup) {
 	group.PUT("/:id", h.updateScenario)
 	group.DELETE("/:id", h.deleteScenario)
 	group.POST("/:id/approve", h.approveScenario)
+	group.GET("/:id/approvals", h.listApprovals)
+	group.POST("/:id/approvals", h.updateScenarioApproval)
 	group.POST("/:id/activate", h.activateScenario)
 	group.POST("/:id/deactivate", h.deactivateScenario)
 	group.POST("/:id/publish", h.publishScenario)
@@ -70,6 +72,9 @@ func (h *BASScenarioHandler) RegisterRoutes(r *gin.RouterGroup) {
 }
 
 func (h *BASScenarioHandler) listScenarios(c *gin.Context) {
+	if !h.requirePermission(c, "bas.view") {
+		return
+	}
 	items, err := h.Manager.List(c.Request.Context())
 	if err != nil && !isContextError(err) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -102,6 +107,9 @@ func (h *BASScenarioHandler) createScenario(c *gin.Context) {
 }
 
 func (h *BASScenarioHandler) getScenario(c *gin.Context) {
+	if !h.requirePermission(c, "bas.view") {
+		return
+	}
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
@@ -171,19 +179,69 @@ func (h *BASScenarioHandler) approveScenario(c *gin.Context) {
 	}
 	var body struct {
 		ApprovedBy string `json:"approved_by" binding:"required"`
+		Role       string `json:"role"`
+		Action     string `json:"action"`
 		Notes      string `json:"notes"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	item, err := h.Manager.Approve(c.Request.Context(), id, body.ApprovedBy, body.Notes)
+	item, err := h.Manager.UpdateApproval(c.Request.Context(), id, body.Role, body.ApprovedBy, body.Action, body.Notes)
 	if err != nil {
 		c.JSON(statusFromScenarioError(err), gin.H{"error": err.Error()})
 		return
 	}
 	h.recordAudit(c, "bas.scenario.approve", "bas:"+id.String(), "accepted", map[string]string{"notes": body.Notes})
 	c.JSON(http.StatusOK, item)
+}
+
+func (h *BASScenarioHandler) listApprovals(c *gin.Context) {
+	if !h.requirePermission(c, "bas.approve") {
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	scenario, err := h.Manager.Get(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(statusFromScenarioError(err), gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"approval_policy":  scenario.ApprovalPolicy,
+		"approval_records": scenario.ApprovalRecords,
+	})
+}
+
+func (h *BASScenarioHandler) updateScenarioApproval(c *gin.Context) {
+	if !h.requirePermission(c, "bas.approve") {
+		return
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		Role   string `json:"role"`
+		Action string `json:"action"`
+		Actor  string `json:"actor" binding:"required"`
+		Notes  string `json:"notes"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	scenario, err := h.Manager.UpdateApproval(c.Request.Context(), id, body.Role, body.Actor, body.Action, body.Notes)
+	if err != nil {
+		c.JSON(statusFromScenarioError(err), gin.H{"error": err.Error()})
+		return
+	}
+	h.recordAudit(c, "bas.scenario.approval", "bas:"+id.String(), body.Action, map[string]string{"role": body.Role})
+	c.JSON(http.StatusOK, scenario)
 }
 
 func (h *BASScenarioHandler) activateScenario(c *gin.Context) {

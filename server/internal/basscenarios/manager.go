@@ -22,8 +22,20 @@ type (
 	ScenarioStep   = model.BASScenarioStep
 	ResourceLimits = model.BASResourceLimits
 	ApprovalState  = model.BASScenarioApprovalState
+	ApprovalRecord = model.BASScenarioApprovalRecord
 	ApprovalRule   = model.BASApprovalRule
 	ExecutionPlan  = model.BASExecutionPlan
+)
+
+const (
+	scenarioApprovalPending  = model.ScenarioApprovalPending
+	scenarioApprovalApproved = model.ScenarioApprovalApproved
+	scenarioApprovalRejected = model.ScenarioApprovalRejected
+
+	// Re-export approval states for callers that depend on package constants.
+	ScenarioApprovalPending  = scenarioApprovalPending
+	ScenarioApprovalApproved = scenarioApprovalApproved
+	ScenarioApprovalRejected = scenarioApprovalRejected
 )
 
 // Config drives persistence and defaults for BAS scenarios.
@@ -156,6 +168,7 @@ func (m *Manager) Create(ctx context.Context, input Scenario) (*Scenario, error)
 	scenario.Approval = ApprovalState{}
 	scenario.Steps = normalizeSteps(scenario.Steps)
 	m.applyDefaults(scenario)
+	m.ensureApprovalRecords(scenario)
 	if err := validateScenario(scenario); err != nil {
 		return nil, err
 	}
@@ -182,12 +195,14 @@ func (m *Manager) Update(ctx context.Context, id uuid.UUID, input Scenario) (*Sc
 	scenario.CreatedAt = current.CreatedAt
 	scenario.UpdatedAt = m.clockNow()
 	scenario.Approval = current.Approval
+	scenario.ApprovalRecords = current.ApprovalRecords
 	scenario.PublishedAt = current.PublishedAt
 	if scenario.CreatedBy == "" {
 		scenario.CreatedBy = current.CreatedBy
 	}
 	scenario.Steps = normalizeSteps(scenario.Steps)
 	m.applyDefaults(scenario)
+	m.ensureApprovalRecords(scenario)
 	if err := validateScenario(scenario); err != nil {
 		return nil, err
 	}
@@ -213,6 +228,7 @@ func (m *Manager) Publish(ctx context.Context, id uuid.UUID, updatedBy string) (
 	scenario.Status = StatusPending.String()
 	scenario.Version++
 	scenario.Approval = ApprovalState{}
+	resetApprovalRecords(scenario.ApprovalRecords)
 	scenario.PublishedAt = &now
 	scenario.UpdatedAt = now
 	scenario.UpdatedBy = updatedBy
@@ -225,29 +241,7 @@ func (m *Manager) Publish(ctx context.Context, id uuid.UUID, updatedBy string) (
 
 // Approve marks a scenario as approved.
 func (m *Manager) Approve(ctx context.Context, id uuid.UUID, approver, notes string) (*Scenario, error) {
-	scenario, err := m.store.GetBASScenario(ctx, id)
-	if err != nil {
-		return nil, translateStoreError(err)
-	}
-	if ScenarioStatus(scenario.Status) == StatusDisabled {
-		return nil, ErrInvalidStatusTransition
-	}
-	if ScenarioStatus(scenario.Status) != StatusPending {
-		return nil, fmt.Errorf("bas scenario: only pending scenarios can be approved")
-	}
-	now := m.clockNow()
-	scenario.Status = StatusApproved.String()
-	scenario.Approval = ApprovalState{
-		ApprovedBy: approver,
-		ApprovedAt: &now,
-		Notes:      notes,
-	}
-	scenario.UpdatedAt = now
-	if err := m.store.UpdateBASScenario(ctx, scenario); err != nil {
-		return nil, fmt.Errorf("bas scenario: approve: %w", err)
-	}
-	m.cacheScenario(scenario)
-	return cloneScenario(scenario), nil
+	return m.UpdateApproval(ctx, id, "", approver, "approve", notes)
 }
 
 // SetStatus transitions scenario status (activate/deactivate/pending).
@@ -263,6 +257,7 @@ func (m *Manager) SetStatus(ctx context.Context, id uuid.UUID, status ScenarioSt
 	scenario.UpdatedAt = m.clockNow()
 	if status == StatusDraft {
 		scenario.Approval = ApprovalState{}
+		resetApprovalRecords(scenario.ApprovalRecords)
 	}
 	if err := m.store.UpdateBASScenario(ctx, scenario); err != nil {
 		return nil, fmt.Errorf("bas scenario: set status: %w", err)
@@ -300,6 +295,7 @@ func (m *Manager) Clone(ctx context.Context, id uuid.UUID, createdBy, name strin
 		clone.UpdatedBy = source.UpdatedBy
 	}
 	clone.Approval = ApprovalState{}
+	resetApprovalRecords(clone.ApprovalRecords)
 	clone.PublishedAt = nil
 	if strings.TrimSpace(name) != "" {
 		clone.Name = name
@@ -316,6 +312,57 @@ func (m *Manager) Clone(ctx context.Context, id uuid.UUID, createdBy, name strin
 // ValidateScenarioExecutable ensures scenario can run (status + approval) used by task creation.
 func (m *Manager) ValidateScenarioExecutable(ctx context.Context, id uuid.UUID) (*Scenario, error) {
 	return m.Get(ctx, id)
+}
+
+// UpdateApproval handles role-based approvals/rejections.
+func (m *Manager) UpdateApproval(ctx context.Context, id uuid.UUID, role, actor, action, notes string) (*Scenario, error) {
+	scenario, err := m.store.GetBASScenario(ctx, id)
+	if err != nil {
+		return nil, translateStoreError(err)
+	}
+	if ScenarioStatus(scenario.Status) == StatusDisabled {
+		return nil, ErrInvalidStatusTransition
+	}
+	m.ensureApprovalRecords(scenario)
+	if len(scenario.ApprovalRecords) == 0 {
+		return nil, fmt.Errorf("bas scenario: no approval policy configured")
+	}
+	idx := selectApprovalIndex(scenario.ApprovalRecords, role)
+	if idx < 0 {
+		return nil, fmt.Errorf("bas scenario: pending approval not found")
+	}
+	for i := 0; i < idx; i++ {
+		if scenario.ApprovalRecords[i].Status != scenarioApprovalApproved {
+			return nil, fmt.Errorf("bas scenario: previous approval %q pending", scenario.ApprovalRecords[i].Role)
+		}
+	}
+	now := m.clockNow()
+	state := &scenario.ApprovalRecords[idx]
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "approve", "approved", "":
+		state.Status = scenarioApprovalApproved
+	case "reject", "rejected":
+		state.Status = scenarioApprovalRejected
+	default:
+		return nil, fmt.Errorf("bas scenario: invalid approval action %q", action)
+	}
+	state.Actor = actor
+	state.Notes = notes
+	state.UpdatedAt = &now
+	scenario.Approval = snapshotApprovalState(scenario.ApprovalRecords)
+	scenario.UpdatedAt = now
+	scenario.UpdatedBy = actor
+	if state.Status == scenarioApprovalRejected {
+		scenario.Status = StatusPending.String()
+		resetFollowingRecords(scenario.ApprovalRecords, idx+1)
+	} else if allScenarioApprovalsApproved(scenario.ApprovalRecords) {
+		scenario.Status = StatusApproved.String()
+	}
+	if err := m.store.UpdateBASScenario(ctx, scenario); err != nil {
+		return nil, fmt.Errorf("bas scenario: update approval: %w", err)
+	}
+	m.cacheScenario(scenario)
+	return cloneScenario(scenario), nil
 }
 
 func (m *Manager) applyDefaults(scenario *Scenario) {
@@ -399,6 +446,99 @@ func normalizeSteps(steps []ScenarioStep) []ScenarioStep {
 		result[idx] = step
 	}
 	return result
+}
+
+func (m *Manager) ensureApprovalRecords(scenario *Scenario) {
+	if scenario == nil {
+		return
+	}
+	if len(scenario.ApprovalPolicy) == 0 {
+		scenario.ApprovalRecords = nil
+		scenario.Approval = ApprovalState{}
+		return
+	}
+	existing := make(map[string]ApprovalRecord)
+	for _, rec := range scenario.ApprovalRecords {
+		key := strings.ToLower(strings.TrimSpace(rec.Role))
+		if key == "" {
+			continue
+		}
+		existing[key] = rec
+	}
+	records := make([]ApprovalRecord, len(scenario.ApprovalPolicy))
+	for i, rule := range scenario.ApprovalPolicy {
+		key := strings.ToLower(strings.TrimSpace(rule.Role))
+		rec, ok := existing[key]
+		if !ok {
+			rec = model.BASScenarioApprovalRecord{Role: rule.Role, Status: scenarioApprovalPending}
+		}
+		records[i] = rec
+	}
+	scenario.ApprovalRecords = records
+	scenario.Approval = snapshotApprovalState(records)
+}
+
+func snapshotApprovalState(records []ApprovalRecord) ApprovalState {
+	for i := len(records) - 1; i >= 0; i-- {
+		if records[i].Status == scenarioApprovalApproved && records[i].Actor != "" {
+			return ApprovalState{ApprovedBy: records[i].Actor, ApprovedAt: records[i].UpdatedAt, Notes: records[i].Notes}
+		}
+	}
+	return ApprovalState{}
+}
+
+func allScenarioApprovalsApproved(records []ApprovalRecord) bool {
+	if len(records) == 0 {
+		return true
+	}
+	for _, rec := range records {
+		if rec.Status != scenarioApprovalApproved {
+			return false
+		}
+	}
+	return true
+}
+
+// IsScenarioApproved reports whether a scenario has passed all approvals.
+func IsScenarioApproved(scenario *Scenario) bool {
+	if scenario == nil {
+		return false
+	}
+	return allScenarioApprovalsApproved(scenario.ApprovalRecords) || ScenarioStatus(scenario.Status) == StatusApproved || ScenarioStatus(scenario.Status) == StatusActive
+}
+
+func selectApprovalIndex(records []ApprovalRecord, role string) int {
+	if len(records) == 0 {
+		return -1
+	}
+	if strings.TrimSpace(role) == "" {
+		for i, rec := range records {
+			if rec.Status == scenarioApprovalPending {
+				return i
+			}
+		}
+		return -1
+	}
+	key := strings.ToLower(strings.TrimSpace(role))
+	for i, rec := range records {
+		if strings.ToLower(strings.TrimSpace(rec.Role)) == key {
+			return i
+		}
+	}
+	return -1
+}
+
+func resetApprovalRecords(records []ApprovalRecord) {
+	resetFollowingRecords(records, 0)
+}
+
+func resetFollowingRecords(records []ApprovalRecord, start int) {
+	for i := start; i < len(records); i++ {
+		records[i].Status = scenarioApprovalPending
+		records[i].Actor = ""
+		records[i].Notes = ""
+		records[i].UpdatedAt = nil
+	}
 }
 
 func copyMap(src map[string]any) map[string]any {

@@ -25,14 +25,15 @@ func (p *PostgresStore) CreatePlaybook(ctx context.Context, playbook *model.Play
 	playbook.UpdatedAt = now
 	triggerJSON, _ := json.Marshal(playbook.Trigger)
 	approvalsJSON, _ := json.Marshal(playbook.Approvals)
+	stateJSON, _ := json.Marshal(playbook.ApprovalStates)
 	actionsJSON, _ := json.Marshal(playbook.Actions)
 	rollbackJSON, _ := json.Marshal(playbook.Rollback)
 	_, err := p.pool.Exec(ctx, `INSERT INTO playbooks (
-        id, name, description, status, version, trigger, conditions, approvals, actions, rollback,
+        id, name, description, status, version, trigger, conditions, approvals, approval_states, actions, rollback,
         created_by, updated_by, approved_by, created_at, updated_at, last_run_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 		playbook.ID, playbook.Name, playbook.Description, playbook.Status, playbook.Version,
-		triggerJSON, playbook.Conditions, approvalsJSON, actionsJSON, rollbackJSON, playbook.CreatedBy,
+		triggerJSON, playbook.Conditions, approvalsJSON, stateJSON, actionsJSON, rollbackJSON, playbook.CreatedBy,
 		playbook.UpdatedBy, playbook.ApprovedBy, playbook.CreatedAt, playbook.UpdatedAt, playbook.LastRunAt)
 	if err != nil {
 		return fmt.Errorf("insert playbook: %w", err)
@@ -47,15 +48,16 @@ func (p *PostgresStore) UpdatePlaybook(ctx context.Context, playbook *model.Play
 	playbook.UpdatedAt = time.Now()
 	triggerJSON, _ := json.Marshal(playbook.Trigger)
 	approvalsJSON, _ := json.Marshal(playbook.Approvals)
+	stateJSON, _ := json.Marshal(playbook.ApprovalStates)
 	actionsJSON, _ := json.Marshal(playbook.Actions)
 	rollbackJSON, _ := json.Marshal(playbook.Rollback)
 	_, err := p.pool.Exec(ctx, `UPDATE playbooks SET
         name=$2, description=$3, status=$4, version=$5, trigger=$6, conditions=$7,
-        approvals=$8, actions=$9, rollback=$10, updated_by=$11, approved_by=$12,
-        updated_at=$13, last_run_at=$14
+        approvals=$8, approval_states=$9, actions=$10, rollback=$11, updated_by=$12, approved_by=$13,
+        updated_at=$14, last_run_at=$15
         WHERE id=$1`,
 		playbook.ID, playbook.Name, playbook.Description, playbook.Status, playbook.Version,
-		triggerJSON, playbook.Conditions, approvalsJSON, actionsJSON, rollbackJSON,
+		triggerJSON, playbook.Conditions, approvalsJSON, stateJSON, actionsJSON, rollbackJSON,
 		playbook.UpdatedBy, playbook.ApprovedBy, playbook.UpdatedAt, playbook.LastRunAt)
 	if err != nil {
 		return fmt.Errorf("update playbook: %w", err)
@@ -65,17 +67,18 @@ func (p *PostgresStore) UpdatePlaybook(ctx context.Context, playbook *model.Play
 
 func (p *PostgresStore) GetPlaybook(ctx context.Context, id uuid.UUID) (*model.Playbook, error) {
 	row := p.pool.QueryRow(ctx, `SELECT id, name, description, status, version, trigger, conditions,
-        approvals, actions, rollback, created_by, updated_by, approved_by, created_at, updated_at, last_run_at
+        approvals, approval_states, actions, rollback, created_by, updated_by, approved_by, created_at, updated_at, last_run_at
         FROM playbooks WHERE id = $1`, id)
 	var pb model.Playbook
-	var triggerJSON, approvalsJSON, actionsJSON, rollbackJSON []byte
+	var triggerJSON, approvalsJSON, stateJSON, actionsJSON, rollbackJSON []byte
 	if err := row.Scan(&pb.ID, &pb.Name, &pb.Description, &pb.Status, &pb.Version,
-		&triggerJSON, &pb.Conditions, &approvalsJSON, &actionsJSON, &rollbackJSON,
+		&triggerJSON, &pb.Conditions, &approvalsJSON, &stateJSON, &actionsJSON, &rollbackJSON,
 		&pb.CreatedBy, &pb.UpdatedBy, &pb.ApprovedBy, &pb.CreatedAt, &pb.UpdatedAt, &pb.LastRunAt); err != nil {
 		return nil, fmt.Errorf("get playbook: %w", err)
 	}
 	_ = json.Unmarshal(triggerJSON, &pb.Trigger)
 	_ = json.Unmarshal(approvalsJSON, &pb.Approvals)
+	_ = json.Unmarshal(stateJSON, &pb.ApprovalStates)
 	_ = json.Unmarshal(actionsJSON, &pb.Actions)
 	_ = json.Unmarshal(rollbackJSON, &pb.Rollback)
 	return &pb, nil
@@ -86,7 +89,7 @@ func (p *PostgresStore) ListPlaybooks(ctx context.Context, limit int) ([]*model.
 		limit = 50
 	}
 	rows, err := p.pool.Query(ctx, `SELECT id, name, description, status, version, trigger, conditions,
-        approvals, actions, rollback, created_by, updated_by, approved_by, created_at, updated_at, last_run_at
+        approvals, approval_states, actions, rollback, created_by, updated_by, approved_by, created_at, updated_at, last_run_at
         FROM playbooks ORDER BY updated_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list playbooks: %w", err)
@@ -95,14 +98,15 @@ func (p *PostgresStore) ListPlaybooks(ctx context.Context, limit int) ([]*model.
 	var results []*model.Playbook
 	for rows.Next() {
 		var pb model.Playbook
-		var triggerJSON, approvalsJSON, actionsJSON, rollbackJSON []byte
+		var triggerJSON, approvalsJSON, stateJSON, actionsJSON, rollbackJSON []byte
 		if err := rows.Scan(&pb.ID, &pb.Name, &pb.Description, &pb.Status, &pb.Version,
-			&triggerJSON, &pb.Conditions, &approvalsJSON, &actionsJSON, &rollbackJSON,
+			&triggerJSON, &pb.Conditions, &approvalsJSON, &stateJSON, &actionsJSON, &rollbackJSON,
 			&pb.CreatedBy, &pb.UpdatedBy, &pb.ApprovedBy, &pb.CreatedAt, &pb.UpdatedAt, &pb.LastRunAt); err != nil {
 			return nil, fmt.Errorf("scan playbook: %w", err)
 		}
 		_ = json.Unmarshal(triggerJSON, &pb.Trigger)
 		_ = json.Unmarshal(approvalsJSON, &pb.Approvals)
+		_ = json.Unmarshal(stateJSON, &pb.ApprovalStates)
 		_ = json.Unmarshal(actionsJSON, &pb.Actions)
 		_ = json.Unmarshal(rollbackJSON, &pb.Rollback)
 		results = append(results, &pb)
