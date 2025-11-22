@@ -148,6 +148,10 @@ Agent 通过 gRPC 接口与 Server 通信，支持以下核心功能：
 - **任务租约服务**：获取待执行任务
 - **结果回传服务**：上传任务执行结果
 
+默认握手顺序为 `Register → Heartbeat → PullTasks → ReportResult`。注册响应会返回唯一 `agent_id` 及建议心跳间隔；心跳阶段应携带 `telemetry.*`、`cache.*` 等键值供行为分析/监控读取；租约响应保留 profile、任务 payload 与 metadata；结果回传则同时写入 `summary_json`、`metadata`、`artifacts` 和 `threatintel.artifact_tokens`，方便 REST API 与 Threat Intel Orchestrator 复用。
+
+> 契约自检：运行 `cd server && go test ./internal/grpcsvc -run AgentLifecycleContract` 可模拟完整 gRPC/HTTP 流程，并验证 `/api/v1/tasks/{id}` 能读取刚刚回传的结果。
+
 ## 任务调度流程
 
 1. **任务创建**：通过 REST API 或其他方式创建任务
@@ -197,7 +201,8 @@ go test ./...
 go build ./cmd/server
 ```
 
-测试覆盖内存与 Postgres 接口的关键逻辑，包括 scheduler 队列、REST Handler、gRPC AgentService 以及 Bufconn 驱动的端到端流程。
+测试覆盖内存与 Postgres 接口的关键逻辑，包括 scheduler 队列、REST Handler、gRPC AgentService 以及 Bufconn 驱动的端到端流程。  
+在修改 Agent 握手或任务存储路径后，推荐先运行 `go test ./internal/grpcsvc -run AgentLifecycleContract ./internal/api/v1`，确认 Register/Heartbeat/PullTasks/ReportResult 与任务查询接口保持一致。
 
 ### 代码规范
 

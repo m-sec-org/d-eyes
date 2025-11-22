@@ -17,7 +17,7 @@ type Store interface {
 	UpsertAgent(ctx context.Context, agent *model.Agent) error
 	GetAgentByName(ctx context.Context, name string) (*model.Agent, error)
 	GetAgent(ctx context.Context, id uuid.UUID) (*model.Agent, error)
-	UpdateAgentStatus(ctx context.Context, id uuid.UUID, status model.AgentStatus, heartbeat time.Time, load float64, running []string) error
+	UpdateAgentStatus(ctx context.Context, id uuid.UUID, status model.AgentStatus, heartbeat time.Time, load float64, running []string, metadata map[string]string) error
 	UpdateAgentMetadata(ctx context.Context, id uuid.UUID, labels map[string]string) error
 
 	CreateTask(ctx context.Context, task *model.Task) error
@@ -37,6 +37,7 @@ type Store interface {
 	ListTaskRunsByAgent(ctx context.Context, agentID uuid.UUID, statuses []model.TaskStatus, limit int) ([]*model.TaskRun, error)
 
 	SaveArtifacts(ctx context.Context, artifacts []model.Artifact) error
+	GetArtifacts(ctx context.Context, ids []uuid.UUID) ([]model.Artifact, error)
 
 	InsertTaskResult(ctx context.Context, result *model.TaskResult) error
 	ArchiveTaskResults(ctx context.Context, before time.Time) (int, error)
@@ -47,6 +48,7 @@ type Store interface {
 	UpdateThreatIntelSampleStatus(ctx context.Context, sampleID uuid.UUID, status, lastError string, metadata map[string]string) error
 	GetThreatIntelSample(ctx context.Context, sampleID uuid.UUID) (*model.ThreatIntelSample, error)
 	ListThreatIntelJobsBySample(ctx context.Context, sampleID uuid.UUID) ([]*model.ThreatIntelJob, error)
+	ListThreatIntelJobs(ctx context.Context, limit int) ([]*model.ThreatIntelJob, error)
 
 	InsertThreatIntelJob(ctx context.Context, job *model.ThreatIntelJob) error
 	LeaseThreatIntelJobs(ctx context.Context, limit int) ([]*model.ThreatIntelJob, error)
@@ -55,8 +57,6 @@ type Store interface {
 	InsertThreatIntelVerdict(ctx context.Context, verdict *model.ThreatIntelVerdict) error
 	ListThreatIntelVerdicts(ctx context.Context, indicator string, limit int) ([]*model.ThreatIntelVerdict, error)
 	CountThreatIntelJobs(ctx context.Context, statuses []string) (int64, error)
-
-	GetArtifacts(ctx context.Context, ids []uuid.UUID) ([]model.Artifact, error)
 
 	// Behavior telemetry & anomalies.
 	SaveBehaviorMetric(ctx context.Context, metric *model.BehaviorMetric) error

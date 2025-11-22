@@ -3,12 +3,14 @@ package tasks
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/m-sec-org/d-eyes/agent/internal/testing/fakes"
+	"github.com/m-sec-org/d-eyes/agent/pkg/artifacts"
 	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 )
 
@@ -56,4 +58,35 @@ func TestTICollectorRecordsErrors(t *testing.T) {
 	require.Len(t, outputs, 1)
 	require.NotEmpty(t, notes)
 	require.True(t, strings.Contains(notes[0], "威胁情报查询产生"))
+}
+
+func TestTICollectorUploadsArtifactsInServerMode(t *testing.T) {
+	mgr, cfg := fakes.NewReportManager(t)
+	cfg.ThreatIntel.Mode = threatintel.ModeServer
+	req := TaskRequest{
+		Profile:        "default",
+		Config:         cfg,
+		Manager:        mgr,
+		Metadata:       map[string]string{},
+		ArtifactClient: &stubArtifactClient{},
+	}
+	file := filepath.Join(t.TempDir(), "sample.bin")
+	require.NoError(t, os.WriteFile(file, []byte("payload"), 0o644))
+
+	collector := newTICollector(req)
+	require.NotNil(t, collector)
+	collector.LookupFile(context.Background(), file, nil)
+	require.Contains(t, req.Metadata, artifactTokensMetadataKey)
+	client := req.ArtifactClient.(*stubArtifactClient)
+	require.Len(t, client.uploads, 1)
+	require.Equal(t, "none", client.uploads[0].Encryption)
+}
+
+type stubArtifactClient struct {
+	uploads []artifacts.UploadInput
+}
+
+func (s *stubArtifactClient) Upload(ctx context.Context, input artifacts.UploadInput) (*artifacts.UploadResult, error) {
+	s.uploads = append(s.uploads, input)
+	return &artifacts.UploadResult{Token: "token-stub"}, nil
 }

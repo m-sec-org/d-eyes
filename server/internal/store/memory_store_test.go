@@ -132,3 +132,26 @@ func TestMemoryStore_TaskRunLifecycle(t *testing.T) {
 	require.Equal(t, model.TaskStatusSucceeded, latest.Status)
 	require.Equal(t, []byte(`{"ok":true}`), latest.Summary)
 }
+
+func TestMemoryStore_UpdateAgentStatusStoresMetadata(t *testing.T) {
+	st := store.NewInMemoryStore()
+	ctx := context.Background()
+	agent := &model.Agent{
+		ID:     uuid.New(),
+		Name:   "agent-meta",
+		Labels: map[string]string{"env": "qa"},
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agent))
+
+	meta := map[string]string{
+		"telemetry.cpu_percent": "45.0",
+		"cache.respond_hits":    "3",
+	}
+	require.NoError(t, st.UpdateAgentStatus(ctx, agent.ID, model.AgentStatusOnline, time.Now(), 1.5, []string{"task-1"}, meta))
+
+	updated, err := st.GetAgent(ctx, agent.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1.5, updated.Load)
+	require.Equal(t, []string{"task-1"}, updated.RunningTasks)
+	require.Equal(t, "45.0", updated.Metadata["telemetry.cpu_percent"])
+}

@@ -175,6 +175,7 @@ func (c *Client) StartHeartbeat(ctx context.Context, payloadCh <-chan HeartbeatP
 					Load:         last.Load,
 					RunningTasks: append([]string(nil), last.RunningTasks...),
 					Telemetry:    telemetryData,
+					Metadata:     cloneStringMap(last.Metadata),
 				}
 				sentAt := time.Now()
 				if err := stream.Send(req); err != nil {

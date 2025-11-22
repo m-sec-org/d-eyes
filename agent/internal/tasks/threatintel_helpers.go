@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/m-sec-org/d-eyes/agent/pkg/artifacts"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 )
@@ -63,19 +66,26 @@ func extractIndicators(text string) []indicatorMatch {
 }
 
 type tiCollector struct {
-	req      TaskRequest
-	manager  *threatintel.Manager
-	findings []threatintel.Finding
-	errors   []string
+	req                TaskRequest
+	manager            *threatintel.Manager
+	uploader           ArtifactClient
+	findings           []threatintel.Finding
+	errors             []string
+	uploadedArtifacts  int
+	reportedLimitError bool
 }
 
 func newTICollector(req TaskRequest) *tiCollector {
-	if req.ThreatIntel == nil || req.Manager == nil {
+	if req.ThreatIntel == nil && req.ArtifactClient == nil {
 		return nil
 	}
 	return &tiCollector{
-		req:     req,
-		manager: req.ThreatIntel,
+		req:               req,
+		manager:           req.ThreatIntel,
+		uploader:          req.ArtifactClient,
+		errors:            make([]string, 0),
+		findings:          make([]threatintel.Finding, 0),
+		uploadedArtifacts: 0,
 	}
 }
 
@@ -83,16 +93,26 @@ func (c *tiCollector) LookupFile(ctx context.Context, path string, metadata map[
 	if c == nil {
 		return
 	}
-	results, err := c.manager.LookupFile(ctx, path, metadata)
-	if err != nil {
-		c.errors = append(c.errors, fmt.Sprintf("file %s: %v", path, err))
-		return
+	if c.manager != nil {
+		results, err := c.manager.LookupFile(ctx, path, metadata)
+		if err != nil {
+			c.errors = append(c.errors, fmt.Sprintf("file %s: %v", path, err))
+		} else {
+			c.findings = append(c.findings, results...)
+		}
 	}
-	c.findings = append(c.findings, results...)
+	if c.shouldUploadArtifacts() {
+		if err := c.uploadArtifact(ctx, path); err != nil {
+			c.errors = append(c.errors, fmt.Sprintf("artifact %s: %v", path, err))
+		}
+	}
 }
 
 func (c *tiCollector) LookupIndicator(ctx context.Context, kind threatintel.IndicatorKind, value string, metadata map[string]string) {
 	if c == nil {
+		return
+	}
+	if c.manager == nil {
 		return
 	}
 	results, err := c.manager.LookupIndicator(ctx, kind, value, metadata)
@@ -148,4 +168,59 @@ func (c *tiCollector) Flush(command, name, label string) ([]reporting.OutputReco
 		notes = append(notes, fmt.Sprintf("威胁情报查询产生 %d 个告警，详见 %s", len(c.errors), path))
 	}
 	return []reporting.OutputRecord{output}, notes
+}
+
+func (c *tiCollector) shouldUploadArtifacts() bool {
+	if c == nil || c.uploader == nil {
+		return false
+	}
+	return c.req.Config.ThreatIntel.Mode == threatintel.ModeServer
+}
+
+const maxArtifactUploads = 5
+
+func (c *tiCollector) uploadArtifact(ctx context.Context, path string) error {
+	if c.uploader == nil {
+		if !c.reportedLimitError {
+			c.reportedLimitError = true
+			return fmt.Errorf("artifact uploader unavailable")
+		}
+		return nil
+	}
+	if c.uploadedArtifacts >= maxArtifactUploads {
+		if !c.reportedLimitError {
+			c.reportedLimitError = true
+			return fmt.Errorf("artifact upload limit reached")
+		}
+		return nil
+	}
+	result, err := c.uploader.Upload(ctx, artifacts.UploadInput{
+		Path:        path,
+		ContentType: guessContentType(path),
+		Encryption:  c.artifactEncryption(),
+	})
+	if err != nil {
+		return err
+	}
+	appendArtifactToken(c.req.Metadata, result.Token)
+	c.uploadedArtifacts++
+	return nil
+}
+
+func (c *tiCollector) artifactEncryption() string {
+	if meta := c.req.Metadata; meta != nil {
+		if value := strings.TrimSpace(meta["threatintel.artifact_encryption"]); value != "" {
+			return value
+		}
+	}
+	return "none"
+}
+
+func guessContentType(path string) string {
+	if ext := strings.ToLower(filepath.Ext(path)); ext != "" {
+		if ct := mime.TypeByExtension(ext); ct != "" {
+			return ct
+		}
+	}
+	return "application/octet-stream"
 }

@@ -77,6 +77,12 @@ Agent 需配置 `remote.server_grpc_addr`、`sandbox` 等信息，可参考 `doc
 - **日志与 Trace**：集中化方案、任务调度追踪脚本参考 `docs/logging-trace-guide.md`。
 - **性能基线**：发布前执行 `scripts/perf-baseline.sh`（详见 `docs/perf-baseline.md`）校验调度、TI、BAS、Ops Console 指标。
 
+### 1.6 Agent-Server 握手自检
+
+- **契约测试**：Server 与 Agent 的 Register/Heartbeat/PullTasks/ReportResult 流程已经通过 `server/internal/grpcsvc/contract_test.go` 覆盖。运维在升级配置或改动调度策略后，可执行 `cd server && go test ./internal/grpcsvc -run AgentLifecycleContract`，自动模拟 gRPC 握手并通过 HTTP `/api/v1/tasks/{id}` 校验结果是否可查询。
+- **指标对齐**：测试会验证 `telemetry.*`/`cache.*` metadata 是否写入 `store.UpdateAgentStatus`，可配合 Prometheus `agent_cpu_percent`、`agent_heartbeats_total` 以及 SSE `/api/v1/tasks/stream` 监控现场表现。
+- **生产回归**：若升级链路涉及 Agent 运行时，请在 staging 环境跑完上述契约测试，再使用真实 Agent 验证：观察 Register 日志、15 秒心跳采样、`PullTasks` 返回的 profile/metadata，以及 `GET /api/v1/tasks/<taskId>` 中的 summary/metadata/artifact ID，确认威胁情报与行为图能够消费这些字段。
+
 ## 2. 可观测性
 
 ### 2.1 健康检查

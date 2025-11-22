@@ -70,6 +70,9 @@ func (r *Recorder) RecordHeartbeat(ctx context.Context, metric HeartbeatMetric) 
 		"cpu_percent":     metric.CPUPercent,
 		"blocked_actions": metric.BlockedActions,
 	}
+	if len(metric.Metadata) > 0 {
+		payload["metadata"] = metric.Metadata
+	}
 	r.publish(ctx, r.heartbeatStream, payload)
 }
 

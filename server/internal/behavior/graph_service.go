@@ -167,6 +167,13 @@ func (g *GraphService) HandleHeartbeat(ctx context.Context, metric HeartbeatMetr
 	}
 	metric.RunningTasks = append([]string(nil), metric.RunningTasks...)
 	metric.BlockedActions = append([]string(nil), metric.BlockedActions...)
+	if len(metric.Metadata) > 0 {
+		copy := make(map[string]string, len(metric.Metadata))
+		for k, v := range metric.Metadata {
+			copy[k] = v
+		}
+		metric.Metadata = copy
+	}
 	g.appendMetric(metric)
 	g.evaluateAgent(ctx, metric.AgentID)
 }
@@ -294,6 +301,9 @@ func decodeHeartbeatMessage(values map[string]interface{}) (HeartbeatMetric, err
 	metric.CPUPercent = parseFloat(values["cpu_percent"])
 	metric.RunningTasks = parseStringList(values["tasks"])
 	metric.BlockedActions = parseStringList(values["blocked_actions"])
+	if raw := values["metadata"]; raw != nil {
+		metric.Metadata = parseMetadataMap(raw)
+	}
 	return metric, nil
 }
 

@@ -63,6 +63,10 @@ func TestClientWorkflowWithBufconn(t *testing.T) {
 	hbPayload <- HeartbeatPayload{
 		Load:         2.5,
 		RunningTasks: []string{"task-1"},
+		Metadata: map[string]string{
+			"telemetry.cpu_percent": "37.50",
+			"cache.respond_hits":    "3",
+		},
 	}
 
 	select {
@@ -74,6 +78,8 @@ func TestClientWorkflowWithBufconn(t *testing.T) {
 		require.Equal(t, 55.5, req.GetTelemetry().GetMemoryPercent())
 		require.Equal(t, 12.5, req.GetTelemetry().GetIoUtilPercent())
 		require.Equal(t, []string{"kill-process"}, req.GetTelemetry().GetBlockedActions())
+		require.Equal(t, "37.50", req.GetMetadata()["telemetry.cpu_percent"])
+		require.Equal(t, "3", req.GetMetadata()["cache.respond_hits"])
 	case <-time.After(2 * time.Second):
 		t.Fatal("heartbeat not received")
 	}

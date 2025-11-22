@@ -21,6 +21,9 @@ type Agent struct {
 	Capabilities  []string          `json:"capabilities"`
 	Status        AgentStatus       `json:"status"`
 	LastHeartbeat time.Time         `json:"lastHeartbeat"`
+	Load          float64           `json:"load"`
+	RunningTasks  []string          `json:"runningTasks,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
 	CreatedAt     time.Time         `json:"createdAt"`
 	UpdatedAt     time.Time         `json:"updatedAt"`
 }

@@ -31,6 +31,7 @@ func (h *ThreatIntelHandler) RegisterRoutes(r *gin.RouterGroup) {
 	group.GET("/iocs/:indicator", h.getIndicator)
 	group.GET("/samples/:id", h.getSample)
 	group.POST("/lookup", h.lookup)
+	group.GET("/jobs", h.listJobs)
 }
 
 type lookupRequestBody struct {
@@ -221,13 +222,14 @@ func (h *ThreatIntelHandler) getSample(c *gin.Context) {
 	jobResp := make([]gin.H, 0, len(jobs))
 	for _, job := range jobs {
 		jobResp = append(jobResp, gin.H{
-			"id":        job.ID.String(),
-			"indicator": job.Indicator,
-			"kind":      job.Kind,
-			"source":    job.Source,
-			"status":    job.Status,
-			"attempt":   job.Attempt,
-			"error":     job.ErrorMsg,
+			"id":           job.ID.String(),
+			"indicator":    job.Indicator,
+			"kind":         job.Kind,
+			"source":       job.Source,
+			"status":       job.Status,
+			"attempt":      job.Attempt,
+			"error":        job.ErrorMsg,
+			"artifact_ids": uuidStrings(job.ArtifactIDs),
 			"next_run_at": func() *time.Time {
 				if job.NextRunAt.IsZero() {
 					return nil
@@ -238,17 +240,13 @@ func (h *ThreatIntelHandler) getSample(c *gin.Context) {
 			"updated_at": job.UpdatedAt,
 		})
 	}
-	artifactIDs := make([]string, 0, len(sample.ArtifactIDs))
-	for _, id := range sample.ArtifactIDs {
-		artifactIDs = append(artifactIDs, id.String())
-	}
 	c.JSON(http.StatusOK, gin.H{
 		"id":           sample.ID.String(),
 		"hash":         sample.Hash,
 		"filename":     sample.Filename,
 		"size":         sample.Size,
 		"status":       sample.Status,
-		"artifact_ids": artifactIDs,
+		"artifact_ids": uuidStrings(sample.ArtifactIDs),
 		"task_run_id":  sample.TaskRunID.String(),
 		"agent_id":     sample.AgentID.String(),
 		"metadata":     sample.Metadata,
@@ -257,4 +255,65 @@ func (h *ThreatIntelHandler) getSample(c *gin.Context) {
 		"updated_at":   sample.UpdatedAt,
 		"jobs":         jobResp,
 	})
+}
+
+func (h *ThreatIntelHandler) listJobs(c *gin.Context) {
+	limit := 100
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			switch {
+			case parsed <= 0:
+			case parsed > 500:
+				limit = 500
+			default:
+				limit = parsed
+			}
+		}
+	}
+	jobs, err := h.Store.ListThreatIntelJobs(c.Request.Context(), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	resp := make([]gin.H, 0, len(jobs))
+	for _, job := range jobs {
+		nextRun := func() *time.Time {
+			if job.NextRunAt.IsZero() {
+				return nil
+			}
+			t := job.NextRunAt
+			return &t
+		}()
+		resp = append(resp, gin.H{
+			"id":           job.ID.String(),
+			"sample_id":    job.SampleID.String(),
+			"indicator":    job.Indicator,
+			"kind":         job.Kind,
+			"source":       job.Source,
+			"status":       job.Status,
+			"attempt":      job.Attempt,
+			"error":        job.ErrorMsg,
+			"next_run_at":  nextRun,
+			"task_run_id":  job.TaskRunID.String(),
+			"agent_id":     job.AgentID.String(),
+			"artifact_ids": uuidStrings(job.ArtifactIDs),
+			"metadata":     job.Metadata,
+			"created_at":   job.CreatedAt,
+			"updated_at":   job.UpdatedAt,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"jobs": resp,
+	})
+}
+
+func uuidStrings(ids []uuid.UUID) []string {
+	if len(ids) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id.String())
+	}
+	return out
 }

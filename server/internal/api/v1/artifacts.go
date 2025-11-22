@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
@@ -45,11 +46,36 @@ func (h *ArtifactHandler) createUpload(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.Size <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "size must be positive"})
+		return
+	}
+	hash := strings.TrimSpace(strings.ToLower(req.Hash))
+	if hash == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "hash required"})
+		return
+	}
+	if len(hash) != 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "hash must be 64 hex characters"})
+		return
+	}
+	if _, err := hex.DecodeString(hash); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "hash must be hexadecimal"})
+		return
+	}
+	encryption := strings.TrimSpace(strings.ToLower(req.Encryption))
+	if encryption == "" {
+		encryption = "none"
+	}
+	if encryption != "none" && encryption != "aes256-gcm" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported encryption"})
+		return
+	}
 	meta := artifacts.Metadata{
 		Filename:    strings.TrimSpace(req.Filename),
 		ContentType: strings.TrimSpace(req.ContentType),
-		Hash:        strings.TrimSpace(req.Hash),
-		Encryption:  strings.TrimSpace(req.Encryption),
+		Hash:        hash,
+		Encryption:  encryption,
 		Size:        req.Size,
 	}
 	id, expiresAt, err := h.Manager.CreateUpload(meta)

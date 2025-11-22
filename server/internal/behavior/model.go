@@ -15,6 +15,7 @@ type HeartbeatMetric struct {
 	LatencyMs      float64
 	CPUPercent     float64
 	BlockedActions []string
+	Metadata       map[string]string
 }
 
 // TaskTelemetry captures process/network telemetry from task execution.

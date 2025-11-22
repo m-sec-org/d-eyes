@@ -51,10 +51,16 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
             capabilities JSONB,
             status TEXT NOT NULL DEFAULT 'offline',
             last_heartbeat TIMESTAMPTZ,
+            load DOUBLE PRECISION DEFAULT 0,
+            running_tasks TEXT[] DEFAULT '{}'::text[],
+            metadata JSONB,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS agents_name_idx ON agents (name)`,
+		`ALTER TABLE agents ADD COLUMN IF NOT EXISTS load DOUBLE PRECISION DEFAULT 0`,
+		`ALTER TABLE agents ADD COLUMN IF NOT EXISTS running_tasks TEXT[] DEFAULT '{}'::text[]`,
+		`ALTER TABLE agents ADD COLUMN IF NOT EXISTS metadata JSONB`,
 		`CREATE TABLE IF NOT EXISTS tasks (
             id UUID PRIMARY KEY,
             type TEXT NOT NULL,
@@ -212,8 +218,9 @@ func (p *PostgresStore) UpsertAgent(ctx context.Context, agent *model.Agent) err
 	now := time.Now()
 	labelsJSON, _ := json.Marshal(agent.Labels)
 	capsJSON, _ := json.Marshal(agent.Capabilities)
-	_, err := p.pool.Exec(ctx, `INSERT INTO agents (id, name, labels, platform, version, capabilities, status, last_heartbeat, created_at, updated_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	metadataJSON, _ := json.Marshal(agent.Metadata)
+	_, err := p.pool.Exec(ctx, `INSERT INTO agents (id, name, labels, platform, version, capabilities, status, last_heartbeat, load, running_tasks, metadata, created_at, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
         ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             labels = EXCLUDED.labels,
@@ -223,7 +230,7 @@ func (p *PostgresStore) UpsertAgent(ctx context.Context, agent *model.Agent) err
             status = EXCLUDED.status,
             last_heartbeat = EXCLUDED.last_heartbeat,
             updated_at = EXCLUDED.updated_at`,
-		agent.ID, agent.Name, labelsJSON, agent.Platform, agent.Version, capsJSON, agent.Status, agent.LastHeartbeat, now, now)
+		agent.ID, agent.Name, labelsJSON, agent.Platform, agent.Version, capsJSON, agent.Status, agent.LastHeartbeat, agent.Load, agent.RunningTasks, metadataJSON, now, now)
 	if err != nil {
 		return fmt.Errorf("upsert agent: %w", err)
 	}
@@ -231,18 +238,19 @@ func (p *PostgresStore) UpsertAgent(ctx context.Context, agent *model.Agent) err
 }
 
 func (p *PostgresStore) GetAgentByName(ctx context.Context, name string) (*model.Agent, error) {
-	row := p.pool.QueryRow(ctx, `SELECT id, name, labels, platform, version, capabilities, status, last_heartbeat, created_at, updated_at FROM agents WHERE name = $1`, name)
+	row := p.pool.QueryRow(ctx, `SELECT id, name, labels, platform, version, capabilities, status, last_heartbeat, load, running_tasks, metadata, created_at, updated_at FROM agents WHERE name = $1`, name)
 	return scanAgent(row)
 }
 
 func (p *PostgresStore) GetAgent(ctx context.Context, id uuid.UUID) (*model.Agent, error) {
-	row := p.pool.QueryRow(ctx, `SELECT id, name, labels, platform, version, capabilities, status, last_heartbeat, created_at, updated_at FROM agents WHERE id = $1`, id)
+	row := p.pool.QueryRow(ctx, `SELECT id, name, labels, platform, version, capabilities, status, last_heartbeat, load, running_tasks, metadata, created_at, updated_at FROM agents WHERE id = $1`, id)
 	return scanAgent(row)
 }
 
-func (p *PostgresStore) UpdateAgentStatus(ctx context.Context, id uuid.UUID, status model.AgentStatus, heartbeat time.Time, load float64, running []string) error {
-	// load and running tasks are not stored separately yet
-	_, err := p.pool.Exec(ctx, `UPDATE agents SET status=$2, last_heartbeat=$3, updated_at=NOW() WHERE id=$1`, id, status, heartbeat)
+func (p *PostgresStore) UpdateAgentStatus(ctx context.Context, id uuid.UUID, status model.AgentStatus, heartbeat time.Time, load float64, running []string, metadata map[string]string) error {
+	metadataJSON, _ := json.Marshal(metadata)
+	_, err := p.pool.Exec(ctx, `UPDATE agents SET status=$2, last_heartbeat=$3, load=$4, running_tasks=$5, metadata=$6, updated_at=NOW() WHERE id=$1`,
+		id, status, heartbeat, load, running, metadataJSON)
 	if err != nil {
 		return fmt.Errorf("update agent status: %w", err)
 	}
@@ -372,7 +380,7 @@ func (p *PostgresStore) ListTasks(ctx context.Context, statuses []model.TaskStat
 }
 
 func (p *PostgresStore) ListAgents(ctx context.Context) ([]*model.Agent, error) {
-	rows, err := p.pool.Query(ctx, `SELECT id, name, labels, platform, version, capabilities, status, last_heartbeat, created_at, updated_at FROM agents`)
+	rows, err := p.pool.Query(ctx, `SELECT id, name, labels, platform, version, capabilities, status, last_heartbeat, load, running_tasks, metadata, created_at, updated_at FROM agents`)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -470,6 +478,29 @@ func (p *PostgresStore) SaveArtifacts(ctx context.Context, artifacts []model.Art
 	return nil
 }
 
+func (p *PostgresStore) GetArtifacts(ctx context.Context, ids []uuid.UUID) ([]model.Artifact, error) {
+	if len(ids) == 0 {
+		return nil, store.ErrNotFound
+	}
+	rows, err := p.pool.Query(ctx, `SELECT id, task_run_id, name, mime_type, blob FROM artifacts WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("get artifacts: %w", err)
+	}
+	defer rows.Close()
+	var artifacts []model.Artifact
+	for rows.Next() {
+		var art model.Artifact
+		if err := rows.Scan(&art.ID, &art.TaskRunID, &art.Name, &art.MIMEType, &art.Blob); err != nil {
+			return nil, fmt.Errorf("scan artifact: %w", err)
+		}
+		artifacts = append(artifacts, art)
+	}
+	if len(artifacts) == 0 {
+		return nil, store.ErrNotFound
+	}
+	return artifacts, nil
+}
+
 func (p *PostgresStore) GetLatestTaskRun(ctx context.Context, taskID uuid.UUID) (*model.TaskRun, error) {
 	query := `SELECT id, task_id, task_type, agent_id, lease_id, lease_expires, started_at, finished_at, status, error_message, summary, result_metadata, exit_code, error_code, expires_at, retry_sequence
 FROM task_runs
@@ -538,7 +569,8 @@ func scanAgent(row pgx.Row) (*model.Agent, error) {
 	var agent model.Agent
 	var labels []byte
 	var caps []byte
-	if err := row.Scan(&agent.ID, &agent.Name, &labels, &agent.Platform, &agent.Version, &caps, &agent.Status, &agent.LastHeartbeat, &agent.CreatedAt, &agent.UpdatedAt); err != nil {
+	var metadata []byte
+	if err := row.Scan(&agent.ID, &agent.Name, &labels, &agent.Platform, &agent.Version, &caps, &agent.Status, &agent.LastHeartbeat, &agent.Load, &agent.RunningTasks, &metadata, &agent.CreatedAt, &agent.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
@@ -549,6 +581,9 @@ func scanAgent(row pgx.Row) (*model.Agent, error) {
 	}
 	if len(caps) > 0 {
 		_ = json.Unmarshal(caps, &agent.Capabilities)
+	}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &agent.Metadata)
 	}
 	return &agent, nil
 }

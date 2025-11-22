@@ -56,3 +56,16 @@ func TestIsPublicIPv4(t *testing.T) {
 		t.Fatal("expected public IP true")
 	}
 }
+
+func TestAppendArtifactToken(t *testing.T) {
+	meta := map[string]string{}
+	appendArtifactToken(meta, "token-1")
+	appendArtifactToken(meta, "token-2")
+	raw := meta[artifactTokensMetadataKey]
+	if raw == "" {
+		t.Fatal("tokens metadata missing")
+	}
+	if raw != `["token-1","token-2"]` {
+		t.Fatalf("unexpected tokens json: %s", raw)
+	}
+}

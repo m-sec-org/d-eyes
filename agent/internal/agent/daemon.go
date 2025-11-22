@@ -20,6 +20,7 @@ import (
 	"github.com/m-sec-org/d-eyes/agent/internal/model"
 	"github.com/m-sec-org/d-eyes/agent/internal/tasks"
 	"github.com/m-sec-org/d-eyes/agent/internal/telemetry"
+	"github.com/m-sec-org/d-eyes/agent/pkg/artifacts"
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
 	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 	serverpb "github.com/m-sec-org/d-eyes/server/proto/agentservicepb"
@@ -145,6 +146,11 @@ func newRemoteRunner(cfg config.RemoteConfig, opts ...remoteRunnerOption) (*remo
 			opt(runner)
 		}
 	}
+	artifactClient, err := newArtifactClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	runner.artifactClient = artifactClient
 	if runner.client == nil {
 		return nil, errors.New("remote runner: client is nil")
 	}
@@ -169,6 +175,24 @@ func defaultCacheDir() string {
 	return base
 }
 
+func newArtifactClient(cfg config.RemoteConfig) (tasks.ArtifactClient, error) {
+	base := strings.TrimSpace(cfg.ServerAPIBase)
+	if base == "" {
+		return nil, nil
+	}
+	client, err := artifacts.NewClient(artifacts.Config{
+		BaseURL:    base,
+		APIKey:     cfg.AgentToken,
+		Timeout:    30 * time.Second,
+		RetryCount: 3,
+		UserAgent:  "d-eyes-agent",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("artifacts client: %w", err)
+	}
+	return client, nil
+}
+
 type remoteRunner struct {
 	cfg          config.RemoteConfig
 	remoteCfg    remote.RemoteConfig
@@ -182,6 +206,8 @@ type remoteRunner struct {
 	running    int32
 	cacheMu    sync.RWMutex
 	cacheStats map[string]string
+
+	artifactClient tasks.ArtifactClient
 }
 
 func (r *remoteRunner) taskRunnerByName(name string) (tasks.TaskRunner, bool) {
@@ -348,11 +374,12 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 
 	cfg := internal.GetGlobalConfig()
 	req := tasks.TaskRequest{
-		Config:     cfg,
-		Flags:      make(map[string]any),
-		Metadata:   cloneStringMap(lease.GetMetadata()),
-		Quiet:      true,
-		JSONOutput: false,
+		Config:         cfg,
+		Flags:          make(map[string]any),
+		Metadata:       cloneStringMap(lease.GetMetadata()),
+		Quiet:          true,
+		JSONOutput:     false,
+		ArtifactClient: r.artifactClient,
 	}
 	if prof := strings.TrimSpace(lease.GetProfile()); prof != "" {
 		req.Profile = prof
@@ -391,6 +418,10 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 
 	summary, result, execErr := tasks.ExecuteWithResult(ctxTask, lease.GetTaskType(), runner, req, internal.GetReportManager())
 	execModel := tasks.ToExecutionResult(summary, result, execErr)
+	execModel.Metadata = mergeStringMaps(execModel.Metadata, req.Metadata)
+	if telemetryData := telemetry.CollectExecutionMetadata(ctxTask); len(telemetryData) > 0 {
+		execModel.Metadata = mergeStringMaps(execModel.Metadata, telemetryData)
+	}
 	payloadBytes, _ := json.Marshal(execModel)
 
 	agentID := r.client.AgentID()
@@ -406,14 +437,6 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 		ErrorCode:    execModel.ErrorCode,
 	}
 	r.updateCacheStats(execModel.Metadata)
-	if telemetryData := telemetry.CollectExecutionMetadata(ctxTask); len(telemetryData) > 0 {
-		if reqProto.Metadata == nil {
-			reqProto.Metadata = make(map[string]string, len(telemetryData))
-		}
-		for k, v := range telemetryData {
-			reqProto.Metadata[k] = v
-		}
-	}
 
 	if err := r.store.Save(reqProto); err != nil {
 		log.Printf("[remote] save result cache failed: %v", err)
@@ -453,6 +476,10 @@ func (r *remoteRunner) reportFailure(ctx context.Context, lease *serverpb.TaskLe
 		execErr = errors.New("unknown execution error")
 	}
 	message := execErr.Error()
+	metadata := mergeStringMaps(nil, lease.GetMetadata())
+	if telemetryData := telemetry.CollectExecutionMetadata(ctx); len(telemetryData) > 0 {
+		metadata = mergeStringMaps(metadata, telemetryData)
+	}
 	summary := model.ExecutionResult{
 		Status: "failed",
 		Summary: model.ExecutionSummary{
@@ -462,6 +489,9 @@ func (r *remoteRunner) reportFailure(ctx context.Context, lease *serverpb.TaskLe
 			ErrorMessage:    message,
 		},
 		Error:      message,
+		Metadata:   cloneStringMap(metadata),
+		ExitCode:   1,
+		ErrorCode:  "agent.remote_execution_failed",
 		ReportedAt: r.now().UTC(),
 	}
 	payload, _ := json.Marshal(summary)
@@ -472,10 +502,11 @@ func (r *remoteRunner) reportFailure(ctx context.Context, lease *serverpb.TaskLe
 		Status:       "failed",
 		ErrorMessage: message,
 		SummaryJson:  payload,
-		Metadata:     cloneStringMap(lease.GetMetadata()),
-		ExitCode:     1,
-		ErrorCode:    "agent.remote_execution_failed",
+		Metadata:     cloneStringMap(metadata),
+		ExitCode:     summary.ExitCode,
+		ErrorCode:    summary.ErrorCode,
 	}
+	r.updateCacheStats(metadata)
 	if err := r.store.Save(req); err != nil {
 		log.Printf("[remote] save failure cache error: %v", err)
 	}
@@ -568,6 +599,23 @@ func cloneStringMap(src map[string]string) map[string]string {
 	dst := make(map[string]string, len(src))
 	for k, v := range src {
 		dst[k] = v
+	}
+	return dst
+}
+
+func mergeStringMaps(dst map[string]string, src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return dst
+	}
+	if dst == nil {
+		dst = make(map[string]string, len(src))
+	}
+	for k, v := range src {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		dst[key] = v
 	}
 	return dst
 }

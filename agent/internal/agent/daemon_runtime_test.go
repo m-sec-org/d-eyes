@@ -14,6 +14,7 @@ import (
 
 	internal "github.com/m-sec-org/d-eyes/agent/internal"
 	"github.com/m-sec-org/d-eyes/agent/internal/agent/remote"
+	"github.com/m-sec-org/d-eyes/agent/internal/model"
 	"github.com/m-sec-org/d-eyes/agent/internal/tasks"
 	"github.com/m-sec-org/d-eyes/agent/internal/telemetry"
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
@@ -182,6 +183,13 @@ func TestRemoteRunnerRunOnceProcessesLease(t *testing.T) {
 	meta := client.reportReqs[1].GetMetadata()
 	require.Equal(t, "true", meta["runner_meta"])
 	require.Equal(t, "value", meta["exec_meta"])
+	require.Equal(t, "lease", meta["from"])
+
+	var execResult model.ExecutionResult
+	require.NoError(t, json.Unmarshal(client.reportReqs[1].GetSummaryJson(), &execResult))
+	require.Equal(t, "true", execResult.Metadata["runner_meta"])
+	require.Equal(t, "value", execResult.Metadata["exec_meta"])
+	require.Equal(t, "lease", execResult.Metadata["from"])
 
 	require.Contains(t, store.deleted, "stale-lease")
 	require.Contains(t, store.deleted, "lease-1")
@@ -189,6 +197,11 @@ func TestRemoteRunnerRunOnceProcessesLease(t *testing.T) {
 }
 
 func TestReportFailureCachesResult(t *testing.T) {
+	restoreMetadata := telemetry.OverrideExecutionMetadataCollector(func(context.Context) map[string]string {
+		return map[string]string{"telemetry.task.duration_ms": "15"}
+	})
+	defer restoreMetadata()
+
 	client := newFakeRemoteClient()
 	store := newFakeResultStore()
 	runner := &remoteRunner{
@@ -208,6 +221,14 @@ func TestReportFailureCachesResult(t *testing.T) {
 	require.Len(t, client.reportReqs, 1)
 	require.Equal(t, "agent.remote_execution_failed", client.reportReqs[0].GetErrorCode())
 	require.Contains(t, client.reportReqs[0].GetMetadata(), "source")
+	require.Equal(t, "15", client.reportReqs[0].GetMetadata()["telemetry.task.duration_ms"])
+
+	var execResult model.ExecutionResult
+	require.NoError(t, json.Unmarshal(client.reportReqs[0].GetSummaryJson(), &execResult))
+	require.Equal(t, "test", execResult.Metadata["source"])
+	require.Equal(t, "15", execResult.Metadata["telemetry.task.duration_ms"])
+	require.Equal(t, int32(1), execResult.ExitCode)
+	require.Equal(t, "agent.remote_execution_failed", execResult.ErrorCode)
 }
 
 func TestApplyRemotePayload(t *testing.T) {

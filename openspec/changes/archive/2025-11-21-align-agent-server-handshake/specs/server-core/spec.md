@@ -1,8 +1,4 @@
-# server-core Specification
-
-## Purpose
-TBD - created by archiving change add-server-core-modules. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
 ### Requirement: Agent Registration & Heartbeat Service
 Server MUST 提供安全的 gRPC 服务供 Agent 注册与心跳同步，校验 token/TLS、幂等更新 Agent 元数据，并把心跳遥测写入行为/指标服务，确保 Agent 状态实时可见且可下发 shutdown 信号。
 
@@ -51,38 +47,7 @@ Server MUST provide a central service that ingests agent-submitted artifacts（g
 - **WHEN** gRPC 服务解析 metadata 时
 - **THEN** `artifact.Manager.Consume` 会读取 token 对应的上传文件、生成 `model.Artifact` 与 `threatintel.SampleSubmission{artifact_ids,hash,size,metadata}`，并与内联 artifacts 一同入库/排队；Orchestrator 记录审计事件并把样本 ID 与原始 `task_run_id`/`agent_id` 关联，供 `/api/v1/threat-intel/jobs` 与 SSE 流显示处理进度
 
-### Requirement: Behavior Graph & Anomaly Detection
-Server MUST ingest telemetry from tasks/heartbeats, build a correlation graph, and surface anomaly events with contextual entities via API/SSE.
-
-#### Scenario: Correlated anomaly query
-- **GIVEN** Agent heartbeats and Respond outputs stream into the behavior service
-- **WHEN** a rule detects “same agent connected to three blacklisted IPs within 5 minutes”
-- **THEN** the service emits an anomaly event linking the agent, IPs, threat intel verdicts, and related tasks; `GET /api/v1/anomalies/{id}` returns nodes/edges so the frontend can render the attack path.
-
-### Requirement: Playbook Automation & Approval
-Server MUST host a Playbook engine that listens to threat/anomaly/Task events, enforces multi-stage approvals, and dispatches actions/child tasks with full auditability.
-
-#### Scenario: Auto-response with approval gate
-- **GIVEN** a Playbook is configured to quarantine hosts when MetaDefender verdict = `malware`
-- **WHEN** an event arrives but the Playbook requires `security.lead` approval
-- **THEN** the Engine pauses execution, records an audit entry, and only after `POST /api/v1/playbooks/runs/{id}/approve` succeeds will it dispatch the isolate action to the relevant Agent and log the action output.
-
-### Requirement: Compliance Mapping & Reporting
-Server MUST maintain multi-framework control mappings, reconcile task evidence, and generate gap/rectification data plus downloadable reports.
-
-#### Scenario: CIS gap export
-- **GIVEN** Respond/Baseline tasks upload control evidence referencing CIS v8 controls
-- **WHEN** a user calls `GET /api/v1/compliance/frameworks/cis-v8/gaps?status=open`
-- **THEN** the API returns each failing control with linked assets, recommended remediation, and associated tasks; `POST /api/v1/reports` with the CIS template produces a signed PDF ready for download.
-
-### Requirement: BAS Scenario Orchestration
-Server MUST own BAS scenario lifecycle (versioning, approval, scheduling) and stream per-step updates received from Agents to watchers and audit logs.
-
-#### Scenario: Multi-agent BAS run coordination
-- **GIVEN** a BAS scenario requires two agent groups (`edge`, `db`)
-- **WHEN** an operator executes the scenario via `POST /api/v1/tasks` (`type=bas.advanced`)
-- **THEN** the Scheduler assigns steps to matching Agents, enforces sandbox/resource limits, records each step update from Agents, and exposes `/api/v1/bas-runs/{run_id}/stream` so the frontend can mirror progress and highlight failures.
-
+## ADDED Requirements
 ### Requirement: Artifact Presign & Upload Service
 Server MUST 暴露 `/api/v1/artifacts/presign` 与 `/api/v1/artifacts/upload/:id` REST 接口，提供受限的分块上传渠道（自定义 TTL/大小/类型校验）以便 Agent 托管无法通过 gRPC 直接传输的大型样本。
 
@@ -90,4 +55,3 @@ Server MUST 暴露 `/api/v1/artifacts/presign` 与 `/api/v1/artifacts/upload/:id
 - **GIVEN** Agent 需要上送 40 MB 样本且配置了 `artifact.storage_dir`, `max_size_bytes`, `upload_ttl`
 - **WHEN** Agent 调用 `POST /api/v1/artifacts/presign`，携带 `filename/content_type/hash/size/encryption`，Server 会验证参数、写入内存 token 并返回 `upload_id`、`upload_url` 与过期时间；Agent 随后在 `upload_ttl` 内向 `PUT /api/v1/artifacts/upload/{id}` 上传内容
 - **THEN** Artifact Manager 将流式写入临时文件、校验大小限制并标记 token 为 completed，之后 gRPC `ReportResult` 通过 `threatintel.artifact_tokens` 引用该 ID，Server 可在消费后立即把文件从上传目录移动到永久存储并附带 metadata（hash/encryption/type），确保威胁情报与审计链路能够访问加密样本
-

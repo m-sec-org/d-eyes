@@ -1,10 +1,13 @@
 package tasks
 
 import (
+	"encoding/json"
 	"net"
 	"path/filepath"
 	"strings"
 )
+
+const artifactTokensMetadataKey = "threatintel.artifact_tokens"
 
 func mergeMetadata(dst map[string]string, src map[string]string) {
 	if len(src) == 0 {
@@ -58,4 +61,25 @@ func isPublicIPv4(ip net.IP) bool {
 		return false
 	}
 	return true
+}
+
+func appendArtifactToken(meta map[string]string, token string) {
+	if meta == nil {
+		return
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	var tokens []string
+	if raw := strings.TrimSpace(meta[artifactTokensMetadataKey]); raw != "" {
+		var existing []string
+		if err := json.Unmarshal([]byte(raw), &existing); err == nil {
+			tokens = existing
+		}
+	}
+	tokens = append(tokens, token)
+	if encoded, err := json.Marshal(tokens); err == nil {
+		meta[artifactTokensMetadataKey] = string(encoded)
+	}
 }

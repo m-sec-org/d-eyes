@@ -52,7 +52,7 @@ func checkAgents(ctx context.Context, st store.Store, timeout time.Duration, log
 		if agent.Status == model.AgentStatusOffline {
 			continue
 		}
-		if err := st.UpdateAgentStatus(ctx, agent.ID, model.AgentStatusOffline, agent.LastHeartbeat, 0, nil); err != nil {
+		if err := st.UpdateAgentStatus(ctx, agent.ID, model.AgentStatusOffline, agent.LastHeartbeat, 0, nil, nil); err != nil {
 			logger.Error("mark agent offline", "agent", agent.ID, "error", err)
 			continue
 		}

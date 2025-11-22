@@ -11,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
+	"github.com/m-sec-org/d-eyes/server/internal/behavior"
 	"github.com/m-sec-org/d-eyes/server/internal/config"
 	"github.com/m-sec-org/d-eyes/server/internal/grpcsvc"
 	"github.com/m-sec-org/d-eyes/server/internal/metrics"
@@ -24,6 +25,10 @@ import (
 )
 
 func newTestService(t *testing.T) (*grpcsvc.Service, store.Store, *scheduler.Scheduler) {
+	return newTestServiceWithRecorder(t, nil)
+}
+
+func newTestServiceWithRecorder(t *testing.T, recorder grpcsvc.BehaviorRecorder) (*grpcsvc.Service, store.Store, *scheduler.Scheduler) {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Security.AgentToken = "token"
@@ -36,7 +41,7 @@ func newTestService(t *testing.T) (*grpcsvc.Service, store.Store, *scheduler.Sch
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := grpcsvc.NewService(cfg, st, sched, logger, m, nil, nil, nil, nil, nil)
+	svc := grpcsvc.NewService(cfg, st, sched, logger, m, nil, nil, recorder, nil, nil)
 	return svc, st, sched
 }
 
@@ -125,6 +130,82 @@ func TestHeartbeatUpdatesAgent(t *testing.T) {
 	require.NoError(t, err)
 	require.WithinDuration(t, time.Now(), updated.LastHeartbeat, time.Second*2)
 	require.Equal(t, model.AgentStatusOnline, updated.Status)
+}
+
+func TestHeartbeatMetadataForwarded(t *testing.T) {
+	recorder := &stubBehaviorRecorder{}
+	svc, st, _ := newTestServiceWithRecorder(t, recorder)
+	ctx := context.Background()
+	agent := &model.Agent{
+		ID:            uuid.New(),
+		Name:          "agent-meta",
+		Status:        model.AgentStatusOnline,
+		LastHeartbeat: time.Now().Add(-time.Minute),
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agent))
+	stream := &fakeHeartbeatStream{
+		ctx: ctx,
+		requests: []*pb.HeartbeatRequest{
+			{
+				AgentId:   agent.ID.String(),
+				Timestamp: time.Now().Unix(),
+				Load:      1.0,
+				Telemetry: &pb.HeartbeatTelemetry{},
+				Metadata: map[string]string{
+					"telemetry.cpu_percent": "42.0",
+					"cache.respond_hits":    "7",
+				},
+			},
+		},
+	}
+	require.ErrorIs(t, svc.Heartbeat(stream), io.EOF)
+	require.Len(t, recorder.heartbeats, 1)
+	metric := recorder.heartbeats[0]
+	require.Equal(t, "42.0", metric.Metadata["telemetry.cpu_percent"])
+	require.Equal(t, "7", metric.Metadata["cache.respond_hits"])
+
+	stored, err := st.GetAgent(ctx, agent.ID)
+	require.NoError(t, err)
+	require.Equal(t, "7", stored.Metadata["cache.respond_hits"])
+}
+
+type stubBehaviorRecorder struct {
+	heartbeats []behavior.HeartbeatMetric
+}
+
+func (s *stubBehaviorRecorder) RecordHeartbeat(_ context.Context, metric behavior.HeartbeatMetric) {
+	s.heartbeats = append(s.heartbeats, metric)
+}
+
+func (s *stubBehaviorRecorder) RecordTaskTelemetry(_ context.Context, payload behavior.TaskTelemetry) {
+}
+
+func TestHeartbeatShouldShutdownFromLabels(t *testing.T) {
+	svc, st, _ := newTestService(t)
+	ctx := context.Background()
+	agent := &model.Agent{
+		ID:     uuid.New(),
+		Name:   "agent-drain",
+		Labels: map[string]string{"agent.desired_state": "shutdown"},
+		Status: model.AgentStatusOnline,
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agent))
+
+	stream := &fakeHeartbeatStream{
+		ctx: ctx,
+		requests: []*pb.HeartbeatRequest{
+			{
+				AgentId:   agent.ID.String(),
+				Timestamp: time.Now().Unix(),
+				Load:      0.1,
+				Telemetry: &pb.HeartbeatTelemetry{},
+			},
+		},
+	}
+	err := svc.Heartbeat(stream)
+	require.ErrorIs(t, err, io.EOF)
+	require.Len(t, stream.responses, 1)
+	require.True(t, stream.responses[0].GetShouldShutdown())
 }
 
 type fakeHeartbeatStream struct {

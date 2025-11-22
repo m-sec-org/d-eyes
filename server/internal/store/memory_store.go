@@ -74,6 +74,18 @@ func (m *memoryStore) UpsertAgent(_ context.Context, agent *model.Agent) error {
 	agentCopy := *agent
 	agentCopy.CreatedAt = nowIfZero(agentCopy.CreatedAt)
 	agentCopy.UpdatedAt = time.Now()
+	if agent.Labels != nil {
+		agentCopy.Labels = copyMap(agent.Labels)
+	}
+	if agent.Capabilities != nil {
+		agentCopy.Capabilities = append([]string(nil), agent.Capabilities...)
+	}
+	if agent.Metadata != nil {
+		agentCopy.Metadata = copyMap(agent.Metadata)
+	}
+	if agent.RunningTasks != nil {
+		agentCopy.RunningTasks = append([]string(nil), agent.RunningTasks...)
+	}
 	m.agents[agentCopy.ID] = &agentCopy
 	if agentCopy.Name != "" {
 		m.agentsByName[agentCopy.Name] = agentCopy.ID
@@ -87,6 +99,10 @@ func (m *memoryStore) GetAgentByName(_ context.Context, name string) (*model.Age
 	if id, ok := m.agentsByName[name]; ok {
 		if agent, ok := m.agents[id]; ok {
 			cp := *agent
+			cp.Labels = copyMap(agent.Labels)
+			cp.Capabilities = append([]string(nil), agent.Capabilities...)
+			cp.Metadata = copyMap(agent.Metadata)
+			cp.RunningTasks = append([]string(nil), agent.RunningTasks...)
 			return &cp, nil
 		}
 	}
@@ -101,10 +117,14 @@ func (m *memoryStore) GetAgent(_ context.Context, id uuid.UUID) (*model.Agent, e
 		return nil, ErrNotFound
 	}
 	cp := *agent
+	cp.Labels = copyMap(agent.Labels)
+	cp.Capabilities = append([]string(nil), agent.Capabilities...)
+	cp.Metadata = copyMap(agent.Metadata)
+	cp.RunningTasks = append([]string(nil), agent.RunningTasks...)
 	return &cp, nil
 }
 
-func (m *memoryStore) UpdateAgentStatus(_ context.Context, id uuid.UUID, status model.AgentStatus, heartbeat time.Time, load float64, running []string) error {
+func (m *memoryStore) UpdateAgentStatus(_ context.Context, id uuid.UUID, status model.AgentStatus, heartbeat time.Time, load float64, running []string, metadata map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	agent, ok := m.agents[id]
@@ -113,12 +133,14 @@ func (m *memoryStore) UpdateAgentStatus(_ context.Context, id uuid.UUID, status 
 	}
 	agent.Status = status
 	agent.LastHeartbeat = heartbeat
+	agent.Load = load
+	if len(running) > 0 {
+		agent.RunningTasks = append([]string(nil), running...)
+	} else {
+		agent.RunningTasks = nil
+	}
+	agent.Metadata = copyMap(metadata)
 	agent.UpdatedAt = time.Now()
-	agent.Capabilities = append([]string(nil), agent.Capabilities...)
-	agent.Version = agent.Version
-	agent.Platform = agent.Platform
-	_ = load
-	_ = running
 	return nil
 }
 
@@ -1355,6 +1377,26 @@ func (m *memoryStore) ListThreatIntelJobsBySample(_ context.Context, sampleID uu
 		}
 		return results[i].CreatedAt.Before(results[j].CreatedAt)
 	})
+	return results, nil
+}
+
+func (m *memoryStore) ListThreatIntelJobs(_ context.Context, limit int) ([]*model.ThreatIntelJob, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	results := make([]*model.ThreatIntelJob, 0, len(m.tiJobs))
+	for _, job := range m.tiJobs {
+		cp := copyTIJob(job)
+		results = append(results, &cp)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].CreatedAt.Equal(results[j].CreatedAt) {
+			return results[i].ID.String() > results[j].ID.String()
+		}
+		return results[i].CreatedAt.After(results[j].CreatedAt)
+	})
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
 	return results, nil
 }
 

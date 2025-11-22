@@ -27,6 +27,11 @@ import (
 )
 
 // Service implements pb.AgentServiceServer.
+type BehaviorRecorder interface {
+	RecordHeartbeat(context.Context, behavior.HeartbeatMetric)
+	RecordTaskTelemetry(context.Context, behavior.TaskTelemetry)
+}
+
 type Service struct {
 	pb.UnimplementedAgentServiceServer
 	store       store.Store
@@ -36,12 +41,14 @@ type Service struct {
 	metrics     *metrics.Metrics
 	artifactMgr *artifacts.Manager
 	threatIntel *threatintel.Orchestrator
-	behavior    *behavior.Recorder
+	behavior    BehaviorRecorder
 	analyzer    *behavior.Analyzer
 	graph       *behavior.GraphService
 }
 
-func NewService(cfg config.Config, st store.Store, sched *scheduler.Scheduler, logger *slog.Logger, m *metrics.Metrics, artifactMgr *artifacts.Manager, ti *threatintel.Orchestrator, recorder *behavior.Recorder, analyzer *behavior.Analyzer, graph *behavior.GraphService) *Service {
+var _ BehaviorRecorder = (*behavior.Recorder)(nil)
+
+func NewService(cfg config.Config, st store.Store, sched *scheduler.Scheduler, logger *slog.Logger, m *metrics.Metrics, artifactMgr *artifacts.Manager, ti *threatintel.Orchestrator, recorder BehaviorRecorder, analyzer *behavior.Analyzer, graph *behavior.GraphService) *Service {
 	return &Service{store: st, sched: sched, cfg: cfg, logger: logger, metrics: m, artifactMgr: artifactMgr, threatIntel: ti, behavior: recorder, analyzer: analyzer, graph: graph}
 }
 
@@ -104,11 +111,12 @@ func (s *Service) Heartbeat(stream pb.AgentService_HeartbeatServer) error {
 		if heartbeatTime.IsZero() {
 			heartbeatTime = time.Now()
 		}
-		if err := s.store.UpdateAgentStatus(ctx, agentID, model.AgentStatusOnline, heartbeatTime, req.GetLoad(), req.GetRunningTasks()); err != nil {
+		if err := s.store.UpdateAgentStatus(ctx, agentID, model.AgentStatusOnline, heartbeatTime, req.GetLoad(), req.GetRunningTasks(), req.GetMetadata()); err != nil {
 			s.logger.Error("failed to update agent status", "error", err)
 			return err
 		}
 		telemetry := req.GetTelemetry()
+		metadata := copyStringMap(req.GetMetadata())
 		metric := behavior.HeartbeatMetric{
 			AgentID:        agentID,
 			Timestamp:      heartbeatTime,
@@ -117,6 +125,7 @@ func (s *Service) Heartbeat(stream pb.AgentService_HeartbeatServer) error {
 			LatencyMs:      telemetry.GetLatencyMs(),
 			CPUPercent:     telemetry.GetCpuPercent(),
 			BlockedActions: append([]string(nil), telemetry.GetBlockedActions()...),
+			Metadata:       metadata,
 		}
 		if s.behavior != nil {
 			s.behavior.RecordHeartbeat(ctx, metric)
@@ -127,7 +136,8 @@ func (s *Service) Heartbeat(stream pb.AgentService_HeartbeatServer) error {
 		if s.graph != nil {
 			s.graph.HandleHeartbeat(ctx, metric)
 		}
-		if err := stream.Send(&pb.HeartbeatResponse{ShouldShutdown: false}); err != nil {
+		shouldShutdown := s.shouldShutdownAgent(ctx, agentID)
+		if err := stream.Send(&pb.HeartbeatResponse{ShouldShutdown: shouldShutdown}); err != nil {
 			return err
 		}
 		if s.metrics != nil {
@@ -371,4 +381,20 @@ func copyStringMap(src map[string]string) map[string]string {
 		dst[k] = v
 	}
 	return dst
+}
+
+func (s *Service) shouldShutdownAgent(ctx context.Context, agentID uuid.UUID) bool {
+	agent, err := s.store.GetAgent(ctx, agentID)
+	if err != nil || agent == nil {
+		return false
+	}
+	for k, v := range agent.Labels {
+		if strings.EqualFold(strings.TrimSpace(k), "agent.desired_state") && strings.EqualFold(strings.TrimSpace(v), "shutdown") {
+			return true
+		}
+	}
+	if value := strings.TrimSpace(agent.Metadata["agent.should_shutdown"]); strings.EqualFold(value, "true") {
+		return true
+	}
+	return false
 }

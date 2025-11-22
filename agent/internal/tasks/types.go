@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/m-sec-org/d-eyes/agent/pkg/artifacts"
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
@@ -31,10 +32,16 @@ type TaskRequest struct {
 	Config          config.Config
 	Manager         *reporting.Manager
 	ThreatIntel     *threatintel.Manager
+	ArtifactClient  ArtifactClient
 	Quiet           bool
 	JSONOutput      bool
 	Notices         []string
 	SandboxApproved bool
+}
+
+// ArtifactClient 抽象远程 artifact 上传行为，便于测试时注入。
+type ArtifactClient interface {
+	Upload(ctx context.Context, input artifacts.UploadInput) (*artifacts.UploadResult, error)
 }
 
 // TaskResult 表示任务执行后的返回数据

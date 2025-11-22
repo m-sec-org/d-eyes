@@ -172,6 +172,23 @@ func (p *PostgresStore) LeaseThreatIntelJobs(ctx context.Context, limit int) ([]
 	return jobs, nil
 }
 
+func (p *PostgresStore) ListThreatIntelJobs(ctx context.Context, limit int) ([]*model.ThreatIntelJob, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := p.pool.Query(ctx, `
+        SELECT id, sample_id, indicator, kind, source, status, payload, attempt, error_msg, next_run_at,
+               created_at, updated_at, task_run_id, agent_id, artifact_ids, metadata
+          FROM threat_intel_jobs
+         ORDER BY created_at DESC
+         LIMIT $1
+    `, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list threat intel jobs: %w", err)
+	}
+	return scanThreatIntelJobs(rows)
+}
+
 func (p *PostgresStore) UpdateThreatIntelJobStatus(ctx context.Context, jobID uuid.UUID, status string, nextRunAt time.Time, errMsg string, metadata map[string]string) error {
 	var metaJSON []byte
 	if metadata != nil {
@@ -262,41 +279,6 @@ func (p *PostgresStore) ListThreatIntelVerdicts(ctx context.Context, indicator s
 		return nil, fmt.Errorf("iterate threat intel verdicts: %w", err)
 	}
 	return results, nil
-}
-
-func (p *PostgresStore) GetArtifacts(ctx context.Context, ids []uuid.UUID) ([]model.Artifact, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	rows, err := p.pool.Query(ctx, `
-        SELECT id, task_run_id, name, mime_type, blob
-          FROM artifacts
-         WHERE id = ANY($1)
-    `, ids)
-	if err != nil {
-		return nil, fmt.Errorf("get artifacts: %w", err)
-	}
-	defer rows.Close()
-	found := make(map[uuid.UUID]model.Artifact, len(ids))
-	for rows.Next() {
-		var art model.Artifact
-		if err := rows.Scan(&art.ID, &art.TaskRunID, &art.Name, &art.MIMEType, &art.Blob); err != nil {
-			return nil, fmt.Errorf("scan artifact: %w", err)
-		}
-		found[art.ID] = art
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate artifacts: %w", err)
-	}
-	result := make([]model.Artifact, 0, len(ids))
-	for _, id := range ids {
-		art, ok := found[id]
-		if !ok {
-			return nil, store.ErrNotFound
-		}
-		result = append(result, art)
-	}
-	return result, nil
 }
 
 func (p *PostgresStore) CountThreatIntelJobs(ctx context.Context, statuses []string) (int64, error) {

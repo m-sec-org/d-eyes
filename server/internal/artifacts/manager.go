@@ -1,6 +1,8 @@
 package artifacts
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -71,14 +73,9 @@ func NewManager(cfg config.ArtifactConfig) (*Manager, error) {
 
 // CreateUpload reserves a token for a future upload.
 func (m *Manager) CreateUpload(meta Metadata) (uuid.UUID, time.Time, error) {
-	if strings.TrimSpace(meta.Filename) == "" {
-		return uuid.Nil, time.Time{}, errors.New("filename required")
-	}
-	if meta.Size < 0 {
-		return uuid.Nil, time.Time{}, errors.New("size must be positive")
-	}
-	if meta.Size > m.cfg.MaxSize {
-		return uuid.Nil, time.Time{}, fmt.Errorf("file exceeds max size (%d bytes)", m.cfg.MaxSize)
+	meta = sanitizeMetadata(meta)
+	if err := validateMetadata(meta, m.cfg.MaxSize); err != nil {
+		return uuid.Nil, time.Time{}, err
 	}
 	id := uuid.New()
 	expiry := time.Now().Add(m.cfg.UploadTTL)
@@ -130,6 +127,10 @@ func (m *Manager) WriteUpload(id uuid.UUID, reader io.Reader) error {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("upload exceeds max size (%d bytes)", m.cfg.MaxSize)
 	}
+	if token.meta.Size > 0 && written != token.meta.Size {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("size mismatch: declared %d bytes, uploaded %d bytes", token.meta.Size, written)
+	}
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close temp artifact: %w", err)
 	}
@@ -166,6 +167,15 @@ func (m *Manager) Consume(id uuid.UUID) (StoredArtifact, error) {
 	}
 	_ = os.Remove(token.path)
 
+	checksum := sha256.Sum256(data)
+	if token.meta.Hash != "" {
+		expected := strings.ToLower(strings.TrimSpace(token.meta.Hash))
+		if expected != hex.EncodeToString(checksum[:]) {
+			_ = os.Remove(token.path)
+			return StoredArtifact{}, fmt.Errorf("artifact %s hash mismatch", id)
+		}
+	}
+
 	return StoredArtifact{
 		ID:          token.id,
 		Filename:    token.meta.Filename,
@@ -179,4 +189,43 @@ func (m *Manager) Consume(id uuid.UUID) (StoredArtifact, error) {
 // Config exposes the underlying artifact config.
 func (m *Manager) Config() config.ArtifactConfig {
 	return m.cfg
+}
+
+func sanitizeMetadata(meta Metadata) Metadata {
+	meta.Filename = strings.TrimSpace(meta.Filename)
+	meta.ContentType = strings.TrimSpace(meta.ContentType)
+	meta.Hash = strings.ToLower(strings.TrimSpace(meta.Hash))
+	meta.Encryption = strings.ToLower(strings.TrimSpace(meta.Encryption))
+	if meta.Encryption == "" {
+		meta.Encryption = "none"
+	}
+	return meta
+}
+
+func validateMetadata(meta Metadata, maxSize int64) error {
+	if meta.Filename == "" {
+		return errors.New("filename required")
+	}
+	if meta.Size <= 0 {
+		return errors.New("size must be positive")
+	}
+	if meta.Size > maxSize {
+		return fmt.Errorf("file exceeds max size (%d bytes)", maxSize)
+	}
+	if meta.Hash == "" {
+		return errors.New("hash required")
+	}
+	if len(meta.Hash) != 64 {
+		return errors.New("hash must be 64 hex characters")
+	}
+	if _, err := hex.DecodeString(meta.Hash); err != nil {
+		return errors.New("hash must be hexadecimal")
+	}
+	if meta.Encryption == "" {
+		meta.Encryption = "none"
+	}
+	if meta.Encryption != "none" && meta.Encryption != "aes256-gcm" {
+		return fmt.Errorf("unsupported encryption %q", meta.Encryption)
+	}
+	return nil
 }
