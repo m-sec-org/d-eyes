@@ -44,10 +44,21 @@ type Scheduler struct {
 	auditRecorder audit.Recorder
 	alertNotifier alerts.Notifier
 	taskHub       *streams.Hub
+	queueHub      *streams.Hub
 }
 
 type resultWriter interface {
 	InsertTaskResult(ctx context.Context, result *model.TaskResult) error
+}
+
+// QueueSummary captures current queue depth and status counts.
+type QueueSummary struct {
+	QueueDepth    int64
+	BASQueueDepth int64
+	InFlight      int
+	BASInFlight   int
+	StatusCounts  map[model.TaskStatus]int64
+	UpdatedAt     time.Time
 }
 
 func New(store store.Store, queue queue.Queue, cfg config.SchedulerConfig) *Scheduler {
@@ -93,6 +104,13 @@ func (s *Scheduler) SetTaskHub(hub *streams.Hub) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.taskHub = hub
+}
+
+// SetQueueHub wires queue summary hub.
+func (s *Scheduler) SetQueueHub(hub *streams.Hub) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queueHub = hub
 }
 
 // RecordNewTask updates internal counters for freshly created tasks.
@@ -741,6 +759,9 @@ func (s *Scheduler) publishStats() {
 	}
 	stats := s.snapshotStats()
 	s.taskHub.Publish(stats)
+	if s.queueHub != nil {
+		s.queueHub.Publish(stats)
+	}
 }
 
 func (s *Scheduler) snapshotStats() streams.TaskEvent {
@@ -763,6 +784,27 @@ func (s *Scheduler) snapshotStats() streams.TaskEvent {
 		BASQueueDepth: basPending,
 		QueueDepth:    depth,
 		UpdatedAt:     time.Now().UTC(),
+	}
+}
+
+// QueueSummary returns high-level scheduler queue metrics.
+func (s *Scheduler) QueueSummary() QueueSummary {
+	stats := s.snapshotStats()
+	s.mu.Lock()
+	counts := make(map[model.TaskStatus]int64, len(s.statusCounts))
+	for status, count := range s.statusCounts {
+		counts[status] = count
+	}
+	inFlight := s.totalInFlight
+	basInFlight := s.basInFlight
+	s.mu.Unlock()
+	return QueueSummary{
+		QueueDepth:    stats.QueueDepth,
+		BASQueueDepth: stats.BASQueueDepth,
+		InFlight:      inFlight,
+		BASInFlight:   basInFlight,
+		StatusCounts:  counts,
+		UpdatedAt:     stats.UpdatedAt,
 	}
 }
 

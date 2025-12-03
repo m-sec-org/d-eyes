@@ -21,6 +21,9 @@ var (
 	version    = "v1.3.1"
 	configPath string
 
+	loadedConfigPath string
+	loadedConfigMu   sync.RWMutex
+
 	taskRegistryMu sync.RWMutex
 	taskRegistry   = make(map[string]taskCommandDefinition)
 )
@@ -199,6 +202,7 @@ GLOBAL OPTIONS:
 			return err
 		}
 		SetGlobalConfig(cfg)
+		setLoadedConfigPath(path)
 		fatihColor.NoColor = !cfg.UI.Color
 		if c.App.Metadata == nil {
 			c.App.Metadata = make(map[string]interface{})
@@ -504,7 +508,20 @@ func newTaskCommand(def taskCommandDefinition) *cli.Command {
 func defaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return ""
+		return filepath.Join(os.TempDir(), "d-eyes", "config.yaml")
 	}
 	return filepath.Join(home, ".d-eyes", "config.yaml")
+}
+
+func setLoadedConfigPath(path string) {
+	loadedConfigMu.Lock()
+	loadedConfigPath = path
+	loadedConfigMu.Unlock()
+}
+
+// LoadedConfigPath returns the absolute path of the currently active config file.
+func LoadedConfigPath() string {
+	loadedConfigMu.RLock()
+	defer loadedConfigMu.RUnlock()
+	return loadedConfigPath
 }

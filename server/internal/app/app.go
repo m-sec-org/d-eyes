@@ -24,7 +24,9 @@ import (
 	"github.com/m-sec-org/d-eyes/server/internal/basscenarios"
 	"github.com/m-sec-org/d-eyes/server/internal/behavior"
 	"github.com/m-sec-org/d-eyes/server/internal/certmanager"
+	"github.com/m-sec-org/d-eyes/server/internal/collectorctrl"
 	"github.com/m-sec-org/d-eyes/server/internal/config"
+	"github.com/m-sec-org/d-eyes/server/internal/eventing"
 	"github.com/m-sec-org/d-eyes/server/internal/grpcsvc"
 	"github.com/m-sec-org/d-eyes/server/internal/logger"
 	"github.com/m-sec-org/d-eyes/server/internal/metrics"
@@ -74,6 +76,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 	metricsCollector := metrics.New(reg)
 	sched.SetMetrics(metricsCollector)
 	metricsHandler := metrics.Handler(reg)
+
+	eventService := eventing.NewService(cfg.Events, st, metricsCollector, log)
+	if eventService != nil {
+		defer eventService.Close()
+	}
+	collectorHub := collectorctrl.NewHub()
+	defer collectorHub.Close()
 
 	auditLogManager, err := auditlog.New(cfg.Audit.StorePath, 2000)
 	if err != nil {
@@ -154,6 +163,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 	taskStreamHandler := streams.SSEHandler(taskStream)
 	defer taskStream.Close()
 
+	queueStream := streams.NewTaskHub()
+	sched.SetQueueHub(queueStream)
+	queueStreamHandler := streams.SSEHandler(queueStream)
+	defer queueStream.Close()
+
 	taskCatalogManager, err := taskcatalog.NewManager(taskcatalog.Config{PersistPath: cfg.TaskCatalog.PersistPath}, log)
 	if err != nil {
 		return fmt.Errorf("init task catalog: %w", err)
@@ -174,6 +188,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Audit:        auditLogManager,
 	}
 	templateHandler := &v1.TemplateHandler{Manager: templateManager}
+	taskViewHandler := &v1.TaskViewHandler{Store: st, RBAC: rbacEnforcer}
 	reportHandler := &v1.ReportHandler{Store: st, Templates: reportTemplateManager, Audit: auditLogManager}
 	catalogHandler := &v1.TaskCatalogHandler{Catalog: taskCatalogManager}
 	pluginManager := plugins.NewManager()
@@ -225,10 +240,22 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	securityHandler := &v1.SecurityHandler{MFAStore: mfaStore}
 	opsHandler := &v1.OpsHandler{Scheduler: sched}
+	queueHandler := &v1.QueueHandler{Scheduler: sched, RBAC: rbacEnforcer}
+	collectorHandler := &v1.CollectorHandler{
+		Store:            st,
+		Hub:              collectorHub,
+		RBAC:             rbacEnforcer,
+		Audit:            auditLogManager,
+		Metrics:          metricsCollector,
+		AllowedProviders: cfg.Collectors.AllowedProviders,
+		AllowedProbes:    cfg.Collectors.AllowedProbes,
+	}
+	eventsHandler := &v1.EventsHandler{Service: eventService, Store: st, Config: cfg.Events}
 
 	router := api.NewRouter(
 		cfg,
 		taskHandler,
+		taskViewHandler,
 		templateHandler,
 		reportHandler,
 		catalogHandler,
@@ -245,9 +272,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		&v1.CertHandler{Manager: certManager},
 		securityHandler,
 		opsHandler,
+		queueHandler,
+		collectorHandler,
+		eventsHandler,
 		mfaStore,
 		metricsHandler,
 		taskStreamHandler,
+		queueStreamHandler,
 		threatStreamHandler,
 		anomalyStreamHandler,
 	)

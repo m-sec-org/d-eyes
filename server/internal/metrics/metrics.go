@@ -7,26 +7,32 @@ import (
 )
 
 type Metrics struct {
-	Heartbeats          prometheus.Counter
-	TasksLeased         prometheus.Counter
-	TasksCompleted      *prometheus.CounterVec
-	TaskQueueDepth      prometheus.Gauge
-	TaskTimeToLease     prometheus.Histogram
-	TaskRunDuration     prometheus.Histogram
-	TasksInFlight       prometheus.Gauge
-	TaskStatus          *prometheus.GaugeVec
-	AgentCPUPercent     prometheus.Histogram
-	AgentMemoryPercent  prometheus.Histogram
-	AgentIOUtilPercent  prometheus.Histogram
-	BASRuns             *prometheus.CounterVec
-	BASSandboxFallbacks *prometheus.CounterVec
-	BASApprovals        *prometheus.CounterVec
-	BASBacklog          prometheus.Gauge
-	BASInFlight         prometheus.Gauge
-	BASQueueWait        prometheus.Histogram
-	ThreatIntelJobs     *prometheus.CounterVec
-	ThreatIntelQueue    prometheus.Gauge
-	ThreatIntelLatency  *prometheus.HistogramVec
+	Heartbeats             prometheus.Counter
+	TasksLeased            prometheus.Counter
+	TasksCompleted         *prometheus.CounterVec
+	TaskQueueDepth         prometheus.Gauge
+	TaskTimeToLease        prometheus.Histogram
+	TaskRunDuration        prometheus.Histogram
+	TasksInFlight          prometheus.Gauge
+	TaskStatus             *prometheus.GaugeVec
+	AgentCPUPercent        prometheus.Histogram
+	AgentMemoryPercent     prometheus.Histogram
+	AgentIOUtilPercent     prometheus.Histogram
+	BASRuns                *prometheus.CounterVec
+	BASSandboxFallbacks    *prometheus.CounterVec
+	BASApprovals           *prometheus.CounterVec
+	BASBacklog             prometheus.Gauge
+	BASInFlight            prometheus.Gauge
+	BASQueueWait           prometheus.Histogram
+	ThreatIntelJobs        *prometheus.CounterVec
+	ThreatIntelQueue       prometheus.Gauge
+	ThreatIntelLatency     *prometheus.HistogramVec
+	SystemEventsIngested   prometheus.Counter
+	SystemEventsDropped    prometheus.Counter
+	SystemEventsQueue      prometheus.Gauge
+	SystemEventsLatency    prometheus.Histogram
+	CollectorConfigUpdates prometheus.Counter
+	CollectorStatusAlerts  *prometheus.CounterVec
 }
 
 func New(reg prometheus.Registerer) *Metrics {
@@ -158,6 +164,43 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help:      "Latency of external threat intelligence API calls.",
 			Buckets:   []float64{0.25, 0.5, 1, 2, 5, 10, 30},
 		}, []string{"source", "action"}),
+		SystemEventsIngested: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "ingested_total",
+			Help:      "Total number of system events accepted into persistent storage.",
+		}),
+		SystemEventsDropped: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "dropped_total",
+			Help:      "Total number of system events dropped due to validation or backpressure.",
+		}),
+		SystemEventsQueue: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "queue_depth",
+			Help:      "Current buffered system events waiting to be flushed to storage.",
+		}),
+		SystemEventsLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "ingest_latency_seconds",
+			Help:      "Time from event receipt to durable storage.",
+			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
+		}),
+		CollectorConfigUpdates: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "collector",
+			Name:      "config_updates_total",
+			Help:      "Total collector configuration updates applied via the control plane.",
+		}),
+		CollectorStatusAlerts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "collector",
+			Name:      "status_alerts_total",
+			Help:      "Collector status reports grouped by tenant and alert level.",
+		}, []string{"tenant", "level"}),
 	}
 	reg.MustRegister(
 		m.Heartbeats,
@@ -180,6 +223,12 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ThreatIntelJobs,
 		m.ThreatIntelQueue,
 		m.ThreatIntelLatency,
+		m.SystemEventsIngested,
+		m.SystemEventsDropped,
+		m.SystemEventsQueue,
+		m.SystemEventsLatency,
+		m.CollectorConfigUpdates,
+		m.CollectorStatusAlerts,
 	)
 	return m
 }

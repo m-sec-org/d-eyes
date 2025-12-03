@@ -41,7 +41,36 @@ func TestIntegration_ReportEndpoints(t *testing.T) {
 	}
 	sched := scheduler.New(st, queue, cfg.Scheduler)
 	handler := &v1.TaskHandler{Store: st, Sched: sched}
-	router := api.NewRouter(cfg, handler, &v1.TemplateHandler{}, &v1.ReportHandler{Store: st}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := api.NewRouter(
+		cfg,
+		handler,
+		nil,
+		&v1.TemplateHandler{},
+		&v1.ReportHandler{Store: st},
+		nil, // catalog
+		nil, // plugin
+		nil, // bas
+		nil, // agent
+		nil, // audit
+		nil, // rbac
+		nil, // artifact
+		nil, // threat intel
+		nil, // behavior
+		nil, // compliance
+		nil, // playbook
+		nil, // cert
+		nil, // security
+		nil, // ops
+		nil, // queue handler
+		nil, // collector handler
+		nil, // events handler
+		nil, // mfa
+		nil, // metrics
+		nil, // task stream
+		nil, // queue stream
+		nil, // threat stream
+		nil, // anomaly stream
+	)
 
 	type testCase struct {
 		TaskType string

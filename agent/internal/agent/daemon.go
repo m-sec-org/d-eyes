@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,7 +17,9 @@ import (
 
 	internal "github.com/m-sec-org/d-eyes/agent/internal"
 	"github.com/m-sec-org/d-eyes/agent/internal/agent/adaptive"
+	"github.com/m-sec-org/d-eyes/agent/internal/agent/eventstream"
 	"github.com/m-sec-org/d-eyes/agent/internal/agent/remote"
+	"github.com/m-sec-org/d-eyes/agent/internal/collector"
 	"github.com/m-sec-org/d-eyes/agent/internal/model"
 	"github.com/m-sec-org/d-eyes/agent/internal/tasks"
 	"github.com/m-sec-org/d-eyes/agent/internal/telemetry"
@@ -105,6 +108,8 @@ func runRemoteInternal(ctx context.Context, cfg config.RemoteConfig) error {
 
 type remoteRunnerOption func(*remoteRunner)
 
+const defaultConfigWatchInterval = 5 * time.Second
+
 func newRemoteRunner(cfg config.RemoteConfig, opts ...remoteRunnerOption) (*remoteRunner, error) {
 	remoteCfg := remote.RemoteConfig{
 		ServerGRPCAddr:    cfg.ServerGRPCAddr,
@@ -131,15 +136,16 @@ func newRemoteRunner(cfg config.RemoteConfig, opts ...remoteRunnerOption) (*remo
 		pollInterval = 2 * time.Second
 	}
 	runner := &remoteRunner{
-		cfg:          cfg,
-		remoteCfg:    remoteCfg,
-		client:       remote.NewClient(remoteCfg),
-		store:        store,
-		pollInterval: pollInterval,
-		timeSource:   realTimeSource{},
-		resolveTask:  internal.TaskRunnerByName,
-		throttle:     adaptive.NewController(cfg.Adaptive),
-		cacheStats:   make(map[string]string),
+		cfg:              cfg,
+		remoteCfg:        remoteCfg,
+		client:           remote.NewClient(remoteCfg),
+		store:            store,
+		pollInterval:     pollInterval,
+		timeSource:       realTimeSource{},
+		resolveTask:      internal.TaskRunnerByName,
+		throttle:         adaptive.NewController(cfg.Adaptive),
+		cacheStats:       make(map[string]string),
+		collectorFactory: defaultCollectorFactory,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -151,6 +157,25 @@ func newRemoteRunner(cfg config.RemoteConfig, opts ...remoteRunnerOption) (*remo
 		return nil, err
 	}
 	runner.artifactClient = artifactClient
+	if runner.eventPipeline == nil {
+		pipeline, err := eventstream.NewPipeline(0, cacheDir)
+		if err != nil {
+			return nil, fmt.Errorf("init event pipeline: %w", err)
+		}
+		runner.eventPipeline = pipeline
+		pipelineHandler := pipeline.Handler()
+		if runner.collectorHandler == nil {
+			runner.collectorHandler = pipelineHandler
+		} else {
+			prev := runner.collectorHandler
+			runner.collectorHandler = collector.EventHandlerFunc(func(ctx context.Context, event *collector.SystemEvent) error {
+				if err := prev.HandleEvent(ctx, event); err != nil {
+					return err
+				}
+				return pipelineHandler.HandleEvent(ctx, event)
+			})
+		}
+	}
 	if runner.client == nil {
 		return nil, errors.New("remote runner: client is nil")
 	}
@@ -165,6 +190,12 @@ func newRemoteRunner(cfg config.RemoteConfig, opts ...remoteRunnerOption) (*remo
 	}
 	if runner.pollInterval <= 0 {
 		runner.pollInterval = 2 * time.Second
+	}
+	if !runner.disableCollectorWatchers {
+		runner.initCollectors()
+	}
+	if path := internal.LoadedConfigPath(); strings.TrimSpace(path) != "" {
+		runner.startConfigWatcher(path)
 	}
 	return runner, nil
 }
@@ -208,6 +239,30 @@ type remoteRunner struct {
 	cacheStats map[string]string
 
 	artifactClient tasks.ArtifactClient
+
+	collectorMu              sync.Mutex
+	collectorConfigs         []collector.Config
+	collectorSvc             collectorController
+	collectorHandler         collector.EventHandler
+	collectorBaseCtx         context.Context
+	collectorCtx             context.Context
+	collectorCancel          context.CancelFunc
+	collectorErr             string
+	collectorWatcherStop     func()
+	collectorFactory         func([]collector.Config) collectorController
+	disableCollectorWatchers bool
+
+	configWatcherStop   context.CancelFunc
+	configWatchInterval time.Duration
+
+	eventPipeline     *eventstream.Pipeline
+	eventUploaderStop context.CancelFunc
+}
+
+type collectorController interface {
+	Start(context.Context, collector.EventHandler) error
+	Stop(context.Context) error
+	Status() []collector.CollectorStatus
 }
 
 func (r *remoteRunner) taskRunnerByName(name string) (tasks.TaskRunner, bool) {
@@ -238,7 +293,206 @@ func (r *remoteRunner) newTicker(d time.Duration) ticker {
 	return r.timeSource.NewTicker(d)
 }
 
+func defaultCollectorFactory(configs []collector.Config) collectorController {
+	if len(configs) == 0 {
+		return nil
+	}
+	return collector.NewService(configs)
+}
+
+func (r *remoteRunner) initCollectors() {
+	configs := collector.FromAppConfig(internal.GetGlobalConfig())
+	r.updateCollectorConfigs(configs)
+	r.collectorWatcherStop = internal.RegisterConfigWatcher(func(newCfg config.Config) {
+		r.updateCollectorConfigs(collector.FromAppConfig(newCfg))
+	})
+}
+
+func (r *remoteRunner) startCollectors(ctx context.Context) error {
+	r.collectorMu.Lock()
+	defer r.collectorMu.Unlock()
+	r.collectorBaseCtx = ctx
+	if r.collectorFactory == nil || len(r.collectorConfigs) == 0 || r.collectorCancel != nil {
+		return nil
+	}
+	svc := r.collectorFactory(r.collectorConfigs)
+	if svc == nil {
+		return nil
+	}
+	handler := r.collectorHandler
+	if handler == nil {
+		handler = collector.EventHandlerFunc(func(context.Context, *collector.SystemEvent) error { return nil })
+	}
+	r.collectorSvc = svc
+	collectorCtx, cancel := context.WithCancel(ctx)
+	if err := svc.Start(collectorCtx, handler); err != nil {
+		r.collectorSvc = nil
+		r.collectorErr = err.Error()
+		cancel()
+		return err
+	}
+	r.collectorCancel = cancel
+	r.collectorErr = ""
+	return nil
+}
+
+func (r *remoteRunner) restartCollectorsLocked() {
+	if r.collectorFactory == nil || len(r.collectorConfigs) == 0 || r.collectorBaseCtx == nil {
+		return
+	}
+	if r.collectorCancel != nil {
+		r.collectorCancel()
+		r.collectorCancel = nil
+	}
+	if r.collectorSvc != nil {
+		_ = r.collectorSvc.Stop(context.Background())
+		r.collectorSvc = nil
+	}
+	svc := r.collectorFactory(r.collectorConfigs)
+	if svc == nil {
+		return
+	}
+	handler := r.collectorHandler
+	if handler == nil {
+		handler = collector.EventHandlerFunc(func(context.Context, *collector.SystemEvent) error { return nil })
+	}
+	collectorCtx, cancel := context.WithCancel(r.collectorBaseCtx)
+	if err := svc.Start(collectorCtx, handler); err != nil {
+		r.collectorErr = err.Error()
+		cancel()
+		return
+	}
+	r.collectorSvc = svc
+	r.collectorCancel = cancel
+	r.collectorErr = ""
+}
+
+func (r *remoteRunner) updateCollectorConfigs(configs []collector.Config) {
+	r.collectorMu.Lock()
+	defer r.collectorMu.Unlock()
+	r.collectorConfigs = configs
+	if r.collectorCancel != nil {
+		r.restartCollectorsLocked()
+	}
+}
+
+func (r *remoteRunner) shutdownCollectors() {
+	if r.eventUploaderStop != nil {
+		r.eventUploaderStop()
+		r.eventUploaderStop = nil
+	}
+	if r.configWatcherStop != nil {
+		r.configWatcherStop()
+		r.configWatcherStop = nil
+	}
+	r.collectorMu.Lock()
+	watcher := r.collectorWatcherStop
+	r.collectorWatcherStop = nil
+	if r.collectorCancel != nil {
+		r.collectorCancel()
+		r.collectorCancel = nil
+	}
+	if r.collectorSvc != nil {
+		_ = r.collectorSvc.Stop(context.Background())
+		r.collectorSvc = nil
+	}
+	r.collectorBaseCtx = nil
+	r.collectorConfigs = nil
+	r.collectorErr = ""
+	r.collectorMu.Unlock()
+	if watcher != nil {
+		watcher()
+	}
+}
+
+func (r *remoteRunner) collectorStatusSnapshot() ([]collector.CollectorStatus, string) {
+	r.collectorMu.Lock()
+	defer r.collectorMu.Unlock()
+	if r.collectorSvc == nil {
+		return nil, r.collectorErr
+	}
+	return r.collectorSvc.Status(), r.collectorErr
+}
+
+func (r *remoteRunner) startConfigWatcher(path string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	interval := r.configWatchInterval
+	if interval <= 0 {
+		interval = defaultConfigWatchInterval
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if r.configWatcherStop != nil {
+		r.configWatcherStop()
+	}
+	r.configWatcherStop = cancel
+	go r.watchConfigFile(ctx, path, interval)
+}
+
+func (r *remoteRunner) watchConfigFile(ctx context.Context, path string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var lastStatErr string
+	var lastLoadErr string
+	var lastSig fileSignature
+	var lastSigValid bool
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sig, err := statConfigSignature(path)
+			if err != nil {
+				msg := err.Error()
+				if msg != lastStatErr {
+					log.Printf("[remote] config watcher stat error: %v", err)
+					lastStatErr = msg
+				}
+				continue
+			}
+			lastStatErr = ""
+			if lastSigValid && sig == lastSig {
+				continue
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				msg := err.Error()
+				if msg != lastLoadErr {
+					log.Printf("[remote] reload config failed: %v", err)
+					lastLoadErr = msg
+				}
+				continue
+			}
+			lastLoadErr = ""
+			internal.SetGlobalConfig(cfg)
+			lastSig = sig
+			lastSigValid = true
+		}
+	}
+}
+
+type fileSignature struct {
+	size    int64
+	modTime time.Time
+}
+
+func statConfigSignature(path string) (fileSignature, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileSignature{}, err
+	}
+	return fileSignature{
+		size:    info.Size(),
+		modTime: info.ModTime(),
+	}, nil
+}
+
 func (r *remoteRunner) run(ctx context.Context) error {
+	if err := r.startCollectors(ctx); err != nil {
+		log.Printf("[remote] collector start failed: %v", err)
+	}
+	defer r.shutdownCollectors()
 	backoff := time.Second
 	for {
 		if err := r.runOnce(ctx); err != nil {
@@ -294,6 +548,15 @@ func (r *remoteRunner) runOnce(ctx context.Context) error {
 
 	if _, err := r.client.Register(ctx, meta); err != nil {
 		return err
+	}
+	if id := strings.TrimSpace(r.client.AgentID()); id != "" {
+		_ = os.Setenv("D_EYES_AGENT_ID", id)
+	}
+	if name := strings.TrimSpace(meta.Name); name != "" {
+		_ = os.Setenv("D_EYES_AGENT_NAME", name)
+	}
+	if cancel := r.startEventUploader(ctx, meta.Name); cancel != nil {
+		defer cancel()
 	}
 
 	telemetry.StartSystemSampler(ctx, 5*time.Second)
@@ -452,6 +715,20 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 		r.throttle.RecordResult(ctx, execErr, 1, cpu)
 	}
 	return nil
+}
+
+func (r *remoteRunner) startEventUploader(ctx context.Context, agentName string) context.CancelFunc {
+	if r.eventPipeline == nil {
+		return nil
+	}
+	uploader := newEventUploader(r.eventPipeline, r.cfg, r.client.AgentID(), agentName)
+	if uploader == nil {
+		return nil
+	}
+	uploadCtx, cancel := context.WithCancel(ctx)
+	go uploader.run(uploadCtx)
+	r.eventUploaderStop = cancel
+	return cancel
 }
 
 func (r *remoteRunner) enqueueHeartbeatPayload(hbCh chan<- remote.HeartbeatPayload, load float64, running []string) {
@@ -746,6 +1023,33 @@ func (r *remoteRunner) collectHeartbeatMetadata() map[string]string {
 		stats[k] = v
 	}
 	r.cacheMu.RUnlock()
+	statuses, collectorErr := r.collectorStatusSnapshot()
+	if len(statuses) > 0 {
+		stats["collectors.enabled"] = strconv.Itoa(len(statuses))
+		for _, st := range statuses {
+			prefix := fmt.Sprintf("collector.%s", st.Name)
+			stats[prefix+".state"] = st.State
+			if st.LastError != "" {
+				stats[prefix+".error"] = st.LastError
+			}
+			for k, v := range st.Stats {
+				stats[fmt.Sprintf("%s.%s", prefix, k)] = fmt.Sprint(v)
+			}
+		}
+	}
+	if collectorErr != "" {
+		stats["collector.error"] = collectorErr
+	}
+	if r.eventPipeline != nil {
+		if chunk, count := r.eventPipeline.NextChunk(); chunk != "" {
+			stats["collector.events.chunk"] = chunk
+			stats["collector.events.chunk_count"] = strconv.Itoa(count)
+		}
+		pStats := r.eventPipeline.Stats()
+		stats["collector.events.queue_depth"] = strconv.Itoa(pStats.QueueDepth)
+		stats["collector.events.disk_backlog"] = strconv.FormatUint(pStats.DiskBacklog, 10)
+		stats["collector.events.dropped"] = strconv.FormatUint(pStats.Dropped, 10)
+	}
 	return stats
 }
 
@@ -792,5 +1096,29 @@ func withTaskResolver(resolver taskResolver) remoteRunnerOption {
 func withPollInterval(d time.Duration) remoteRunnerOption {
 	return func(r *remoteRunner) {
 		r.pollInterval = d
+	}
+}
+
+func withCollectorFactory(factory func([]collector.Config) collectorController) remoteRunnerOption {
+	return func(r *remoteRunner) {
+		r.collectorFactory = factory
+	}
+}
+
+func withCollectorHandler(handler collector.EventHandler) remoteRunnerOption {
+	return func(r *remoteRunner) {
+		r.collectorHandler = handler
+	}
+}
+
+func withoutCollectorWatchers() remoteRunnerOption {
+	return func(r *remoteRunner) {
+		r.disableCollectorWatchers = true
+	}
+}
+
+func withEventPipeline(p *eventstream.Pipeline) remoteRunnerOption {
+	return func(r *remoteRunner) {
+		r.eventPipeline = p
 	}
 }

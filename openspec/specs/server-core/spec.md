@@ -91,3 +91,62 @@ Server MUST 暴露 `/api/v1/artifacts/presign` 与 `/api/v1/artifacts/upload/:id
 - **WHEN** Agent 调用 `POST /api/v1/artifacts/presign`，携带 `filename/content_type/hash/size/encryption`，Server 会验证参数、写入内存 token 并返回 `upload_id`、`upload_url` 与过期时间；Agent 随后在 `upload_ttl` 内向 `PUT /api/v1/artifacts/upload/{id}` 上传内容
 - **THEN** Artifact Manager 将流式写入临时文件、校验大小限制并标记 token 为 completed，之后 gRPC `ReportResult` 通过 `threatintel.artifact_tokens` 引用该 ID，Server 可在消费后立即把文件从上传目录移动到永久存储并附带 metadata（hash/encryption/type），确保威胁情报与审计链路能够访问加密样本
 
+### Requirement: Task Query & Saved View APIs
+Server MUST 提供支持多状态、关键字搜索、分页与用户视图存储的任务查询接口，确保前端与 CLI 均可消费一致的数据结构。
+
+#### Scenario: Filtered task list with cursor + saved views
+- **GIVEN** 客户端调用 `GET /api/v1/tasks?status=running,failed&search=acme&limit=50&cursor=eyJ0YXNrX2lkIjoiLi4uIn0=`
+- **WHEN** Handler 查询 store（按多状态、关键字匹配 `id/type/profile/metadata.targets/scenario_*`），并封装 `[]taskResponse`
+- **THEN** 响应为 `{data:[...], page_size:50, next_cursor:"...", applied_filters:{status:["running","failed"], search:"acme"}}`，`taskResponse` 保留 `last_run.summary`（JSON）、`metadata`、`scenario_*` 字段
+- **AND** `POST /api/v1/task-views` / `GET /api/v1/task-views` 以用户维度读写 saved views（名称、filters、默认排序），用于恢复控制台视图
+
+### Requirement: Scheduler Queue Inspection & Stream
+Server MUST 暴露调度队列/租约观察接口，为 Ops Console 与运维工具提供实时可视化数据。
+
+#### Scenario: Queue summary + SSE for live monitor
+- **GIVEN** Scheduler 维护优先级队列与租约
+- **WHEN** 客户端调用 `GET /api/v1/queues/summary`
+- **THEN** 响应包含每个 `task_type` 的 `pending`, `leased/running`, `blocked`, `oldest_pending_age`, `top_agents`, `blocked_reason`
+- **AND** `/api/v1/queues/stream`（SSE）推送 `event`, `task_id`, `task_type`, `priority`, `agent`, `status`, `timestamp`，并在断开时返回 5xx 以便前端提示；接口必须复用 scheduler 指标并附带权限校验（`tasks.read`）
+
+### Requirement: Threat Intel Job Directory API
+Server MUST 提供 job 级 REST API 以支撑威胁情报工作台的列表、样本详情与 artifact 追踪。
+
+#### Scenario: Job list + sample detail expose artifact metadata
+- **GIVEN** Orchestrator 持久化 `threat_intel_jobs` 与 `threat_intel_samples`
+- **WHEN** 客户端调用 `GET /api/v1/threat-intel/jobs?sample_id=<uuid>&limit=100` 或 `?indicator=sha256`
+- **THEN** 响应 `[{id,sample_id,indicator,kind,source,status,attempt,error,next_run_at,artifact_ids,metadata,created_at,updated_at}]`
+- **AND** `/api/v1/threat-intel/samples/{id}` 返回 `artifact_ids`, `job_statuses`, `metadata.hash/source`, `task_run_id`, `agent_id`; SSE `/threat-intel/stream` 必须对齐上述字段并包含 `classification/confidence`，确保 UI 可同步状态
+
+### Requirement: System event ingestion service
+Server MUST 暴露 `/api/v1/events/ingest`（或等价 gRPC）以接收 Agent `SystemEvent` 流，并提供可持久化的队列/存储、速率限制与监控指标，确保事件在 <100 ms 内进入后端处理管道。
+
+#### Scenario: Successful ingestion
+- **GIVEN** Agent 以流式方式推送 `SystemEvent`（含 collector metadata、payload）
+- **WHEN** Server 接收到事件
+- **THEN** 需验证签名、写入事件队列/存储，并更新指标（吞吐、延迟、丢弃数），供后续阶段（高级监测/异常检测）消费
+
+#### Scenario: Backpressure & durability
+- **WHEN** 队列达到高水位或后端不可用
+- **THEN** Server MUST 返回明确的 429/503，携带推荐重试退避；还应通过观察指标与告警提示运维，避免 silent drop
+
+#### Scenario: Event schema validation
+- **WHEN** 收到缺失字段或超出配额的事件
+- **THEN** Server MUST 返回 400/413，并记录拒绝原因供审计，确保下游数据质量
+
+### Requirement: Collector control plane
+Server MUST 维护 Collector 配置版本与状态，能够向 Agent 下发启停/过滤/采样率，并聚合每台 Agent 的 Collector 遥测（资源占用、丢包率、缓冲水位）。
+
+#### Scenario: Configuration delivery
+- **GIVEN** 运维在控制台更新“启用 eBPF syscall 监控 + 5% 采样率”
+- **WHEN** Server 生成新的配置版本
+- **THEN** 需通过 REST/SSE/gRPC 在 30 秒内推送到目标 Agent，并追踪应用结果（成功/失败/超时）
+
+#### Scenario: State aggregation
+- **WHEN** Agent 在心跳中附带 Collector 状态
+- **THEN** Server MUST 存档最近一次状态、暴露查询 API/仪表盘（包含运行 Collector、采样率、事件速率、异常原因），并在状态异常（degraded/offline）时触发告警
+
+#### Scenario: Audit & RBAC
+- **WHEN** 控制面配置被修改或下发
+- **THEN** Server MUST 记录操作人、变更内容、目标 Agent，并依据 RBAC 限制仅授权角色可执行该操作，满足安全与合规要求
+

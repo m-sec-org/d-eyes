@@ -36,6 +36,7 @@ func TestBASRunnerWithInjectedDependencies(t *testing.T) {
 	runner := BASRunnerWithDeps(loader, fakeSandboxFactory{exec: exec}, telemetry)
 
 	cfg := config.Default()
+	cfg.Output.Dir = t.TempDir()
 	req := TaskRequest{Config: cfg, Manager: reporting.NewManager(cfg)}
 
 	result, err := runner.Run(context.Background(), req)
@@ -65,6 +66,7 @@ func TestBASRunnerHandlesFailuresAndFallback(t *testing.T) {
 	runner := BASRunnerWithDeps(loader, fakeSandboxFactory{exec: exec}, telemetry)
 
 	cfg := config.Default()
+	cfg.Output.Dir = t.TempDir()
 	cfg.Sandbox.Enabled = true
 	req := TaskRequest{Config: cfg, Manager: reporting.NewManager(cfg)}
 
@@ -94,6 +96,7 @@ func TestBASRunnerAddsTelemetryErrorNote(t *testing.T) {
 	runner := BASRunnerWithDeps(loader, fakeSandboxFactory{exec: exec}, telemetry)
 
 	cfg := config.Default()
+	cfg.Output.Dir = t.TempDir()
 	cfg.Sandbox.Enabled = true
 	req := TaskRequest{Config: cfg, Manager: reporting.NewManager(cfg)}
 	req.SandboxApproved = true

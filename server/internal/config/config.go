@@ -13,24 +13,26 @@ import (
 
 // Config captures all runtime configuration for the server process.
 type Config struct {
-	Server      ServerConfig      `yaml:"server"`
-	Security    SecurityConfig    `yaml:"security"`
-	Database    DatabaseConfig    `yaml:"database"`
-	Redis       RedisConfig       `yaml:"redis"`
-	Scheduler   SchedulerConfig   `yaml:"scheduler"`
-	Search      SearchConfig      `yaml:"search"`
-	Metrics     MetricsConfig     `yaml:"metrics"`
-	Audit       AuditConfig       `yaml:"audit"`
-	Alerts      AlertsConfig      `yaml:"alerts"`
-	Templates   TemplateConfig    `yaml:"templates"`
-	TaskCatalog TaskCatalogConfig `yaml:"task_catalog"`
-	BAS         BASConfig         `yaml:"bas"`
-	RBAC        RBACConfig        `yaml:"rbac"`
-	Reports     ReportConfig      `yaml:"reports"`
-	Artifact    ArtifactConfig    `yaml:"artifact"`
-	ThreatIntel ThreatIntelConfig `yaml:"threat_intel"`
-	Behavior    BehaviorConfig    `yaml:"behavior"`
-	Playbook    PlaybookConfig    `yaml:"playbook"`
+	Server      ServerConfig           `yaml:"server"`
+	Security    SecurityConfig         `yaml:"security"`
+	Database    DatabaseConfig         `yaml:"database"`
+	Redis       RedisConfig            `yaml:"redis"`
+	Scheduler   SchedulerConfig        `yaml:"scheduler"`
+	Search      SearchConfig           `yaml:"search"`
+	Metrics     MetricsConfig          `yaml:"metrics"`
+	Events      EventsConfig           `yaml:"events"`
+	Audit       AuditConfig            `yaml:"audit"`
+	Alerts      AlertsConfig           `yaml:"alerts"`
+	Templates   TemplateConfig         `yaml:"templates"`
+	TaskCatalog TaskCatalogConfig      `yaml:"task_catalog"`
+	Collectors  CollectorControlConfig `yaml:"collectors"`
+	BAS         BASConfig              `yaml:"bas"`
+	RBAC        RBACConfig             `yaml:"rbac"`
+	Reports     ReportConfig           `yaml:"reports"`
+	Artifact    ArtifactConfig         `yaml:"artifact"`
+	ThreatIntel ThreatIntelConfig      `yaml:"threat_intel"`
+	Behavior    BehaviorConfig         `yaml:"behavior"`
+	Playbook    PlaybookConfig         `yaml:"playbook"`
 }
 
 type ServerConfig struct {
@@ -106,6 +108,18 @@ type SchedulerConfig struct {
 type MetricsConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Path    string `yaml:"path"`
+}
+
+type CollectorControlConfig struct {
+	AllowedProviders []string `yaml:"allowed_providers"`
+	AllowedProbes    []string `yaml:"allowed_probes"`
+}
+type EventsConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	QueueCapacity  int           `yaml:"queue_capacity"`
+	MaxBatch       int           `yaml:"max_batch"`
+	FlushInterval  time.Duration `yaml:"flush_interval"`
+	MaxPayloadSize int64         `yaml:"max_payload_size"`
 }
 
 type AuditConfig struct {
@@ -288,6 +302,13 @@ func Default() Config {
 			SelfHealInterval:     time.Minute,
 			SelfHealBatch:        200,
 		},
+		Events: EventsConfig{
+			Enabled:        true,
+			QueueCapacity:  8192,
+			MaxBatch:       512,
+			FlushInterval:  50 * time.Millisecond,
+			MaxPayloadSize: 4 * 1024 * 1024, // 4 MiB
+		},
 		Metrics: MetricsConfig{
 			Enabled: true,
 			Path:    "/metrics",
@@ -337,10 +358,15 @@ func Default() Config {
 		},
 		RBAC: RBACConfig{
 			Policies: []RBACPolicy{
-				{Role: "operator", Permissions: []string{"tasks.read", "tasks.create", "tasks.retry", "tasks.cancel", "tasks.actions", "reports.view", "audit.view", "playbook.execute", "bas.view"}},
-				{Role: "auditor", Permissions: []string{"audit.view", "reports.view", "playbook.execute"}},
+				{Role: "operator", Permissions: []string{"tasks.read", "tasks.create", "tasks.retry", "tasks.cancel", "tasks.actions", "reports.view", "audit.view", "playbook.execute", "bas.view", "collector.status.read"}},
+				{Role: "sre", Permissions: []string{"collector.config.read", "collector.config.write", "collector.status.read", "collector.status.write"}},
+				{Role: "auditor", Permissions: []string{"audit.view", "reports.view", "playbook.execute", "collector.status.read"}},
 				{Role: "admin", Permissions: []string{"*"}},
 			},
+		},
+		Collectors: CollectorControlConfig{
+			AllowedProviders: []string{"Kernel", "Security"},
+			AllowedProbes:    []string{"diag-ebpf", "diag-sysmon"},
 		},
 		Reports: ReportConfig{
 			TemplatePath: "",
@@ -660,6 +686,26 @@ func (c Config) Validate() error {
 		}
 		if len(c.Security.MFA.Secrets) == 0 {
 			return errors.New("security.mfa.secrets must include at least one entry when mfa enabled")
+		}
+	}
+	for i, provider := range c.Collectors.AllowedProviders {
+		c.Collectors.AllowedProviders[i] = strings.TrimSpace(provider)
+	}
+	for i, probe := range c.Collectors.AllowedProbes {
+		c.Collectors.AllowedProbes[i] = strings.TrimSpace(probe)
+	}
+	if c.Events.Enabled {
+		if c.Events.QueueCapacity <= 0 {
+			return errors.New("events.queue_capacity must be positive")
+		}
+		if c.Events.MaxBatch <= 0 {
+			return errors.New("events.max_batch must be positive")
+		}
+		if c.Events.FlushInterval <= 0 {
+			return errors.New("events.flush_interval must be positive")
+		}
+		if c.Events.MaxPayloadSize <= 0 {
+			return errors.New("events.max_payload_size must be positive")
 		}
 	}
 	return nil

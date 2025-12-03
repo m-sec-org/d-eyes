@@ -27,7 +27,34 @@ export const TaskSchema = z.object({
   last_run: TaskRunSchema.optional().nullable(),
 });
 
-export const TaskListResponseSchema = z.array(TaskSchema);
+export const TaskListSummarySchema = z.object({
+  total: z.number(),
+  by_status: z.record(z.number()).optional(),
+});
+
+export const TaskListFiltersSchema = z.object({
+  status: z.array(z.string()).optional(),
+  search: z.string().optional(),
+  view_id: z.string().optional(),
+});
+
+export const TaskListResponseSchema = z.object({
+  data: z.array(TaskSchema),
+  page_size: z.number(),
+  next_cursor: z.string().optional().nullable(),
+  filters: TaskListFiltersSchema.optional(),
+  summary: TaskListSummarySchema.optional(),
+});
+
+export const TaskViewSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  filters: z.record(z.any()),
+  page_size: z.number(),
+  is_default: z.boolean().optional(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+});
 
 export const TaskEventSchema = z.object({
   event: z.string(),
@@ -363,29 +390,50 @@ export const ThreatIntelLookupResponseSchema = z.object({
 
 export const ThreatIntelJobSchema = z.object({
   id: z.string().uuid(),
+  sample_id: z.string().uuid().optional().nullable(),
   indicator: z.string().optional().nullable(),
   kind: z.string().optional().nullable(),
   source: z.string(),
   status: z.string(),
   attempt: z.number().optional(),
   error: z.string().optional().nullable(),
+  error_code: z.string().optional().nullable(),
   next_run_at: z.string().datetime().optional().nullable(),
+  task_run_id: z.string().uuid().optional().nullable(),
+  agent_id: z.string().uuid().optional().nullable(),
   updated_at: z.string().datetime(),
+  last_transition_at: z.string().datetime().optional().nullable(),
+  artifact_ids: z.array(z.string().uuid()).optional(),
+  metadata: z.record(z.string()).optional(),
+  summary: z.record(z.any()).optional(),
+});
+
+const ArtifactDetailSchema = z.object({
+  id: z.string().uuid(),
+  sha256: z.string().optional().nullable(),
+  mime_type: z.string().optional().nullable(),
+  quarantine_path: z.string().optional().nullable(),
 });
 
 export const ThreatIntelSampleSchema = z.object({
   id: z.string().uuid(),
+  indicator: z.string().optional().nullable(),
   hash: z.string().optional().nullable(),
   filename: z.string().optional().nullable(),
   size: z.number().optional(),
   status: z.string(),
   artifact_ids: z.array(z.string().uuid()).optional(),
+  artifact_details: z.array(ArtifactDetailSchema).optional().default([]),
   task_run_id: z.string().uuid(),
   agent_id: z.string().uuid(),
+  source: z.string().optional().nullable(),
+  classification: z.string().optional().nullable(),
   metadata: z.record(z.string()).optional(),
   last_error: z.string().optional().nullable(),
+  last_error_code: z.string().optional().nullable(),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
+  job_statuses: z.record(z.string()).optional(),
   jobs: z.array(ThreatIntelJobSchema).default([]),
 });
 

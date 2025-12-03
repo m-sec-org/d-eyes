@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -119,15 +120,20 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
         )`,
 		`CREATE TABLE IF NOT EXISTS threat_intel_samples (
             id UUID PRIMARY KEY,
+            indicator TEXT,
             hash TEXT NOT NULL,
             filename TEXT,
             size BIGINT,
             status TEXT NOT NULL,
             artifact_ids UUID[] DEFAULT '{}'::uuid[],
+            artifact_details JSONB DEFAULT '{}'::jsonb,
             task_run_id UUID NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
             agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+            source TEXT,
+            classification TEXT,
             metadata JSONB DEFAULT '{}'::jsonb,
             last_error TEXT,
+            last_error_code TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )`,
@@ -142,13 +148,16 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
             payload BYTEA,
             attempt INT NOT NULL DEFAULT 0,
             error_msg TEXT,
+            error_code TEXT,
             next_run_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_transition_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             task_run_id UUID REFERENCES task_runs(id) ON DELETE CASCADE,
             agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
             artifact_ids UUID[] DEFAULT '{}'::uuid[],
-            metadata JSONB DEFAULT '{}'::jsonb
+            metadata JSONB DEFAULT '{}'::jsonb,
+            summary JSONB DEFAULT '{}'::jsonb
         )`,
 		`CREATE INDEX IF NOT EXISTS threat_intel_jobs_status_idx ON threat_intel_jobs(status, next_run_at)`,
 		`CREATE INDEX IF NOT EXISTS threat_intel_jobs_indicator_idx ON threat_intel_jobs(indicator)`,
@@ -187,6 +196,41 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
 		    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS behavior_events_agent_idx ON behavior_events(agent_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS system_events (
+		    id UUID PRIMARY KEY,
+		    agent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
+		    agent_name TEXT,
+		    collector TEXT,
+		    collector_kind TEXT,
+		    event_type TEXT NOT NULL,
+		    source TEXT,
+		    event_timestamp TIMESTAMPTZ NOT NULL,
+		    sequence BIGINT,
+		    payload JSONB,
+		    metadata JSONB,
+		    tags JSONB,
+		    raw JSONB,
+		    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS system_events_agent_idx ON system_events(agent_id, received_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS system_events_type_idx ON system_events(event_type, received_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS collector_configs (
+		    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+		    version BIGINT NOT NULL,
+		    config JSONB NOT NULL,
+		    updated_by TEXT,
+		    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS collector_statuses (
+		    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+		    agent_name TEXT,
+		    version BIGINT,
+		    state TEXT,
+		    last_error TEXT,
+		    stats JSONB,
+		    metadata JSONB,
+		    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
 		`CREATE TABLE IF NOT EXISTS anomalies (
 		    id UUID PRIMARY KEY,
 		    agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
@@ -339,44 +383,216 @@ func (p *PostgresStore) ListPendingTasks(ctx context.Context, limit int) ([]*mod
 	return res, nil
 }
 
-func (p *PostgresStore) ListTasks(ctx context.Context, statuses []model.TaskStatus, limit int) ([]*model.Task, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	var (
-		rows pgx.Rows
-		err  error
-	)
-	if len(statuses) == 0 {
-		query := `SELECT id, type, profile, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks ORDER BY created_at DESC LIMIT $1`
-		rows, err = p.pool.Query(ctx, query, limit)
-	} else {
-		statusVals := make([]string, len(statuses))
-		for i, st := range statuses {
-			statusVals[i] = string(st)
-		}
-		query := `SELECT id, type, profile, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks WHERE status = ANY($1) ORDER BY created_at DESC LIMIT $2`
-		rows, err = p.pool.Query(ctx, query, statusVals, limit)
-	}
+func (p *PostgresStore) ListTasks(ctx context.Context, opts store.ListTasksOptions) (store.ListTasksResult, error) {
+	limit := clampTaskListLimit(opts.Limit)
+	whereClause, args := buildTaskFilterClause(opts, true)
+	fetchLimit := limit + 1
+	args = append(args, fetchLimit)
+	query := fmt.Sprintf(`SELECT id, type, profile, priority, payload, status, retry_count, metadata, created_by, created_at, updated_at FROM tasks %s ORDER BY updated_at DESC, id DESC LIMIT $%d`, whereClause, len(args))
+	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list tasks: %w", err)
+		return store.ListTasksResult{}, fmt.Errorf("list tasks: %w", err)
 	}
 	defer rows.Close()
-	var res []*model.Task
+	result := store.ListTasksResult{
+		Summary: store.TaskListSummary{
+			ByStatus: make(map[model.TaskStatus]int64),
+		},
+	}
 	for rows.Next() {
 		var task model.Task
 		var payload []byte
 		var metadata []byte
 		if err := rows.Scan(&task.ID, &task.Type, &task.Profile, &task.Priority, &payload, &task.Status, &task.RetryCount, &metadata, &task.CreatedBy, &task.CreatedAt, &task.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan task: %w", err)
+			return store.ListTasksResult{}, fmt.Errorf("scan task: %w", err)
 		}
 		task.Payload = append([]byte(nil), payload...)
 		if len(metadata) > 0 {
 			_ = json.Unmarshal(metadata, &task.Metadata)
 		}
-		res = append(res, &task)
+		result.Tasks = append(result.Tasks, &task)
 	}
-	return res, nil
+	if len(result.Tasks) > limit {
+		tail := result.Tasks[limit]
+		result.NextCursor = &store.TaskListCursor{
+			ID:        tail.ID,
+			UpdatedAt: tail.UpdatedAt,
+		}
+		result.Tasks = result.Tasks[:limit]
+	}
+	summary, err := p.computeTaskSummary(ctx, opts)
+	if err != nil {
+		return store.ListTasksResult{}, err
+	}
+	result.Summary = summary
+	return result, nil
+}
+
+func clampTaskListLimit(limit int) int {
+	const (
+		defaultLimit = 50
+		maxLimit     = 200
+	)
+	if limit <= 0 {
+		return defaultLimit
+	}
+	if limit > maxLimit {
+		return maxLimit
+	}
+	return limit
+}
+
+func (p *PostgresStore) computeTaskSummary(ctx context.Context, opts store.ListTasksOptions) (store.TaskListSummary, error) {
+	summary := store.TaskListSummary{
+		ByStatus: make(map[model.TaskStatus]int64),
+	}
+	whereClause, args := buildTaskFilterClause(opts, false)
+	query := fmt.Sprintf(`SELECT status, COUNT(*) FROM tasks %s GROUP BY status`, whereClause)
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return summary, fmt.Errorf("task summary: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return summary, fmt.Errorf("scan task summary: %w", err)
+		}
+		st := model.TaskStatus(status)
+		summary.ByStatus[st] = count
+		summary.Total += count
+	}
+	return summary, nil
+}
+
+func buildTaskFilterClause(opts store.ListTasksOptions, includeCursor bool) (string, []interface{}) {
+	var clauses []string
+	args := make([]interface{}, 0, 4)
+	idx := 1
+	if len(opts.Statuses) > 0 {
+		statusVals := make([]string, len(opts.Statuses))
+		for i, st := range opts.Statuses {
+			statusVals[i] = string(st)
+		}
+		clauses = append(clauses, fmt.Sprintf("status = ANY($%d)", idx))
+		args = append(args, statusVals)
+		idx++
+	}
+	if search := strings.TrimSpace(opts.Search); search != "" {
+		clauses = append(clauses, fmt.Sprintf("(id::text ILIKE $%d OR type ILIKE $%d OR created_by ILIKE $%d OR metadata::text ILIKE $%d)", idx, idx, idx, idx))
+		args = append(args, "%"+search+"%")
+		idx++
+	}
+	if includeCursor && opts.Cursor != nil && opts.Cursor.ID != uuid.Nil {
+		clauses = append(clauses, fmt.Sprintf("(updated_at < $%d OR (updated_at = $%d AND id < $%d))", idx, idx, idx+1))
+		args = append(args, opts.Cursor.UpdatedAt)
+		idx++
+		args = append(args, opts.Cursor.ID)
+		idx++
+	}
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+func (p *PostgresStore) CreateTaskView(ctx context.Context, view *model.TaskView) error {
+	if view == nil {
+		return fmt.Errorf("task view required")
+	}
+	if view.ID == uuid.Nil {
+		view.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	filters := view.Filters
+	if filters == nil {
+		filters = map[string]interface{}{}
+	}
+	filtersJSON, err := json.Marshal(filters)
+	if err != nil {
+		return fmt.Errorf("marshal filters: %w", err)
+	}
+	_, err = p.pool.Exec(ctx, `INSERT INTO task_views (id, name, owner, filters, page_size, is_default, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		view.ID, view.Name, view.Owner, filtersJSON, view.PageSize, view.IsDefault, now, now)
+	if err != nil {
+		return fmt.Errorf("create task view: %w", err)
+	}
+	view.CreatedAt = now
+	view.UpdatedAt = now
+	return nil
+}
+
+func (p *PostgresStore) ListTaskViews(ctx context.Context, owner string) ([]*model.TaskView, error) {
+	rows, err := p.pool.Query(ctx, `SELECT id, name, owner, filters, page_size, is_default, created_at, updated_at FROM task_views WHERE owner=$1 AND deleted_at IS NULL ORDER BY updated_at DESC`, owner)
+	if err != nil {
+		return nil, fmt.Errorf("list task views: %w", err)
+	}
+	defer rows.Close()
+	var views []*model.TaskView
+	for rows.Next() {
+		view, err := scanTaskView(rows)
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}
+
+func (p *PostgresStore) UpdateTaskView(ctx context.Context, view *model.TaskView) error {
+	if view == nil {
+		return fmt.Errorf("task view required")
+	}
+	filters := view.Filters
+	if filters == nil {
+		filters = map[string]interface{}{}
+	}
+	filtersJSON, err := json.Marshal(filters)
+	if err != nil {
+		return fmt.Errorf("marshal filters: %w", err)
+	}
+	now := time.Now().UTC()
+	tag, err := p.pool.Exec(ctx, `UPDATE task_views SET name=$1, filters=$2, page_size=$3, is_default=$4, updated_at=$5 WHERE id=$6 AND owner=$7 AND deleted_at IS NULL`,
+		view.Name, filtersJSON, view.PageSize, view.IsDefault, now, view.ID, view.Owner)
+	if err != nil {
+		return fmt.Errorf("update task view: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	view.UpdatedAt = now
+	return nil
+}
+
+func (p *PostgresStore) DeleteTaskView(ctx context.Context, id uuid.UUID, owner string) error {
+	now := time.Now().UTC()
+	tag, err := p.pool.Exec(ctx, `UPDATE task_views SET deleted_at=$1, updated_at=$1 WHERE id=$2 AND owner=$3 AND deleted_at IS NULL`, now, id, owner)
+	if err != nil {
+		return fmt.Errorf("delete task view: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func scanTaskView(row pgx.Row) (*model.TaskView, error) {
+	var (
+		view       model.TaskView
+		filtersRaw []byte
+	)
+	if err := row.Scan(&view.ID, &view.Name, &view.Owner, &filtersRaw, &view.PageSize, &view.IsDefault, &view.CreatedAt, &view.UpdatedAt); err != nil {
+		return nil, fmt.Errorf("scan task view: %w", err)
+	}
+	if len(filtersRaw) > 0 {
+		if err := json.Unmarshal(filtersRaw, &view.Filters); err != nil {
+			return nil, fmt.Errorf("decode task view filters: %w", err)
+		}
+	} else {
+		view.Filters = map[string]interface{}{}
+	}
+	return &view, nil
 }
 
 func (p *PostgresStore) ListAgents(ctx context.Context) ([]*model.Agent, error) {
@@ -559,6 +775,183 @@ FROM task_runs WHERE agent_id=$1`
 		runs = append(runs, &run)
 	}
 	return runs, nil
+}
+
+func (p *PostgresStore) InsertSystemEvents(ctx context.Context, events []model.SystemEventRecord) error {
+	if len(events) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, evt := range events {
+		id := evt.ID
+		if id == uuid.Nil {
+			id = uuid.New()
+		}
+		ts := evt.Timestamp
+		if ts.IsZero() {
+			ts = time.Now().UTC()
+		}
+		receivedAt := evt.ReceivedAt
+		if receivedAt.IsZero() {
+			receivedAt = time.Now().UTC()
+		}
+		metadataJSON, _ := json.Marshal(evt.Metadata)
+		tagsJSON, _ := json.Marshal(evt.Tags)
+		payloadJSON := []byte(nil)
+		if len(evt.Payload) > 0 {
+			payloadJSON = evt.Payload
+		}
+		rawJSON := []byte(nil)
+		if len(evt.Raw) > 0 {
+			rawJSON = evt.Raw
+		}
+		batch.Queue(`INSERT INTO system_events (
+		    id, agent_id, agent_name, collector, collector_kind, event_type, source,
+		    event_timestamp, sequence, payload, metadata, tags, raw, received_at
+		) VALUES (
+		    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+		)`,
+			id,
+			evt.AgentID,
+			evt.AgentName,
+			evt.Collector,
+			evt.CollectorKind,
+			evt.EventType,
+			evt.Source,
+			ts,
+			int64(evt.Sequence),
+			payloadJSON,
+			metadataJSON,
+			tagsJSON,
+			rawJSON,
+			receivedAt,
+		)
+	}
+	results := p.pool.SendBatch(ctx, batch)
+	defer results.Close()
+	for range events {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("insert system event: %w", err)
+		}
+	}
+	return nil
+}
+
+func (p *PostgresStore) CountSystemEvents(ctx context.Context, since time.Time) (int64, error) {
+	var count int64
+	var err error
+	if since.IsZero() {
+		err = p.pool.QueryRow(ctx, `SELECT COUNT(*) FROM system_events`).Scan(&count)
+	} else {
+		err = p.pool.QueryRow(ctx, `SELECT COUNT(*) FROM system_events WHERE received_at >= $1`, since).Scan(&count)
+	}
+	return count, err
+}
+
+func (p *PostgresStore) UpsertCollectorConfig(ctx context.Context, snapshot *model.CollectorConfigSnapshot) error {
+	if snapshot == nil || snapshot.AgentID == uuid.Nil {
+		return errors.New("collector config: agent id required")
+	}
+	version := snapshot.Version
+	if version == 0 {
+		var current int64
+		err := p.pool.QueryRow(ctx, `SELECT version FROM collector_configs WHERE agent_id=$1`, snapshot.AgentID).Scan(&current)
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			version = 1
+		} else {
+			version = current + 1
+		}
+	}
+	updatedAt := snapshot.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	_, err := p.pool.Exec(ctx, `INSERT INTO collector_configs (agent_id, version, config, updated_by, updated_at)
+	    VALUES ($1,$2,$3,$4,$5)
+	    ON CONFLICT (agent_id) DO UPDATE
+	    SET version=EXCLUDED.version, config=EXCLUDED.config, updated_by=EXCLUDED.updated_by, updated_at=EXCLUDED.updated_at`,
+		snapshot.AgentID, version, snapshot.Config, snapshot.UpdatedBy, updatedAt)
+	return err
+}
+
+func (p *PostgresStore) GetCollectorConfig(ctx context.Context, agentID uuid.UUID) (*model.CollectorConfigSnapshot, error) {
+	row := p.pool.QueryRow(ctx, `SELECT agent_id, version, config, updated_by, updated_at FROM collector_configs WHERE agent_id=$1`, agentID)
+	var snap model.CollectorConfigSnapshot
+	if err := row.Scan(&snap.AgentID, &snap.Version, &snap.Config, &snap.UpdatedBy, &snap.UpdatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, err
+	}
+	return &snap, nil
+}
+
+func (p *PostgresStore) ListCollectorConfigs(ctx context.Context) ([]*model.CollectorConfigSnapshot, error) {
+	rows, err := p.pool.Query(ctx, `SELECT agent_id, version, config, updated_by, updated_at FROM collector_configs`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var snapshots []*model.CollectorConfigSnapshot
+	for rows.Next() {
+		var snap model.CollectorConfigSnapshot
+		if err := rows.Scan(&snap.AgentID, &snap.Version, &snap.Config, &snap.UpdatedBy, &snap.UpdatedAt); err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, &snap)
+	}
+	return snapshots, rows.Err()
+}
+
+func (p *PostgresStore) UpsertCollectorStatus(ctx context.Context, status *model.CollectorStatusSnapshot) error {
+	if status == nil || status.AgentID == uuid.Nil {
+		return errors.New("collector status: agent id required")
+	}
+	statsJSON, _ := json.Marshal(status.Stats)
+	metaJSON, _ := json.Marshal(status.Metadata)
+	if status.UpdatedAt.IsZero() {
+		status.UpdatedAt = time.Now().UTC()
+	}
+	_, err := p.pool.Exec(ctx, `INSERT INTO collector_statuses (agent_id, agent_name, version, state, last_error, stats, metadata, updated_at)
+	    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+	    ON CONFLICT (agent_id) DO UPDATE SET
+	        agent_name=EXCLUDED.agent_name,
+	        version=EXCLUDED.version,
+	        state=EXCLUDED.state,
+	        last_error=EXCLUDED.last_error,
+	        stats=EXCLUDED.stats,
+	        metadata=EXCLUDED.metadata,
+	        updated_at=EXCLUDED.updated_at`,
+		status.AgentID, status.AgentName, status.Version, status.State, status.LastError, statsJSON, metaJSON, status.UpdatedAt)
+	return err
+}
+
+func (p *PostgresStore) ListCollectorStatuses(ctx context.Context) ([]*model.CollectorStatusSnapshot, error) {
+	rows, err := p.pool.Query(ctx, `SELECT agent_id, agent_name, version, state, last_error, stats, metadata, updated_at FROM collector_statuses`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var statuses []*model.CollectorStatusSnapshot
+	for rows.Next() {
+		var snap model.CollectorStatusSnapshot
+		var stats []byte
+		var metadata []byte
+		if err := rows.Scan(&snap.AgentID, &snap.AgentName, &snap.Version, &snap.State, &snap.LastError, &stats, &metadata, &snap.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if len(stats) > 0 {
+			_ = json.Unmarshal(stats, &snap.Stats)
+		}
+		if len(metadata) > 0 {
+			_ = json.Unmarshal(metadata, &snap.Metadata)
+		}
+		statuses = append(statuses, &snap)
+	}
+	return statuses, rows.Err()
 }
 
 func (p *PostgresStore) Ping(ctx context.Context) error {

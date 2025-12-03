@@ -11,6 +11,9 @@ import (
 func startDummyTCPServer(t *testing.T) (net.Listener, int) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		if shouldSkipListen(err) {
+			t.Skipf("skip port scanner tests due to listen permissions: %v", err)
+		}
 		t.Fatalf("failed to start listener: %v", err)
 	}
 	go func() {

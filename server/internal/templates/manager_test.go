@@ -84,10 +84,10 @@ func TestManagerSchedule(t *testing.T) {
 
 	manager.runDueSchedules()
 
-	tasks, err := st.ListTasks(context.Background(), nil, 10)
+	result, err := st.ListTasks(context.Background(), store.ListTasksOptions{Limit: 10})
 	require.NoError(t, err)
-	require.Len(t, tasks, 1)
-	require.Contains(t, tasks[0].Metadata["target_agents"], "group-b")
+	require.Len(t, result.Tasks, 1)
+	require.Contains(t, result.Tasks[0].Metadata["target_agents"], "group-b")
 }
 
 func schedulerConfig() config.SchedulerConfig {

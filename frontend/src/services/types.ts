@@ -34,10 +34,14 @@ import {
   ComplianceFrameworkSchema,
   ComplianceControlSchema,
   ComplianceFindingSchema,
+  TaskViewSchema,
+  TaskListSummarySchema,
 } from './api/schemas';
 
 export type Task = z.infer<typeof TaskSchema>;
 export type TaskListResponse = z.infer<typeof TaskListResponseSchema>;
+export type TaskListSummary = z.infer<typeof TaskListSummarySchema>;
+export type TaskView = z.infer<typeof TaskViewSchema>;
 export type TaskEvent = z.infer<typeof TaskEventSchema>;
 export type ReportSummary = z.infer<typeof ReportSummarySchema>;
 export type Template = z.infer<typeof TemplateSchema>;

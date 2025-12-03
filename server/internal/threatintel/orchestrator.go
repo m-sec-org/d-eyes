@@ -121,16 +121,27 @@ func (o *Orchestrator) SubmitSample(ctx context.Context, submission SampleSubmis
 	if len(submission.ArtifactIDs) == 0 {
 		return uuid.Nil, errors.New("threatintel: sample missing artifacts")
 	}
+	hash := strings.ToLower(strings.TrimSpace(submission.Hash))
+	metadata := cloneMetadata(submission.Metadata)
+	indicator := hash
+	if metadata != nil {
+		if candidate := strings.TrimSpace(metadata["indicator"]); candidate != "" {
+			indicator = candidate
+		}
+	}
 	sample := &model.ThreatIntelSample{
-		ID:          uuid.New(),
-		Hash:        strings.ToLower(strings.TrimSpace(submission.Hash)),
-		Filename:    submission.Filename,
-		Size:        submission.Size,
-		Status:      model.ThreatIntelSampleStatusPending,
-		ArtifactIDs: append([]uuid.UUID(nil), submission.ArtifactIDs...),
-		TaskRunID:   submission.TaskRunID,
-		AgentID:     submission.AgentID,
-		Metadata:    cloneMetadata(submission.Metadata),
+		ID:             uuid.New(),
+		Indicator:      indicator,
+		Hash:           hash,
+		Filename:       submission.Filename,
+		Size:           submission.Size,
+		Status:         model.ThreatIntelSampleStatusPending,
+		ArtifactIDs:    append([]uuid.UUID(nil), submission.ArtifactIDs...),
+		TaskRunID:      submission.TaskRunID,
+		AgentID:        submission.AgentID,
+		Source:         metadata["source"],
+		Classification: metadata["classification"],
+		Metadata:       metadata,
 	}
 	if err := o.store.CreateThreatIntelSample(ctx, sample); err != nil {
 		return uuid.Nil, fmt.Errorf("create sample: %w", err)
@@ -142,16 +153,12 @@ func (o *Orchestrator) SubmitSample(ctx context.Context, submission SampleSubmis
 		"artifact_count": fmt.Sprintf("%d", len(sample.ArtifactIDs)),
 	})
 	o.hub.Publish(Event{
-		Type:     "sample.enqueued",
-		SampleID: sample.ID.String(),
-		Indicator: func() string {
-			if sample.Hash != "" {
-				return sample.Hash
-			}
-			return ""
-		}(),
-		Status:   sample.Status,
-		Metadata: sample.Metadata,
+		Type:        "sample.enqueued",
+		SampleID:    sample.ID.String(),
+		Indicator:   sample.Hash,
+		Status:      sample.Status,
+		Metadata:    sample.Metadata,
+		ArtifactIDs: uuidStrings(sample.ArtifactIDs),
 	})
 	for src, provider := range o.providers {
 		if provider == nil {
@@ -175,12 +182,13 @@ func (o *Orchestrator) SubmitSample(ctx context.Context, submission SampleSubmis
 			return sample.ID, fmt.Errorf("insert threat intel job: %w", err)
 		}
 		o.hub.Publish(Event{
-			Type:      "job.enqueued",
-			SampleID:  sample.ID.String(),
-			JobID:     job.ID.String(),
-			Indicator: job.Indicator,
-			Source:    string(job.Source),
-			Status:    job.Status,
+			Type:        "job.enqueued",
+			SampleID:    sample.ID.String(),
+			JobID:       job.ID.String(),
+			Indicator:   job.Indicator,
+			Source:      string(job.Source),
+			Status:      job.Status,
+			ArtifactIDs: uuidStrings(job.ArtifactIDs),
 		})
 	}
 	return sample.ID, nil
@@ -419,7 +427,7 @@ func (o *Orchestrator) worker(ctx context.Context, idx int) {
 func (o *Orchestrator) processJob(ctx context.Context, job *model.ThreatIntelJob) {
 	provider, ok := o.providers[job.Source]
 	if !ok || provider == nil {
-		o.failJob(ctx, job, fmt.Errorf("%w: %s", ErrUnsupportedSource, job.Source))
+		_ = o.failJob(ctx, job, fmt.Errorf("%w: %s", ErrUnsupportedSource, job.Source))
 		return
 	}
 	var sample *model.ThreatIntelSample
@@ -428,15 +436,15 @@ func (o *Orchestrator) processJob(ctx context.Context, job *model.ThreatIntelJob
 	if job.SampleID != uuid.Nil {
 		sample, err = o.store.GetThreatIntelSample(ctx, job.SampleID)
 		if err != nil {
-			o.failJob(ctx, job, fmt.Errorf("fetch sample: %w", err))
+			_ = o.failJob(ctx, job, fmt.Errorf("fetch sample: %w", err))
 			return
 		}
 		if sample != nil {
-			_ = o.store.UpdateThreatIntelSampleStatus(ctx, sample.ID, model.ThreatIntelSampleStatusScanning, "", nil)
+			_ = o.store.UpdateThreatIntelSampleStatus(ctx, sample.ID, model.ThreatIntelSampleStatusScanning, "", "", nil)
 		}
 		artifacts, err = o.store.GetArtifacts(ctx, job.ArtifactIDs)
 		if err != nil {
-			o.failJob(ctx, job, fmt.Errorf("fetch artifacts: %w", err))
+			_ = o.failJob(ctx, job, fmt.Errorf("fetch artifacts: %w", err))
 			return
 		}
 	}
@@ -498,6 +506,7 @@ func (o *Orchestrator) processJob(ctx context.Context, job *model.ThreatIntelJob
 				Source:         string(verdict.Source),
 				Classification: verdict.Classification,
 				Confidence:     verdict.Confidence,
+				ArtifactIDs:    uuidStrings(job.ArtifactIDs),
 				Timestamp:      verdict.RetrievedAt,
 			})
 		}
@@ -526,20 +535,26 @@ func (o *Orchestrator) handleJobError(ctx context.Context, job *model.ThreatInte
 			backoff = retryErr.RetryAfter
 		}
 		next := time.Now().Add(backoff)
-		_ = o.store.UpdateThreatIntelJobStatus(ctx, job.ID, model.ThreatIntelJobStatusRetryBackoff, next, err.Error(), nil)
+		const retryCode = "TI_JOB_RETRYING"
+		meta := mergeMetadata(job.Metadata, map[string]string{"error_code": retryCode})
+		job.Metadata = meta
+		job.ErrorCode = retryCode
+		_ = o.store.UpdateThreatIntelJobStatus(ctx, job.ID, model.ThreatIntelJobStatusRetryBackoff, next, err.Error(), retryCode, meta)
 		o.hub.Publish(Event{
-			Type:     "job.retry",
-			JobID:    job.ID.String(),
-			SampleID: job.SampleID.String(),
-			Source:   string(job.Source),
-			Status:   model.ThreatIntelJobStatusRetryBackoff,
-			Message:  err.Error(),
+			Type:        "job.retry",
+			JobID:       job.ID.String(),
+			SampleID:    job.SampleID.String(),
+			Source:      string(job.Source),
+			Status:      model.ThreatIntelJobStatusRetryBackoff,
+			Message:     err.Error(),
+			ErrorCode:   "TI_JOB_RETRYING",
+			ArtifactIDs: uuidStrings(job.ArtifactIDs),
 		})
 		return
 	}
-	o.failJob(ctx, job, err)
+	code := o.failJob(ctx, job, err)
 	if sample != nil {
-		_ = o.store.UpdateThreatIntelSampleStatus(ctx, sample.ID, model.ThreatIntelSampleStatusFailed, err.Error(), nil)
+		_ = o.store.UpdateThreatIntelSampleStatus(ctx, sample.ID, model.ThreatIntelSampleStatusFailed, err.Error(), code, nil)
 		o.recordAudit(fmt.Sprintf("agent:%s", sample.AgentID.String()), "agent", "threatintel.sample_failed", sample.ID.String(), "failed", map[string]string{
 			"error":  err.Error(),
 			"job_id": job.ID.String(),
@@ -547,18 +562,24 @@ func (o *Orchestrator) handleJobError(ctx context.Context, job *model.ThreatInte
 	}
 }
 
-func (o *Orchestrator) failJob(ctx context.Context, job *model.ThreatIntelJob, err error) {
+func (o *Orchestrator) failJob(ctx context.Context, job *model.ThreatIntelJob, err error) string {
 	if err == nil {
 		err = errors.New("unknown error")
 	}
-	_ = o.store.UpdateThreatIntelJobStatus(ctx, job.ID, model.ThreatIntelJobStatusFailed, time.Time{}, err.Error(), nil)
+	code := deriveJobErrorCode(err)
+	meta := mergeMetadata(job.Metadata, map[string]string{"error_code": code})
+	job.Metadata = meta
+	job.ErrorCode = code
+	_ = o.store.UpdateThreatIntelJobStatus(ctx, job.ID, model.ThreatIntelJobStatusFailed, time.Time{}, err.Error(), code, meta)
 	o.hub.Publish(Event{
-		Type:     "job.failed",
-		JobID:    job.ID.String(),
-		SampleID: job.SampleID.String(),
-		Source:   string(job.Source),
-		Status:   model.ThreatIntelJobStatusFailed,
-		Message:  err.Error(),
+		Type:        "job.failed",
+		JobID:       job.ID.String(),
+		SampleID:    job.SampleID.String(),
+		Source:      string(job.Source),
+		Status:      model.ThreatIntelJobStatusFailed,
+		Message:     err.Error(),
+		ErrorCode:   deriveJobErrorCode(err),
+		ArtifactIDs: uuidStrings(job.ArtifactIDs),
 	})
 	if o.metrics != nil && o.metrics.ThreatIntelJobs != nil {
 		o.metrics.ThreatIntelJobs.WithLabelValues(string(job.Source), "failed").Inc()
@@ -569,16 +590,21 @@ func (o *Orchestrator) failJob(ctx context.Context, job *model.ThreatIntelJob, e
 		"attempt":   fmt.Sprintf("%d", job.Attempt),
 		"error":     err.Error(),
 	})
+	return code
 }
 
 func (o *Orchestrator) completeJob(ctx context.Context, job *model.ThreatIntelJob, sample *model.ThreatIntelSample) {
-	_ = o.store.UpdateThreatIntelJobStatus(ctx, job.ID, model.ThreatIntelJobStatusSucceeded, time.Time{}, "", nil)
+	meta := mergeMetadata(job.Metadata, map[string]string{"error_code": ""})
+	job.Metadata = meta
+	job.ErrorCode = ""
+	_ = o.store.UpdateThreatIntelJobStatus(ctx, job.ID, model.ThreatIntelJobStatusSucceeded, time.Time{}, "", "", meta)
 	o.hub.Publish(Event{
-		Type:     "job.succeeded",
-		JobID:    job.ID.String(),
-		SampleID: job.SampleID.String(),
-		Source:   string(job.Source),
-		Status:   model.ThreatIntelJobStatusSucceeded,
+		Type:        "job.succeeded",
+		JobID:       job.ID.String(),
+		SampleID:    job.SampleID.String(),
+		Source:      string(job.Source),
+		Status:      model.ThreatIntelJobStatusSucceeded,
+		ArtifactIDs: uuidStrings(job.ArtifactIDs),
 	})
 	if o.metrics != nil && o.metrics.ThreatIntelJobs != nil {
 		o.metrics.ThreatIntelJobs.WithLabelValues(string(job.Source), "succeeded").Inc()
@@ -608,22 +634,48 @@ func (o *Orchestrator) completeJob(ctx context.Context, job *model.ThreatIntelJo
 	}
 	switch {
 	case failed:
-		_ = o.store.UpdateThreatIntelSampleStatus(ctx, sample.ID, model.ThreatIntelSampleStatusFailed, "one or more jobs failed", nil)
+		_ = o.store.UpdateThreatIntelSampleStatus(ctx, sample.ID, model.ThreatIntelSampleStatusFailed, "one or more jobs failed", "", nil)
 		o.hub.Publish(Event{
-			Type:     "sample.failed",
-			SampleID: sample.ID.String(),
-			Status:   model.ThreatIntelSampleStatusFailed,
+			Type:           "sample.failed",
+			SampleID:       sample.ID.String(),
+			Status:         model.ThreatIntelSampleStatusFailed,
+			Classification: "failed",
+			ArtifactIDs:    uuidStrings(sample.ArtifactIDs),
 		})
 		o.recordAudit(fmt.Sprintf("agent:%s", sample.AgentID.String()), "agent", "threatintel.sample_failed", sample.ID.String(), "failed", map[string]string{"task_run": sample.TaskRunID.String()})
 	case completed:
-		_ = o.store.UpdateThreatIntelSampleStatus(ctx, sample.ID, model.ThreatIntelSampleStatusCompleted, "", nil)
+		_ = o.store.UpdateThreatIntelSampleStatus(ctx, sample.ID, model.ThreatIntelSampleStatusCompleted, "", "", nil)
 		o.hub.Publish(Event{
-			Type:     "sample.completed",
-			SampleID: sample.ID.String(),
-			Status:   model.ThreatIntelSampleStatusCompleted,
+			Type:           "sample.completed",
+			SampleID:       sample.ID.String(),
+			Status:         model.ThreatIntelSampleStatusCompleted,
+			Classification: sample.Metadata["classification"],
+			ArtifactIDs:    uuidStrings(sample.ArtifactIDs),
 		})
 		o.recordAudit(fmt.Sprintf("agent:%s", sample.AgentID.String()), "agent", "threatintel.sample_completed", sample.ID.String(), "completed", map[string]string{"task_run": sample.TaskRunID.String()})
 	default:
-		_ = o.store.UpdateThreatIntelSampleStatus(ctx, sample.ID, model.ThreatIntelSampleStatusScanning, "", nil)
+		_ = o.store.UpdateThreatIntelSampleStatus(ctx, sample.ID, model.ThreatIntelSampleStatusScanning, "", "", nil)
+	}
+}
+
+func uuidStrings(ids []uuid.UUID) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, id.String())
+	}
+	return result
+}
+
+func deriveJobErrorCode(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.DeadlineExceeded):
+		return "TI_PROVIDER_TIMEOUT"
+	default:
+		return "TI_PROVIDER_ERROR"
 	}
 }

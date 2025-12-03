@@ -21,7 +21,9 @@ pnpm dev              # 启动开发服务器（http://localhost:5173）
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `VITE_API_BASE_URL` | REST API Base | `/api/v1` |
-| `VITE_WS_BASE_URL`  | SSE/WS 地址 | `/api/v1/tasks/stream` |
+| `VITE_WS_BASE_URL`  | 任务 SSE 地址 | `/api/v1/tasks/stream` |
+| `VITE_QUEUE_STREAM_URL` | 队列 SSE 地址 | `/api/v1/queues/stream` |
+| `VITE_THREAT_INTEL_STREAM_URL` | Threat Intel SSE 地址 | `/api/v1/threat-intel/stream` |
 | `VITE_USE_MSW`      | 是否启用 MSW Mock | `true` |
 | `VITE_USE_MOCK_SSE` | 是否使用 Mock EventSource | `true` |
 | `VITE_AUTO_LOGIN`   | 是否自动登录 mock 用户 | `true` |
@@ -60,6 +62,7 @@ frontend/
 - 统一认证（Mock 登录 + Refresh Token）与 API SDK（axios + zod）。
 - MSW Mock + EventSource Mock，模拟 `/api/v1/tasks|reports|assets|audit|task-templates` 与 `/tasks/stream`。
 - useTaskStream + OperationTimeline：实时展示任务事件与审计操作。
+- 任务/队列/威胁情报三大视图已对齐后端契约：TaskOverview 使用服务器分页 + 视图保存、QueueMonitor 展示真实队列摘要与 SSE、ThreatIntelWorkspace 直接消费 `/threat-intel/jobs|samples` 并同步 SSE 状态。
 - 风险/资产/配置/审计视图：风险趋势、资产详情与批量标记、系统配置中心、审计日志过滤导出。
 - RBAC：依据角色（普通用户/审计用户/超级管理员）控制路由、命令面板与侧栏入口。
 

@@ -12,6 +12,33 @@ import (
 
 var ErrNotFound = errors.New("store: not found")
 
+// TaskListCursor identifies the resume position for paginated task queries.
+type TaskListCursor struct {
+	ID        uuid.UUID
+	UpdatedAt time.Time
+}
+
+// ListTasksOptions defines filters/pagination options for task queries.
+type ListTasksOptions struct {
+	Statuses []model.TaskStatus
+	Search   string
+	Limit    int
+	Cursor   *TaskListCursor
+}
+
+// TaskListSummary captures aggregated counts for filtered task sets.
+type TaskListSummary struct {
+	Total    int64
+	ByStatus map[model.TaskStatus]int64
+}
+
+// ListTasksResult wraps paginated task results.
+type ListTasksResult struct {
+	Tasks      []*model.Task
+	NextCursor *TaskListCursor
+	Summary    TaskListSummary
+}
+
 // Store defines the persistence contract required by scheduler and services.
 type Store interface {
 	UpsertAgent(ctx context.Context, agent *model.Agent) error
@@ -25,7 +52,7 @@ type Store interface {
 	IncrementTaskRetry(ctx context.Context, taskID uuid.UUID) error
 	GetTask(ctx context.Context, id uuid.UUID) (*model.Task, error)
 	ListPendingTasks(ctx context.Context, limit int) ([]*model.Task, error)
-	ListTasks(ctx context.Context, statuses []model.TaskStatus, limit int) ([]*model.Task, error)
+	ListTasks(ctx context.Context, opts ListTasksOptions) (ListTasksResult, error)
 	ListAgents(ctx context.Context) ([]*model.Agent, error)
 	Ping(ctx context.Context) error
 
@@ -43,16 +70,21 @@ type Store interface {
 	ArchiveTaskResults(ctx context.Context, before time.Time) (int, error)
 	ListTaskResults(ctx context.Context, taskType model.TaskType, limit int) ([]*model.TaskResult, error)
 
+	CreateTaskView(ctx context.Context, view *model.TaskView) error
+	ListTaskViews(ctx context.Context, owner string) ([]*model.TaskView, error)
+	UpdateTaskView(ctx context.Context, view *model.TaskView) error
+	DeleteTaskView(ctx context.Context, id uuid.UUID, owner string) error
+
 	// Threat intelligence orchestrator persistence.
 	CreateThreatIntelSample(ctx context.Context, sample *model.ThreatIntelSample) error
-	UpdateThreatIntelSampleStatus(ctx context.Context, sampleID uuid.UUID, status, lastError string, metadata map[string]string) error
+	UpdateThreatIntelSampleStatus(ctx context.Context, sampleID uuid.UUID, status, lastError, lastErrorCode string, metadata map[string]string) error
 	GetThreatIntelSample(ctx context.Context, sampleID uuid.UUID) (*model.ThreatIntelSample, error)
 	ListThreatIntelJobsBySample(ctx context.Context, sampleID uuid.UUID) ([]*model.ThreatIntelJob, error)
 	ListThreatIntelJobs(ctx context.Context, limit int) ([]*model.ThreatIntelJob, error)
 
 	InsertThreatIntelJob(ctx context.Context, job *model.ThreatIntelJob) error
 	LeaseThreatIntelJobs(ctx context.Context, limit int) ([]*model.ThreatIntelJob, error)
-	UpdateThreatIntelJobStatus(ctx context.Context, jobID uuid.UUID, status string, nextRunAt time.Time, errMsg string, metadata map[string]string) error
+	UpdateThreatIntelJobStatus(ctx context.Context, jobID uuid.UUID, status string, nextRunAt time.Time, errMsg, errorCode string, metadata map[string]string) error
 
 	InsertThreatIntelVerdict(ctx context.Context, verdict *model.ThreatIntelVerdict) error
 	ListThreatIntelVerdicts(ctx context.Context, indicator string, limit int) ([]*model.ThreatIntelVerdict, error)
@@ -97,4 +129,15 @@ type Store interface {
 	UpdateComplianceFinding(ctx context.Context, finding *model.ComplianceFinding) error
 	GetComplianceFinding(ctx context.Context, id uuid.UUID) (*model.ComplianceFinding, error)
 	ListComplianceFindings(ctx context.Context, frameworkID uuid.UUID, status string) ([]*model.ComplianceFinding, error)
+
+	// System event ingestion.
+	InsertSystemEvents(ctx context.Context, events []model.SystemEventRecord) error
+	CountSystemEvents(ctx context.Context, since time.Time) (int64, error)
+
+	// Collector control plane.
+	UpsertCollectorConfig(ctx context.Context, snapshot *model.CollectorConfigSnapshot) error
+	GetCollectorConfig(ctx context.Context, agentID uuid.UUID) (*model.CollectorConfigSnapshot, error)
+	ListCollectorConfigs(ctx context.Context) ([]*model.CollectorConfigSnapshot, error)
+	UpsertCollectorStatus(ctx context.Context, status *model.CollectorStatusSnapshot) error
+	ListCollectorStatuses(ctx context.Context) ([]*model.CollectorStatusSnapshot, error)
 }

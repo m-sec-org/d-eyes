@@ -100,7 +100,7 @@ func displayNetStat() ([]reporting.OutputRecord, error) {
 			network := strings.Join(connection, "")
 			_exe, _ := p.Exe()
 			path := utils.StringNewLine(_exe, 25)
-			connList = append(connList, fmt.Sprintf("%v", p.Pid), fmt.Sprintf("%v", p.Username), network, path)
+			connList = append(connList, fmt.Sprintf("%v", p.Pid), fmt.Sprintf("%v", _pUname), network, path)
 			networkData = append(networkData, connList)
 		}
 	}

@@ -3,12 +3,15 @@ package artifacts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -51,7 +54,16 @@ func TestClientUpload(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"uploaded"}`))
 	})
-	srv = httptest.NewServer(mux)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		if isPermissionDenied(err) {
+			t.Skipf("skip artifacts client tests: %v", err)
+		}
+		t.Fatalf("listen tcp: %v", err)
+	}
+	srv = httptest.NewUnstartedServer(mux)
+	srv.Listener = ln
+	srv.Start()
 	defer srv.Close()
 
 	client, err := NewClient(Config{
@@ -73,4 +85,22 @@ func TestClientUpload(t *testing.T) {
 
 	require.Equal(t, int32(1), presignCalls.Load())
 	require.Equal(t, int32(1), uploadCalls.Load())
+}
+
+func isPermissionDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return isPermissionDenied(opErr.Err)
+	}
+	var sysErr *os.SyscallError
+	if errors.As(err, &sysErr) {
+		return isPermissionDenied(sysErr.Err)
+	}
+	return false
 }

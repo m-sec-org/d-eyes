@@ -15,53 +15,61 @@ import (
 )
 
 type memoryStore struct {
-	mu              sync.RWMutex
-	agents          map[uuid.UUID]*model.Agent
-	agentsByName    map[string]uuid.UUID
-	tasks           map[uuid.UUID]*model.Task
-	taskRuns        map[uuid.UUID]*model.TaskRun
-	leases          map[uuid.UUID]uuid.UUID
-	artifacts       map[uuid.UUID]model.Artifact
-	taskResults     map[uuid.UUID]*model.TaskResult
-	tiSamples       map[uuid.UUID]*model.ThreatIntelSample
-	tiJobs          map[uuid.UUID]*model.ThreatIntelJob
-	tiVerdicts      map[uuid.UUID]*model.ThreatIntelVerdict
-	behaviorMetrics []model.BehaviorMetric
-	behaviorEvents  []model.BehaviorEvent
-	anomalies       map[uuid.UUID]*model.Anomaly
-	behaviorGraphs  map[uuid.UUID]*model.AnomalyGraph
-	playbooks       map[uuid.UUID]*model.Playbook
-	playbookRuns    map[uuid.UUID]*model.PlaybookRun
-	frameworks      map[uuid.UUID]*model.ComplianceFramework
-	controls        map[uuid.UUID]*model.ComplianceControl
-	mappings        map[uuid.UUID][]model.ControlMapping
-	findings        map[uuid.UUID]*model.ComplianceFinding
-	basScenarios    map[uuid.UUID]*model.BASScenario
+	mu                sync.RWMutex
+	agents            map[uuid.UUID]*model.Agent
+	agentsByName      map[string]uuid.UUID
+	tasks             map[uuid.UUID]*model.Task
+	taskRuns          map[uuid.UUID]*model.TaskRun
+	leases            map[uuid.UUID]uuid.UUID
+	artifacts         map[uuid.UUID]model.Artifact
+	taskResults       map[uuid.UUID]*model.TaskResult
+	taskViews         map[uuid.UUID]*model.TaskView
+	tiSamples         map[uuid.UUID]*model.ThreatIntelSample
+	tiJobs            map[uuid.UUID]*model.ThreatIntelJob
+	tiVerdicts        map[uuid.UUID]*model.ThreatIntelVerdict
+	behaviorMetrics   []model.BehaviorMetric
+	behaviorEvents    []model.BehaviorEvent
+	systemEvents      []model.SystemEventRecord
+	anomalies         map[uuid.UUID]*model.Anomaly
+	behaviorGraphs    map[uuid.UUID]*model.AnomalyGraph
+	playbooks         map[uuid.UUID]*model.Playbook
+	playbookRuns      map[uuid.UUID]*model.PlaybookRun
+	frameworks        map[uuid.UUID]*model.ComplianceFramework
+	controls          map[uuid.UUID]*model.ComplianceControl
+	mappings          map[uuid.UUID][]model.ControlMapping
+	findings          map[uuid.UUID]*model.ComplianceFinding
+	basScenarios      map[uuid.UUID]*model.BASScenario
+	collectorConfigs  map[uuid.UUID]*model.CollectorConfigSnapshot
+	collectorStatuses map[uuid.UUID]*model.CollectorStatusSnapshot
 }
 
 func newMemoryStore() Store {
 	return &memoryStore{
-		agents:          make(map[uuid.UUID]*model.Agent),
-		agentsByName:    make(map[string]uuid.UUID),
-		tasks:           make(map[uuid.UUID]*model.Task),
-		taskRuns:        make(map[uuid.UUID]*model.TaskRun),
-		leases:          make(map[uuid.UUID]uuid.UUID),
-		artifacts:       make(map[uuid.UUID]model.Artifact),
-		taskResults:     make(map[uuid.UUID]*model.TaskResult),
-		tiSamples:       make(map[uuid.UUID]*model.ThreatIntelSample),
-		tiJobs:          make(map[uuid.UUID]*model.ThreatIntelJob),
-		tiVerdicts:      make(map[uuid.UUID]*model.ThreatIntelVerdict),
-		behaviorMetrics: make([]model.BehaviorMetric, 0, 128),
-		behaviorEvents:  make([]model.BehaviorEvent, 0, 128),
-		anomalies:       make(map[uuid.UUID]*model.Anomaly),
-		behaviorGraphs:  make(map[uuid.UUID]*model.AnomalyGraph),
-		playbooks:       make(map[uuid.UUID]*model.Playbook),
-		playbookRuns:    make(map[uuid.UUID]*model.PlaybookRun),
-		frameworks:      make(map[uuid.UUID]*model.ComplianceFramework),
-		controls:        make(map[uuid.UUID]*model.ComplianceControl),
-		mappings:        make(map[uuid.UUID][]model.ControlMapping),
-		findings:        make(map[uuid.UUID]*model.ComplianceFinding),
-		basScenarios:    make(map[uuid.UUID]*model.BASScenario),
+		agents:            make(map[uuid.UUID]*model.Agent),
+		agentsByName:      make(map[string]uuid.UUID),
+		tasks:             make(map[uuid.UUID]*model.Task),
+		taskRuns:          make(map[uuid.UUID]*model.TaskRun),
+		leases:            make(map[uuid.UUID]uuid.UUID),
+		artifacts:         make(map[uuid.UUID]model.Artifact),
+		taskResults:       make(map[uuid.UUID]*model.TaskResult),
+		taskViews:         make(map[uuid.UUID]*model.TaskView),
+		tiSamples:         make(map[uuid.UUID]*model.ThreatIntelSample),
+		tiJobs:            make(map[uuid.UUID]*model.ThreatIntelJob),
+		tiVerdicts:        make(map[uuid.UUID]*model.ThreatIntelVerdict),
+		behaviorMetrics:   make([]model.BehaviorMetric, 0, 128),
+		behaviorEvents:    make([]model.BehaviorEvent, 0, 128),
+		systemEvents:      make([]model.SystemEventRecord, 0, 256),
+		anomalies:         make(map[uuid.UUID]*model.Anomaly),
+		behaviorGraphs:    make(map[uuid.UUID]*model.AnomalyGraph),
+		playbooks:         make(map[uuid.UUID]*model.Playbook),
+		playbookRuns:      make(map[uuid.UUID]*model.PlaybookRun),
+		frameworks:        make(map[uuid.UUID]*model.ComplianceFramework),
+		controls:          make(map[uuid.UUID]*model.ComplianceControl),
+		mappings:          make(map[uuid.UUID][]model.ControlMapping),
+		findings:          make(map[uuid.UUID]*model.ComplianceFinding),
+		basScenarios:      make(map[uuid.UUID]*model.BASScenario),
+		collectorConfigs:  make(map[uuid.UUID]*model.CollectorConfigSnapshot),
+		collectorStatuses: make(map[uuid.UUID]*model.CollectorStatusSnapshot),
 	}
 }
 
@@ -236,36 +244,202 @@ func (m *memoryStore) ListPendingTasks(_ context.Context, limit int) ([]*model.T
 	return res, nil
 }
 
-func (m *memoryStore) ListTasks(_ context.Context, statuses []model.TaskStatus, limit int) ([]*model.Task, error) {
+func (m *memoryStore) ListTasks(_ context.Context, opts ListTasksOptions) (ListTasksResult, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	filter := make(map[model.TaskStatus]struct{}, len(statuses))
-	for _, st := range statuses {
-		filter[st] = struct{}{}
+	limit := clampTaskListLimit(opts.Limit)
+	statusFilter := make(map[model.TaskStatus]struct{}, len(opts.Statuses))
+	for _, st := range opts.Statuses {
+		statusFilter[st] = struct{}{}
 	}
-	res := make([]*model.Task, 0, len(m.tasks))
+	search := strings.ToLower(strings.TrimSpace(opts.Search))
+	summary := TaskListSummary{
+		ByStatus: make(map[model.TaskStatus]int64),
+	}
+	// summary ignores cursor
 	for _, task := range m.tasks {
-		if len(filter) > 0 {
-			if _, ok := filter[task.Status]; !ok {
+		if len(statusFilter) > 0 {
+			if _, ok := statusFilter[task.Status]; !ok {
 				continue
 			}
+		}
+		if search != "" && !taskMatchesSearch(task, search) {
+			continue
+		}
+		summary.ByStatus[task.Status]++
+		summary.Total++
+	}
+	filtered := make([]*model.Task, 0, len(m.tasks))
+	for _, task := range m.tasks {
+		if len(statusFilter) > 0 {
+			if _, ok := statusFilter[task.Status]; !ok {
+				continue
+			}
+		}
+		if search != "" && !taskMatchesSearch(task, search) {
+			continue
 		}
 		cp := *task
 		cp.Metadata = copyMap(task.Metadata)
 		cp.Profile = task.Profile
 		cp.Payload = append([]byte(nil), task.Payload...)
+		filtered = append(filtered, &cp)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].UpdatedAt.Equal(filtered[j].UpdatedAt) {
+			return filtered[i].ID.String() > filtered[j].ID.String()
+		}
+		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt)
+	})
+	if opts.Cursor != nil && opts.Cursor.ID != uuid.Nil {
+		start := 0
+		for start < len(filtered) {
+			current := filtered[start]
+			if current.UpdatedAt.Before(opts.Cursor.UpdatedAt) {
+				break
+			}
+			if current.UpdatedAt.Equal(opts.Cursor.UpdatedAt) && current.ID.String() < opts.Cursor.ID.String() {
+				break
+			}
+			start++
+		}
+		if start < len(filtered) {
+			filtered = filtered[start:]
+		} else {
+			filtered = filtered[:0]
+		}
+	}
+	result := ListTasksResult{
+		Summary: summary,
+	}
+	if len(filtered) > limit {
+		result.NextCursor = &TaskListCursor{
+			ID:        filtered[limit-1].ID,
+			UpdatedAt: filtered[limit-1].UpdatedAt,
+		}
+		result.Tasks = filtered[:limit]
+	} else {
+		result.Tasks = filtered
+	}
+	return result, nil
+}
+
+func taskMatchesSearch(task *model.Task, search string) bool {
+	if task == nil || search == "" {
+		return true
+	}
+	metaValues := make([]string, 0, len(task.Metadata))
+	for k, v := range task.Metadata {
+		metaValues = append(metaValues, k+"="+v)
+	}
+	haystack := strings.ToLower(strings.Join([]string{
+		task.ID.String(),
+		string(task.Type),
+		task.CreatedBy,
+		strings.Join(metaValues, " "),
+	}, " "))
+	return strings.Contains(haystack, search)
+}
+
+func clampTaskListLimit(limit int) int {
+	const (
+		defaultLimit = 50
+		maxLimit     = 200
+	)
+	if limit <= 0 {
+		return defaultLimit
+	}
+	if limit > maxLimit {
+		return maxLimit
+	}
+	return limit
+}
+
+func (m *memoryStore) CreateTaskView(_ context.Context, view *model.TaskView) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if view == nil {
+		return errors.New("task view required")
+	}
+	if view.ID == uuid.Nil {
+		view.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	viewCopy := *view
+	viewCopy.CreatedAt = now
+	viewCopy.UpdatedAt = now
+	viewCopy.Filters = copyFilterMap(view.Filters)
+	m.taskViews[viewCopy.ID] = &viewCopy
+	return nil
+}
+
+func (m *memoryStore) ListTaskViews(_ context.Context, owner string) ([]*model.TaskView, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	res := make([]*model.TaskView, 0)
+	for _, view := range m.taskViews {
+		if view.Owner != owner {
+			continue
+		}
+		if view.DeletedAt != nil && !view.DeletedAt.IsZero() {
+			continue
+		}
+		cp := *view
+		cp.Filters = copyFilterMap(view.Filters)
 		res = append(res, &cp)
 	}
 	sort.Slice(res, func(i, j int) bool {
-		if res[i].CreatedAt.Equal(res[j].CreatedAt) {
-			return res[i].ID.String() < res[j].ID.String()
-		}
-		return res[i].CreatedAt.After(res[j].CreatedAt)
+		return res[i].UpdatedAt.After(res[j].UpdatedAt)
 	})
-	if limit > 0 && len(res) > limit {
-		res = res[:limit]
-	}
 	return res, nil
+}
+
+func (m *memoryStore) UpdateTaskView(_ context.Context, view *model.TaskView) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if view == nil {
+		return errors.New("task view required")
+	}
+	existing, ok := m.taskViews[view.ID]
+	if !ok || existing.DeletedAt != nil {
+		return ErrNotFound
+	}
+	if existing.Owner != view.Owner {
+		return ErrNotFound
+	}
+	existing.Name = view.Name
+	existing.Filters = copyFilterMap(view.Filters)
+	existing.PageSize = view.PageSize
+	existing.IsDefault = view.IsDefault
+	existing.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+func (m *memoryStore) DeleteTaskView(_ context.Context, id uuid.UUID, owner string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	view, ok := m.taskViews[id]
+	if !ok || view.DeletedAt != nil {
+		return ErrNotFound
+	}
+	if view.Owner != owner {
+		return ErrNotFound
+	}
+	now := time.Now().UTC()
+	view.DeletedAt = &now
+	view.UpdatedAt = now
+	return nil
+}
+
+func copyFilterMap(src map[string]interface{}) map[string]interface{} {
+	if len(src) == 0 {
+		return map[string]interface{}{}
+	}
+	dst := make(map[string]interface{}, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func (m *memoryStore) CreateTaskRun(_ context.Context, run *model.TaskRun) error {
@@ -1331,7 +1505,7 @@ func (m *memoryStore) CreateThreatIntelSample(_ context.Context, sample *model.T
 	return nil
 }
 
-func (m *memoryStore) UpdateThreatIntelSampleStatus(_ context.Context, sampleID uuid.UUID, status, lastError string, metadata map[string]string) error {
+func (m *memoryStore) UpdateThreatIntelSampleStatus(_ context.Context, sampleID uuid.UUID, status, lastError, lastErrorCode string, metadata map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sample, ok := m.tiSamples[sampleID]
@@ -1342,6 +1516,7 @@ func (m *memoryStore) UpdateThreatIntelSampleStatus(_ context.Context, sampleID 
 		sample.Status = status
 	}
 	sample.LastError = lastError
+	sample.LastErrorCode = lastErrorCode
 	if metadata != nil {
 		sample.Metadata = copyMap(metadata)
 	}
@@ -1414,6 +1589,9 @@ func (m *memoryStore) InsertThreatIntelJob(_ context.Context, job *model.ThreatI
 		job.CreatedAt = now
 	}
 	job.UpdatedAt = now
+	if job.LastTransitionAt.IsZero() {
+		job.LastTransitionAt = job.CreatedAt
+	}
 	if job.Status == "" {
 		job.Status = model.ThreatIntelJobStatusPending
 	}
@@ -1443,13 +1621,14 @@ func (m *memoryStore) LeaseThreatIntelJobs(_ context.Context, limit int) ([]*mod
 		job.Status = model.ThreatIntelJobStatusRunning
 		job.Attempt++
 		job.UpdatedAt = now
+		job.LastTransitionAt = now
 		cp := copyTIJob(job)
 		results = append(results, &cp)
 	}
 	return results, nil
 }
 
-func (m *memoryStore) UpdateThreatIntelJobStatus(_ context.Context, jobID uuid.UUID, status string, nextRunAt time.Time, errMsg string, metadata map[string]string) error {
+func (m *memoryStore) UpdateThreatIntelJobStatus(_ context.Context, jobID uuid.UUID, status string, nextRunAt time.Time, errMsg, errorCode string, metadata map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job, ok := m.tiJobs[jobID]
@@ -1460,6 +1639,7 @@ func (m *memoryStore) UpdateThreatIntelJobStatus(_ context.Context, jobID uuid.U
 		job.Status = status
 	}
 	job.ErrorMsg = errMsg
+	job.ErrorCode = errorCode
 	if !nextRunAt.IsZero() {
 		job.NextRunAt = nextRunAt
 	} else {
@@ -1468,7 +1648,9 @@ func (m *memoryStore) UpdateThreatIntelJobStatus(_ context.Context, jobID uuid.U
 	if metadata != nil {
 		job.Metadata = copyMap(metadata)
 	}
-	job.UpdatedAt = time.Now()
+	now := time.Now()
+	job.UpdatedAt = now
+	job.LastTransitionAt = now
 	return nil
 }
 
@@ -1539,12 +1721,148 @@ func (m *memoryStore) CountThreatIntelJobs(_ context.Context, statuses []string)
 	return count, nil
 }
 
+func (m *memoryStore) InsertSystemEvents(_ context.Context, events []model.SystemEventRecord) error {
+	if len(events) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, evt := range events {
+		cp := evt
+		if cp.ID == uuid.Nil {
+			cp.ID = uuid.New()
+		}
+		if cp.ReceivedAt.IsZero() {
+			cp.ReceivedAt = time.Now().UTC()
+		}
+		if cp.Metadata != nil {
+			cp.Metadata = copyMap(cp.Metadata)
+		}
+		if cp.Tags != nil {
+			cp.Tags = copyMap(cp.Tags)
+		}
+		m.systemEvents = append(m.systemEvents, cp)
+	}
+	return nil
+}
+
+func (m *memoryStore) CountSystemEvents(_ context.Context, since time.Time) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if since.IsZero() {
+		return int64(len(m.systemEvents)), nil
+	}
+	var count int64
+	for _, evt := range m.systemEvents {
+		if !evt.ReceivedAt.Before(since) {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *memoryStore) UpsertCollectorConfig(_ context.Context, snapshot *model.CollectorConfigSnapshot) error {
+	if snapshot == nil || snapshot.AgentID == uuid.Nil {
+		return errors.New("collector config: agent id required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := *snapshot
+	if cp.Version == 0 {
+		if existing, ok := m.collectorConfigs[cp.AgentID]; ok {
+			cp.Version = existing.Version + 1
+		} else {
+			cp.Version = 1
+		}
+	}
+	if cp.UpdatedAt.IsZero() {
+		cp.UpdatedAt = time.Now().UTC()
+	}
+	if cp.Config != nil {
+		cp.Config = append([]byte(nil), cp.Config...)
+	}
+	m.collectorConfigs[cp.AgentID] = &cp
+	return nil
+}
+
+func (m *memoryStore) GetCollectorConfig(_ context.Context, agentID uuid.UUID) (*model.CollectorConfigSnapshot, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	cfg, ok := m.collectorConfigs[agentID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *cfg
+	if cp.Config != nil {
+		cp.Config = append([]byte(nil), cp.Config...)
+	}
+	return &cp, nil
+}
+
+func (m *memoryStore) ListCollectorConfigs(_ context.Context) ([]*model.CollectorConfigSnapshot, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	results := make([]*model.CollectorConfigSnapshot, 0, len(m.collectorConfigs))
+	for _, cfg := range m.collectorConfigs {
+		cp := *cfg
+		if cp.Config != nil {
+			cp.Config = append([]byte(nil), cp.Config...)
+		}
+		results = append(results, &cp)
+	}
+	return results, nil
+}
+
+func (m *memoryStore) UpsertCollectorStatus(_ context.Context, status *model.CollectorStatusSnapshot) error {
+	if status == nil || status.AgentID == uuid.Nil {
+		return errors.New("collector status: agent id required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := *status
+	if cp.UpdatedAt.IsZero() {
+		cp.UpdatedAt = time.Now().UTC()
+	}
+	if cp.Stats != nil {
+		cp.Stats = cloneAnyMap(cp.Stats)
+	}
+	if cp.Metadata != nil {
+		cp.Metadata = copyMap(cp.Metadata)
+	}
+	m.collectorStatuses[cp.AgentID] = &cp
+	return nil
+}
+
+func (m *memoryStore) ListCollectorStatuses(_ context.Context) ([]*model.CollectorStatusSnapshot, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	results := make([]*model.CollectorStatusSnapshot, 0, len(m.collectorStatuses))
+	for _, st := range m.collectorStatuses {
+		cp := *st
+		if cp.Stats != nil {
+			cp.Stats = cloneAnyMap(cp.Stats)
+		}
+		if cp.Metadata != nil {
+			cp.Metadata = copyMap(cp.Metadata)
+		}
+		results = append(results, &cp)
+	}
+	return results, nil
+}
+
 func copyTISample(src *model.ThreatIntelSample) model.ThreatIntelSample {
 	cp := *src
 	if src.Metadata != nil {
 		cp.Metadata = copyMap(src.Metadata)
 	}
 	cp.ArtifactIDs = copyUUIDs(src.ArtifactIDs)
+	if len(src.ArtifactDetails) > 0 {
+		cp.ArtifactDetails = make([]model.ArtifactDetail, len(src.ArtifactDetails))
+		copy(cp.ArtifactDetails, src.ArtifactDetails)
+	}
+	if src.JobStatuses != nil {
+		cp.JobStatuses = copyMap(src.JobStatuses)
+	}
 	return cp
 }
 
@@ -1556,6 +1874,12 @@ func copyTIJob(src *model.ThreatIntelJob) model.ThreatIntelJob {
 	cp.ArtifactIDs = copyUUIDs(src.ArtifactIDs)
 	if src.Payload != nil {
 		cp.Payload = append([]byte(nil), src.Payload...)
+	}
+	if src.Summary != nil {
+		cp.Summary = make(map[string]any, len(src.Summary))
+		for k, v := range src.Summary {
+			cp.Summary[k] = v
+		}
 	}
 	return cp
 }

@@ -5,10 +5,14 @@ import { useTaskEventStore } from '@/store/taskEvents';
 import { performTaskAction } from '@/services/api/taskActions';
 import { Button, Select } from '@/components/ui';
 import { cn } from '@/utils/cn';
+import type { QueueSummary } from '@/services/api/queues';
+import type { QueueStreamStatus } from '@/store/queueSummary';
 import './TaskLiveMonitor.css';
 
 interface TaskLiveMonitorProps {
   tasks: Task[];
+  queueSummary?: QueueSummary;
+  queueStatus?: QueueStreamStatus;
 }
 
 type TimeWindowValue = 'all' | 5 | 10 | 30;
@@ -46,7 +50,7 @@ function toMinuteBucket(event: TaskEvent) {
   };
 }
 
-export function TaskLiveMonitor({ tasks }: TaskLiveMonitorProps) {
+export function TaskLiveMonitor({ tasks, queueSummary, queueStatus = 'connecting' }: TaskLiveMonitorProps) {
   const events = useTaskEventStore((state) => state.events);
   const status = useTaskEventStore((state) => state.status);
   const [selectedTaskId, setSelectedTaskId] = useState('');
@@ -222,6 +226,17 @@ export function TaskLiveMonitor({ tasks }: TaskLiveMonitorProps) {
               <span className="live-monitor-pending">新事件 +{pendingEvents}</span>
             )}
           </p>
+          <p className="muted">
+            队列流：{queueStatus} · 深度 {queueSummary?.queue_depth ?? '--'} · 运行 {queueSummary?.in_flight ?? '--'}
+          </p>
+          {queueSummary && (queueSummary.status_counts?.blocked ?? 0) > 0 && (
+            <span className="live-monitor-alert danger">
+              队列阻塞 {queueSummary.status_counts?.blocked} 个任务，请关注 QueueMonitor。
+            </span>
+          )}
+          <Button type="button" variant="ghost" onClick={() => (window.location.href = '/queues')}>
+            查看命令队列
+          </Button>
         </div>
         <div className="actions task-live-monitor__actions">
           <Select

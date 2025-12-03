@@ -136,6 +136,14 @@ D-Eyes提供Agent-Server分布式架构，支持大规模环境的集中管理�
 - **集中配置管理**：通过Server统一管理Agent配置
 - **BAS场景协调**：支持跨Agent的协同攻击模拟，实现复杂场景验证
 
+### 2.8 Collector 部署与权限
+
+跨平台 Collector（Windows ETW、Linux eBPF）需要额外的系统权限与依赖，可参考《[Collector 安装与权限指南](docs/collector-installation-guide.md)》：
+
+- Windows：以管理员身份运行 `d-eyes collect --backend=etw` 或配置服务账户，确保 Provider 注册与 ETW Session 权限。
+- Linux：内核 ≥5.8，安装 `clang/llvm` 与 `linux-headers-$(uname -r)`，为二进制授予 `CAP_BPF/CAP_SYS_RESOURCE` 或以 root 启动，并调大 `memlock` 限制。
+- CLI 可通过 `--backend`、`--output-mode`、`--stream-*` 等参数快速调试 Collector，状态会上报到 Server `/api/v1/collector/status`/SSE。
+
 ## 3. 代码组织结构
 
 D-Eyes项目采用清晰的代码组织结构，将Agent和Server功能分离，便于独立开发和部署。
@@ -226,6 +234,7 @@ Server端采用微服务思想设计，各组件通过接口交互，便于扩�
 - [插件 SDK 与示例](docs/plugin-sdk.md)：TaskRunner、Manifest、注入接口与最小示例。
 - [观测 API 与指标集成](docs/observability-api.md)：Prometheus/SSE/API 调用清单与告警模板。
 - [运维脚本模板](docs/ops-scripts.md)：部署、回滚、审批巡检脚本样板，可直接接入 CI/CD。
+- [Collector 安装与权限指南](docs/collector-installation-guide.md) & [Collector 诊断与验收](docs/collector-diagnostics.md)：跨平台依赖、权限、CLI、自检及性能验收步骤。
 - [发布说明模板](docs/release-notes-template.md) & [`scripts/check-release-notes.sh`](scripts/check-release-notes.sh)：保证 `docs/release-notes/<version>.md` 与 `docs/changelog.md` 与版本同步。
 - [统一测试矩阵](docs/test-matrix.md) & [`scripts/test-matrix.sh`](scripts/test-matrix.sh)：一次执行 Server/Agent/BAS/前端测试与 Docs 校验。Server 部分需至少完成以下三组命令，确保核心模块、BAS 调度与审批/RBAC 错误分支都被覆盖：
   - `cd server && go test ./...`

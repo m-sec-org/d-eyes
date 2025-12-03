@@ -158,6 +158,7 @@ func newContractRouter(cfg config.Config, st store.Store, sched *scheduler.Sched
 	return api.NewRouter(
 		cfg,
 		taskHandler,
+		nil,
 		&v1.TemplateHandler{},
 		reportHandler,
 		nil, // catalog
@@ -174,9 +175,13 @@ func newContractRouter(cfg config.Config, st store.Store, sched *scheduler.Sched
 		nil, // cert handler
 		nil, // security handler
 		nil, // ops handler
+		nil, // queue handler
+		nil, // collector handler
+		nil, // events handler
 		nil, // mfa
 		nil, // metrics
 		nil, // task stream
+		nil, // queue stream
 		nil, // threat stream
 		nil, // anomaly stream
 	)

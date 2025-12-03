@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -103,6 +104,29 @@ type taskVisualResponse struct {
 	VisualType  string      `json:"visual_type"`
 	GeneratedAt time.Time   `json:"generated_at"`
 	Payload     interface{} `json:"payload"`
+}
+
+type taskListEnvelope struct {
+	Data       []taskResponse          `json:"data"`
+	PageSize   int                     `json:"page_size"`
+	NextCursor string                  `json:"next_cursor,omitempty"`
+	Filters    taskListFiltersResponse `json:"filters"`
+	Summary    taskListSummaryResponse `json:"summary"`
+}
+
+type taskListFiltersResponse struct {
+	Status []string `json:"status,omitempty"`
+	Search string   `json:"search,omitempty"`
+}
+
+type taskListSummaryResponse struct {
+	Total    int64            `json:"total"`
+	ByStatus map[string]int64 `json:"by_status,omitempty"`
+}
+
+type taskCursorPayload struct {
+	UpdatedAt time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
 }
 
 func normalizePayloadMap(raw interface{}) (map[string]any, error) {
@@ -286,7 +310,7 @@ func (h *TaskHandler) listTasks(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
-	limit := 20
+	limit := 50
 	if v := c.Query("limit"); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
 			limit = parsed
@@ -295,26 +319,62 @@ func (h *TaskHandler) listTasks(c *gin.Context) {
 			return
 		}
 	}
+	if limit > 200 {
+		limit = 200
+	}
 	statuses, err := parseStatusFilter(c.Query("status"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	tasks, err := h.Store.ListTasks(ctx, statuses, limit)
+	search := strings.TrimSpace(c.Query("search"))
+	cursorParam := strings.TrimSpace(c.Query("cursor"))
+	var cursor *store.TaskListCursor
+	if cursorParam != "" {
+		decoded, err := decodeTaskCursor(cursorParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid cursor"})
+			return
+		}
+		cursor = decoded
+	}
+	result, err := h.Store.ListTasks(ctx, store.ListTasksOptions{
+		Statuses: statuses,
+		Search:   search,
+		Limit:    limit,
+		Cursor:   cursor,
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	result := make([]taskResponse, 0, len(tasks))
-	for _, task := range tasks {
+	items := make([]taskResponse, 0, len(result.Tasks))
+	for _, task := range result.Tasks {
 		resp, err := h.buildTaskResponse(ctx, task)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		result = append(result, resp)
+		items = append(items, resp)
 	}
-	c.JSON(http.StatusOK, result)
+	envelope := taskListEnvelope{
+		Data:     items,
+		PageSize: limit,
+		Filters: taskListFiltersResponse{
+			Status: statusStrings(statuses),
+			Search: search,
+		},
+		Summary: newTaskListSummaryResponse(result.Summary),
+	}
+	if result.NextCursor != nil {
+		token, err := encodeTaskCursor(*result.NextCursor)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "encode cursor"})
+			return
+		}
+		envelope.NextCursor = token
+	}
+	c.JSON(http.StatusOK, envelope)
 }
 
 func (h *TaskHandler) getTask(c *gin.Context) {
@@ -458,6 +518,62 @@ func hostSummaryPayload(exec model.ExecutionResult, run *model.TaskRun) map[stri
 		}
 	}
 	return payload
+}
+
+func newTaskListSummaryResponse(summary store.TaskListSummary) taskListSummaryResponse {
+	resp := taskListSummaryResponse{
+		Total:    summary.Total,
+		ByStatus: make(map[string]int64, len(summary.ByStatus)),
+	}
+	for status, count := range summary.ByStatus {
+		resp.ByStatus[string(status)] = count
+	}
+	return resp
+}
+
+func statusStrings(statuses []model.TaskStatus) []string {
+	if len(statuses) == 0 {
+		return nil
+	}
+	out := make([]string, len(statuses))
+	for i, st := range statuses {
+		out[i] = string(st)
+	}
+	return out
+}
+
+func encodeTaskCursor(cur store.TaskListCursor) (string, error) {
+	if cur.ID == uuid.Nil {
+		return "", fmt.Errorf("invalid cursor id")
+	}
+	payload := taskCursorPayload{
+		UpdatedAt: cur.UpdatedAt.UTC(),
+		ID:        cur.ID.String(),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func decodeTaskCursor(token string) (*store.TaskListCursor, error) {
+	data, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return nil, err
+	}
+	var payload taskCursorPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	id, err := uuid.Parse(payload.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &store.TaskListCursor{
+		ID:        id,
+		UpdatedAt: payload.UpdatedAt,
+	}, nil
 }
 
 type supplyChainReportResponse struct {

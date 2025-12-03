@@ -35,6 +35,23 @@ remote:
 tasks:
   respond:
     profile: quick
+collectors:
+  - name: win-etw
+    kind: etw
+    providers: ["Kernel", "Security"]
+    filters:
+      include:
+        event_type: ["process"]
+    sampling:
+      rate: 0.5
+      interval: 2s
+      burst: 10
+    output:
+      mode: file
+      path: "` + filepath.Join(dir, "etw.jsonl") + `"
+      buffer_size: 2048
+    settings:
+      session: win-default
 `
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -61,6 +78,25 @@ tasks:
 	}
 	if cfg.Remote.Labels["network_boundary"] != "dmz" {
 		t.Fatalf("remote labels not merged")
+	}
+	if len(cfg.Collectors) != 1 {
+		t.Fatalf("expected one collector, got %d", len(cfg.Collectors))
+	}
+	col := cfg.Collectors[0]
+	if col.Name != "win-etw" || col.Kind != "etw" {
+		t.Fatalf("collector fields not parsed: %+v", col)
+	}
+	if col.Sampling.Interval != 2*time.Second || col.Sampling.Rate != 0.5 {
+		t.Fatalf("collector sampling not parsed: %+v", col.Sampling)
+	}
+	if col.Output.Path != filepath.Join(dir, "etw.jsonl") || col.Output.BufferSize != 2048 {
+		t.Fatalf("collector output not parsed: %+v", col.Output)
+	}
+	if col.Filters.Include["event_type"][0] != "process" {
+		t.Fatalf("collector filters not parsed: %+v", col.Filters)
+	}
+	if col.Settings["session"] != "win-default" {
+		t.Fatalf("collector settings missing: %+v", col.Settings)
 	}
 }
 

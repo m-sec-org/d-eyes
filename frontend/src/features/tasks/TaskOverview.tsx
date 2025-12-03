@@ -12,13 +12,29 @@ import { useTaskActions } from './hooks/useTaskActions';
 import { Button, Space } from 'antd';
 import { PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { PageHeader } from '@/components/layout/PageHeader';
+import { useQueueSummary } from '@/hooks/useQueueSummary';
 
 export function TaskOverview() {
   const filterState = useTaskFilters();
-  const { tasks, isLoading, refresh } = useTasksData(filterState.filters);
+  const { tasks, summary, isLoading, isLoadingMore, canLoadMore, loadMore, refresh } = useTasksData(filterState.filters);
+  const queue = useQueueSummary();
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
   const { retryTask, cancelTask } = useTaskActions(refresh);
+
+  const handleBulkRetry = async (selected: Task[]) => {
+    for (const task of selected) {
+      await retryTask(task);
+    }
+    refresh();
+  };
+
+  const handleBulkCancel = async (selected: Task[]) => {
+    for (const task of selected) {
+      await cancelTask(task);
+    }
+    refresh();
+  };
 
   return (
     <div className="task-overview">
@@ -43,22 +59,34 @@ export function TaskOverview() {
         <TaskFilters
           filters={filterState.filters}
           views={filterState.views}
+          viewsLoading={filterState.viewsLoading}
+          savingView={filterState.savingView}
           onStatusChange={filterState.setStatus}
           onSearchChange={filterState.setSearch}
+          onPageSizeChange={filterState.setPageSize}
           onSaveView={filterState.saveCurrentView}
           onApplyView={filterState.applyView}
           onRemoveView={filterState.removeView}
         />
 
-        <TaskLiveMonitor tasks={tasks} />
-        <TaskBoard tasks={tasks} loading={isLoading} />
+        <TaskLiveMonitor
+          tasks={tasks}
+          queueSummary={queue.summary}
+          queueStatus={queue.status}
+        />
+        <TaskBoard tasks={tasks} loading={isLoading} summary={summary} />
         <TaskList
           tasks={tasks}
           loading={isLoading}
+          loadingMore={isLoadingMore}
+          canLoadMore={canLoadMore}
           onRefresh={refresh}
           onSelect={setSelectedTask}
           onRetry={retryTask}
           onCancel={cancelTask}
+          onBulkRetry={handleBulkRetry}
+          onBulkCancel={handleBulkCancel}
+          onLoadMore={loadMore}
         />
       </Space>
 

@@ -16,22 +16,25 @@ const (
 
 // ThreatIntelJob represents a queued lookup/scan request.
 type ThreatIntelJob struct {
-	ID          uuid.UUID         `json:"id"`
-	SampleID    uuid.UUID         `json:"sample_id"`
-	Indicator   string            `json:"indicator"`
-	Kind        string            `json:"kind"`
-	Source      ThreatIntelSource `json:"source"`
-	Status      string            `json:"status"`
-	Payload     []byte            `json:"payload"`
-	Attempt     int               `json:"attempt"`
-	ErrorMsg    string            `json:"error_msg"`
-	NextRunAt   time.Time         `json:"next_run_at"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
-	TaskRunID   uuid.UUID         `json:"task_run_id"`
-	AgentID     uuid.UUID         `json:"agent_id"`
-	ArtifactIDs []uuid.UUID       `json:"artifact_ids"`
-	Metadata    map[string]string `json:"metadata"`
+	ID               uuid.UUID         `json:"id"`
+	SampleID         uuid.UUID         `json:"sample_id"`
+	Indicator        string            `json:"indicator"`
+	Kind             string            `json:"kind"`
+	Source           ThreatIntelSource `json:"source"`
+	Status           string            `json:"status"`
+	Payload          []byte            `json:"payload"`
+	Attempt          int               `json:"attempt"`
+	ErrorMsg         string            `json:"error_msg"`
+	ErrorCode        string            `json:"error_code"`
+	NextRunAt        time.Time         `json:"next_run_at"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+	LastTransitionAt time.Time         `json:"last_transition_at"`
+	TaskRunID        uuid.UUID         `json:"task_run_id"`
+	AgentID          uuid.UUID         `json:"agent_id"`
+	ArtifactIDs      []uuid.UUID       `json:"artifact_ids"`
+	Metadata         map[string]string `json:"metadata"`
+	Summary          map[string]any    `json:"summary"`
 }
 
 // ThreatIntelVerdict stores normalized results from providers.
@@ -53,18 +56,31 @@ type ThreatIntelVerdict struct {
 
 // ThreatIntelSample tracks uploaded artifacts to be processed by the orchestrator.
 type ThreatIntelSample struct {
-	ID          uuid.UUID         `json:"id"`
-	Hash        string            `json:"hash"`
-	Filename    string            `json:"filename"`
-	Size        int64             `json:"size"`
-	Status      string            `json:"status"`
-	ArtifactIDs []uuid.UUID       `json:"artifact_ids"`
-	TaskRunID   uuid.UUID         `json:"task_run_id"`
-	AgentID     uuid.UUID         `json:"agent_id"`
-	Metadata    map[string]string `json:"metadata"`
-	LastError   string            `json:"last_error"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID              uuid.UUID         `json:"id"`
+	Indicator       string            `json:"indicator"`
+	Hash            string            `json:"hash"`
+	Filename        string            `json:"filename"`
+	Size            int64             `json:"size"`
+	Status          string            `json:"status"`
+	ArtifactIDs     []uuid.UUID       `json:"artifact_ids"`
+	ArtifactDetails []ArtifactDetail  `json:"artifact_details"`
+	TaskRunID       uuid.UUID         `json:"task_run_id"`
+	AgentID         uuid.UUID         `json:"agent_id"`
+	Source          string            `json:"source"`
+	Classification  string            `json:"classification"`
+	JobStatuses     map[string]string `json:"job_statuses"`
+	Metadata        map[string]string `json:"metadata"`
+	LastError       string            `json:"last_error"`
+	LastErrorCode   string            `json:"last_error_code"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+}
+
+type ArtifactDetail struct {
+	ID             uuid.UUID `json:"id"`
+	SHA256         string    `json:"sha256"`
+	MIMEType       string    `json:"mime_type"`
+	QuarantinePath string    `json:"quarantine_path"`
 }
 
 const (

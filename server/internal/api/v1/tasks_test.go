@@ -51,6 +51,7 @@ func setupTestRouter(t *testing.T) (*gin.Engine, store.Store, *scheduler.Schedul
 	router := api.NewRouter(
 		cfg,
 		handler,
+		nil,
 		&v1.TemplateHandler{},
 		reportHandler,
 		nil, // catalog
@@ -67,9 +68,13 @@ func setupTestRouter(t *testing.T) (*gin.Engine, store.Store, *scheduler.Schedul
 		nil, // cert
 		nil, // security
 		nil, // ops
+		nil, // queue handler
+		nil, // collector handler
+		nil, // events handler
 		nil, // mfa store
 		nil, // metrics handler
 		nil, // task stream
+		nil, // queue stream
 		nil, // threat stream
 		nil, // anomaly stream
 	)
@@ -165,10 +170,12 @@ func TestTaskLifecycle(t *testing.T) {
 	listResp := performRequest(router, listReq)
 	require.Equal(t, http.StatusOK, listResp.Code)
 
-	var listBody []v1TaskResponse
+	var listBody struct {
+		Data []v1TaskResponse `json:"data"`
+	}
 	require.NoError(t, json.Unmarshal(listResp.Body.Bytes(), &listBody))
-	require.Len(t, listBody, 1)
-	require.Equal(t, "succeeded", listBody[0].Status)
+	require.Len(t, listBody.Data, 1)
+	require.Equal(t, "succeeded", listBody.Data[0].Status)
 
 	retryReq := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+taskID.String()+"/retry", nil)
 	retryReq.Header.Set("X-API-Key", "changeme")
@@ -179,6 +186,55 @@ func TestTaskLifecycle(t *testing.T) {
 	require.NoError(t, json.Unmarshal(retryResp.Body.Bytes(), &retryBody))
 	require.Equal(t, 1, retryBody.RetryCount)
 	require.Equal(t, "pending", retryBody.Status)
+}
+
+func TestTaskListEnvelope(t *testing.T) {
+	router, _, _ := setupTestRouter(t)
+	create := func(payload map[string]any) {
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "changeme")
+		resp := performRequest(router, req)
+		require.Equal(t, http.StatusCreated, resp.Code)
+	}
+	create(map[string]any{
+		"type":       "respond",
+		"profile":    "quick",
+		"priority":   2,
+		"payload":    map[string]any{"targets": []string{"/tmp"}},
+		"metadata":   map[string]string{"required_capabilities": "respond"},
+		"created_by": "tester",
+	})
+	create(map[string]any{
+		"type":       "baseline",
+		"profile":    "scan",
+		"priority":   3,
+		"payload":    map[string]any{"targets": []string{"/var"}},
+		"metadata":   map[string]string{"required_capabilities": "baseline"},
+		"created_by": "tester",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?status=pending&limit=1", nil)
+	req.Header.Set("X-API-Key", "changeme")
+	resp := performRequest(router, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var body struct {
+		Data     []v1TaskResponse `json:"data"`
+		PageSize int              `json:"page_size"`
+		Filters  struct {
+			Status []string `json:"status"`
+		} `json:"filters"`
+		Summary struct {
+			Total int `json:"total"`
+		} `json:"summary"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Equal(t, 1, body.PageSize)
+	require.NotEmpty(t, body.Data)
+	require.Contains(t, body.Filters.Status, "pending")
+	require.GreaterOrEqual(t, body.Summary.Total, 1)
 }
 
 func TestTaskCreateValidatesProfilePayload(t *testing.T) {
@@ -221,27 +277,32 @@ func TestTaskCreateValidatesProfilePayload(t *testing.T) {
 	router := api.NewRouter(
 		cfg,
 		handler,
-		&v1.TemplateHandler{},
+		nil,                   // task view handler
+		&v1.TemplateHandler{}, // template handler
 		&v1.ReportHandler{Store: st},
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
+		nil, // catalog
+		nil, // plugin
+		nil, // bas scenario
+		nil, // agent handler
+		nil, // audit handler
+		nil, // rbac handler
+		nil, // artifact handler
+		nil, // threat intel handler
+		nil, // behavior handler
+		nil, // compliance handler
+		nil, // playbook handler
+		nil, // cert handler
+		nil, // security handler
+		nil, // ops handler
+		nil, // queue handler
+		nil, // collector handler
+		nil, // events handler
+		nil, // mfa store
+		nil, // metrics handler
+		nil, // task stream
+		nil, // queue stream
+		nil, // threat stream
+		nil, // anomaly stream
 	)
 
 	makeRequest := func(payload map[string]any) *httptest.ResponseRecorder {
@@ -307,27 +368,32 @@ func TestCreateBASTaskRequiresApprovedScenario(t *testing.T) {
 	router := api.NewRouter(
 		cfg,
 		handler,
+		nil,
 		&v1.TemplateHandler{},
 		&v1.ReportHandler{Store: st},
-		nil,
-		nil,
+		nil, // catalog
+		nil, // plugin
 		&v1.BASScenarioHandler{Manager: basMgr},
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
+		nil, // agent handler
+		nil, // audit handler
+		nil, // rbac handler
+		nil, // artifact handler
+		nil, // threat intel handler
+		nil, // behavior handler
+		nil, // compliance handler
+		nil, // playbook handler
+		nil, // cert handler
+		nil, // security handler
+		nil, // ops handler
+		nil, // queue handler
+		nil, // collector handler
+		nil, // events handler
+		nil, // mfa store
+		nil, // metrics handler
+		nil, // task stream
+		nil, // queue stream
+		nil, // threat stream
+		nil, // anomaly stream
 	)
 
 	buildRequest := func() *http.Request {

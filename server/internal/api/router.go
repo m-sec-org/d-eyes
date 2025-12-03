@@ -14,6 +14,7 @@ import (
 func NewRouter(
 	cfg config.Config,
 	taskHandler *v1.TaskHandler,
+	taskViewHandler *v1.TaskViewHandler,
 	templateHandler *v1.TemplateHandler,
 	reportHandler *v1.ReportHandler,
 	catalogHandler *v1.TaskCatalogHandler,
@@ -30,9 +31,13 @@ func NewRouter(
 	certHandler *v1.CertHandler,
 	securityHandler *v1.SecurityHandler,
 	opsHandler *v1.OpsHandler,
+	queueHandler *v1.QueueHandler,
+	collectorHandler *v1.CollectorHandler,
+	eventsHandler *v1.EventsHandler,
 	mfaStore *security.MFAStore,
 	metricsHandler gin.HandlerFunc,
 	taskStreamHandler gin.HandlerFunc,
+	queueStreamHandler gin.HandlerFunc,
 	threatStreamHandler gin.HandlerFunc,
 	anomalyStreamHandler gin.HandlerFunc,
 ) *gin.Engine {
@@ -58,6 +63,9 @@ func NewRouter(
 
 	if taskHandler != nil {
 		taskHandler.RegisterRoutes(apiGroup)
+	}
+	if taskViewHandler != nil {
+		taskViewHandler.RegisterRoutes(apiGroup)
 	}
 	if templateHandler != nil {
 		templateHandler.RegisterRoutes(apiGroup)
@@ -107,8 +115,20 @@ func NewRouter(
 	if opsHandler != nil {
 		opsHandler.RegisterRoutes(apiGroup)
 	}
+	if queueHandler != nil {
+		queueHandler.RegisterRoutes(apiGroup)
+	}
+	if collectorHandler != nil {
+		collectorHandler.RegisterRoutes(apiGroup)
+	}
+	if eventsHandler != nil {
+		eventsHandler.RegisterRoutes(apiGroup)
+	}
 	if taskStreamHandler != nil {
 		apiGroup.GET("/tasks/stream", taskStreamHandler)
+	}
+	if queueStreamHandler != nil {
+		apiGroup.GET("/queues/stream", queueStreamHandler)
 	}
 	if threatStreamHandler != nil {
 		apiGroup.GET("/threat-intel/stream", threatStreamHandler)

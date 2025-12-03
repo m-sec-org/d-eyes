@@ -1,47 +1,36 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import useSWR from 'swr';
+import { message } from 'antd';
+import { listTaskViews, createTaskView, deleteTaskView } from '@/services/api/taskViews';
+import type { TaskView } from '@/services/types';
 
 export type TaskStatusFilter = 'all' | 'pending' | 'running' | 'failed' | 'succeeded';
 
 export interface TaskFiltersState {
   status: TaskStatusFilter;
   search: string;
-  savedView?: string;
+  pageSize: number;
+  viewId?: string;
 }
 
 const STORAGE_KEY = 'd-eyes:task-filters';
-const VIEWS_KEY = 'd-eyes:task-views';
-
-export interface SavedView {
-  id: string;
-  name: string;
-  filters: TaskFiltersState;
-}
 
 const DEFAULT_FILTERS: TaskFiltersState = {
   status: 'all',
   search: '',
+  pageSize: 50,
 };
 
 export function useTaskFilters() {
   const [filters, setFilters] = useState<TaskFiltersState>(() => {
     if (typeof window === 'undefined') return DEFAULT_FILTERS;
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_FILTERS;
     try {
-      return { ...DEFAULT_FILTERS, ...(JSON.parse(raw) as TaskFiltersState) };
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return DEFAULT_FILTERS;
+      const parsed = JSON.parse(raw) as TaskFiltersState;
+      return { ...DEFAULT_FILTERS, ...parsed };
     } catch {
       return DEFAULT_FILTERS;
-    }
-  });
-
-  const [views, setViews] = useState<SavedView[]>(() => {
-    if (typeof window === 'undefined') return [];
-    const raw = window.localStorage.getItem(VIEWS_KEY);
-    if (!raw) return [];
-    try {
-      return JSON.parse(raw) as SavedView[];
-    } catch {
-      return [];
     }
   });
 
@@ -50,60 +39,120 @@ export function useTaskFilters() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
   }, [filters]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(VIEWS_KEY, JSON.stringify(views));
-  }, [views]);
-
   const setStatus = useCallback((status: TaskStatusFilter) => {
-    setFilters((prev) => ({ ...prev, status }));
+    setFilters((prev) => ({ ...prev, status, viewId: undefined }));
   }, []);
 
   const setSearch = useCallback((search: string) => {
-    setFilters((prev) => ({ ...prev, search }));
+    setFilters((prev) => ({ ...prev, search, viewId: undefined }));
   }, []);
 
+  const setPageSize = useCallback((pageSize: number) => {
+    setFilters((prev) => ({ ...prev, pageSize }));
+  }, []);
+
+  const { data: viewData, isLoading: viewsLoading, mutate: refreshViews } = useSWR('task-views', listTaskViews, {
+    revalidateOnFocus: false,
+  });
+  const views = viewData?.views ?? [];
+
+  const [savingView, setSavingView] = useState(false);
+
   const saveCurrentView = useCallback(
-    (name: string) => {
-      const id = crypto.randomUUID();
-      const nextView: SavedView = { id, name, filters };
-      setViews((prev) => [...prev, nextView]);
-      setFilters((prev) => ({ ...prev, savedView: id }));
+    async (name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      setSavingView(true);
+      try {
+        const payload = {
+          name: trimmed,
+          filters: {
+            status: filters.status,
+            search: filters.search,
+          },
+          page_size: filters.pageSize,
+        };
+        const view = await createTaskView(payload);
+        await refreshViews();
+        setFilters((prev) => ({ ...prev, viewId: view.id }));
+        message.success('视图已保存');
+      } catch (error) {
+        console.error(error);
+        message.error('保存视图失败');
+      } finally {
+        setSavingView(false);
+      }
     },
-    [filters]
+    [filters, refreshViews]
   );
 
   const applyView = useCallback(
     (viewId: string) => {
-      const view = views.find((item) => item.id === viewId);
-      if (view) {
-        setFilters({ ...view.filters, savedView: viewId });
+      if (!viewId) {
+        setFilters((prev) => ({ ...prev, viewId: undefined }));
+        return;
       }
+      const view = views.find((item) => item.id === viewId);
+      if (!view) return;
+      const normalized = normalizeViewFilters(view, filters.pageSize);
+      setFilters({ ...normalized, viewId: view.id });
     },
-    [views]
+    [views, filters.pageSize]
   );
 
   const removeView = useCallback(
-    (viewId: string) => {
-      setViews((prev) => prev.filter((item) => item.id !== viewId));
-      setFilters((prev) => (prev.savedView === viewId ? { ...prev, savedView: undefined } : prev));
+    async (viewId: string) => {
+      try {
+        await deleteTaskView(viewId);
+        await refreshViews();
+        if (filters.viewId === viewId) {
+          setFilters((prev) => ({ ...prev, viewId: undefined }));
+        }
+        message.success('已删除视图');
+      } catch (error) {
+        console.error(error);
+        message.error('删除视图失败');
+      }
     },
-    []
+    [filters.viewId, refreshViews]
   );
-
-  const statusQuery = useMemo(() => {
-    if (filters.status === 'all') return undefined;
-    return filters.status;
-  }, [filters.status]);
 
   return {
     filters,
     views,
-    statusQuery,
+    viewsLoading,
+    savingView,
     setStatus,
     setSearch,
+    setPageSize,
     saveCurrentView,
     applyView,
     removeView,
   };
+}
+
+function normalizeViewFilters(view: TaskView, fallback: number): TaskFiltersState {
+  const raw = view.filters ?? {};
+  const status = extractStatus(raw.status);
+  const search = typeof raw.search === 'string' ? raw.search : '';
+  const pageSize = typeof raw.page_size === 'number' && raw.page_size > 0 ? raw.page_size : fallback;
+  return {
+    status,
+    search,
+    pageSize,
+  };
+}
+
+function extractStatus(value: unknown): TaskStatusFilter {
+  if (typeof value === 'string' && isTaskStatusFilter(value)) {
+    return value;
+  }
+  if (Array.isArray(value) && typeof value[0] === 'string' && isTaskStatusFilter(value[0])) {
+    return value[0];
+  }
+  return 'all';
+}
+
+function isTaskStatusFilter(value: string): value is TaskStatusFilter {
+  return ['all', 'pending', 'running', 'failed', 'succeeded'].includes(value);
 }

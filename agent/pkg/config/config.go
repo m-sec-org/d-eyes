@@ -157,6 +157,51 @@ type BASTaskConfig struct {
 	ScenarioDir    string
 }
 
+// CollectorConfig defines CLI/Probe shared system event collectors.
+type CollectorConfig struct {
+	Name      string
+	Kind      string
+	Disabled  bool
+	Providers []string
+	Probes    []string
+	Filters   CollectorFilterConfig
+	Sampling  CollectorSamplingConfig
+	Output    CollectorOutputConfig
+	Settings  map[string]any
+}
+
+// CollectorFilterConfig defines include/exclude selectors.
+type CollectorFilterConfig struct {
+	Include map[string][]string
+	Exclude map[string][]string
+}
+
+// CollectorSamplingConfig controls sampling behaviour.
+type CollectorSamplingConfig struct {
+	Rate              float64
+	Interval          time.Duration
+	Burst             int
+	MaxEventsPerBatch int
+}
+
+// CollectorOutputConfig defines output sink parameters.
+type CollectorOutputConfig struct {
+	Mode       string
+	Path       string
+	BufferSize int
+	BatchSize  int
+	Stream     CollectorStreamConfig
+}
+
+type CollectorStreamConfig struct {
+	URL           string
+	APIKey        string
+	AgentID       string
+	AgentName     string
+	MaxBatch      int
+	FlushInterval time.Duration
+}
+
 // Config contains global defaults for D-Eyes.
 type Config struct {
 	Output      OutputConfig
@@ -171,6 +216,7 @@ type Config struct {
 	Discovery   DiscoveryConfig
 	Tasks       TaskConfig
 	ThreatIntel threatintel.Config
+	Collectors  []CollectorConfig
 }
 
 // Default returns a Config populated with built-in defaults.
@@ -338,6 +384,7 @@ type fileConfig struct {
 	Discovery   *fileDiscoveryConfig   `yaml:"discovery"`
 	Tasks       *fileTaskConfig        `yaml:"tasks"`
 	ThreatIntel *fileThreatIntelConfig `yaml:"threat_intel"`
+	Collectors  []*fileCollectorConfig `yaml:"collectors"`
 }
 
 type fileOutputConfig struct {
@@ -479,6 +526,47 @@ type fileThreatIntelConfig struct {
 	OpenTIPBaseURL       *string        `yaml:"opentip_base_url"`
 	MetaDefenderAPIKey   *string        `yaml:"metadefender_api_key"`
 	MetaDefenderBaseURL  *string        `yaml:"metadefender_base_url"`
+}
+
+type fileCollectorConfig struct {
+	Name      *string                      `yaml:"name"`
+	Kind      *string                      `yaml:"kind"`
+	Disabled  *bool                        `yaml:"disabled"`
+	Providers []string                     `yaml:"providers"`
+	Probes    []string                     `yaml:"probes"`
+	Filters   *fileCollectorFilterConfig   `yaml:"filters"`
+	Sampling  *fileCollectorSamplingConfig `yaml:"sampling"`
+	Output    *fileCollectorOutputConfig   `yaml:"output"`
+	Settings  map[string]any               `yaml:"settings"`
+}
+
+type fileCollectorFilterConfig struct {
+	Include map[string][]string `yaml:"include"`
+	Exclude map[string][]string `yaml:"exclude"`
+}
+
+type fileCollectorSamplingConfig struct {
+	Rate              *float64       `yaml:"rate"`
+	Interval          *time.Duration `yaml:"interval"`
+	Burst             *int           `yaml:"burst"`
+	MaxEventsPerBatch *int           `yaml:"max_events_per_batch"`
+}
+
+type fileCollectorOutputConfig struct {
+	Mode       *string                    `yaml:"mode"`
+	Path       *string                    `yaml:"path"`
+	BufferSize *int                       `yaml:"buffer_size"`
+	BatchSize  *int                       `yaml:"batch_size"`
+	Stream     *fileCollectorStreamConfig `yaml:"stream"`
+}
+
+type fileCollectorStreamConfig struct {
+	URL           *string        `yaml:"url"`
+	APIKey        *string        `yaml:"api_key"`
+	AgentID       *string        `yaml:"agent_id"`
+	AgentName     *string        `yaml:"agent_name"`
+	MaxBatch      *int           `yaml:"max_batch"`
+	FlushInterval *time.Duration `yaml:"flush_interval"`
 }
 
 func mergeConfig(base Config, overrides fileConfig) Config {
@@ -773,5 +861,116 @@ func mergeConfig(base Config, overrides fileConfig) Config {
 			base.ThreatIntel.MetaDefenderBaseURL = strings.TrimRight(strings.TrimSpace(*overrides.ThreatIntel.MetaDefenderBaseURL), "/")
 		}
 	}
+	if len(overrides.Collectors) > 0 {
+		base.Collectors = normalizeCollectorConfigs(overrides.Collectors)
+	}
 	return base
+}
+
+func normalizeCollectorConfigs(overrides []*fileCollectorConfig) []CollectorConfig {
+	result := make([]CollectorConfig, 0, len(overrides))
+	for _, item := range overrides {
+		if item == nil {
+			continue
+		}
+		cfg := CollectorConfig{
+			Name:      stringValue(item.Name),
+			Kind:      stringValue(item.Kind),
+			Disabled:  boolValue(item.Disabled),
+			Providers: append([]string(nil), item.Providers...),
+			Probes:    append([]string(nil), item.Probes...),
+			Settings:  cloneAnyMap(item.Settings),
+		}
+		if item.Filters != nil {
+			cfg.Filters = CollectorFilterConfig{
+				Include: cloneStringSliceMap(item.Filters.Include),
+				Exclude: cloneStringSliceMap(item.Filters.Exclude),
+			}
+		}
+		if item.Sampling != nil {
+			cfg.Sampling = CollectorSamplingConfig{
+				Rate:              floatValue(item.Sampling.Rate),
+				Interval:          durationValue(item.Sampling.Interval),
+				Burst:             intValue(item.Sampling.Burst),
+				MaxEventsPerBatch: intValue(item.Sampling.MaxEventsPerBatch),
+			}
+		}
+		if item.Output != nil {
+			cfg.Output = CollectorOutputConfig{
+				Mode:       stringValue(item.Output.Mode),
+				Path:       stringValue(item.Output.Path),
+				BufferSize: intValue(item.Output.BufferSize),
+				BatchSize:  intValue(item.Output.BatchSize),
+			}
+			if item.Output.Stream != nil {
+				cfg.Output.Stream = CollectorStreamConfig{
+					URL:           stringValue(item.Output.Stream.URL),
+					APIKey:        stringValue(item.Output.Stream.APIKey),
+					AgentID:       stringValue(item.Output.Stream.AgentID),
+					AgentName:     stringValue(item.Output.Stream.AgentName),
+					MaxBatch:      intValue(item.Output.Stream.MaxBatch),
+					FlushInterval: durationValue(item.Output.Stream.FlushInterval),
+				}
+			}
+		}
+		result = append(result, cfg)
+	}
+	return result
+}
+
+func stringValue(ptr *string) string {
+	if ptr == nil {
+		return ""
+	}
+	return *ptr
+}
+
+func boolValue(ptr *bool) bool {
+	if ptr == nil {
+		return false
+	}
+	return *ptr
+}
+
+func intValue(ptr *int) int {
+	if ptr == nil {
+		return 0
+	}
+	return *ptr
+}
+
+func floatValue(ptr *float64) float64 {
+	if ptr == nil {
+		return 0
+	}
+	return *ptr
+}
+
+func durationValue(ptr *time.Duration) time.Duration {
+	if ptr == nil {
+		return 0
+	}
+	return *ptr
+}
+
+func cloneStringSliceMap(input map[string][]string) map[string][]string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(input))
+	for key, vals := range input {
+		out[key] = append([]string(nil), vals...)
+	}
+	return out
+}
+
+func cloneAnyMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(input))
+	for k, v := range input {
+		out[k] = v
+	}
+	return out
 }

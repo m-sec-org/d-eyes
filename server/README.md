@@ -105,6 +105,11 @@ tasks:
   max_retries: 3         # 任务最大重试次数
   lease_timeout: 30m     # 任务租约超时时间
   cleanup_interval: 24h  # 历史数据清理间隔
+
+# Collector 控制面配置
+collectors:
+  allowed_providers: ["Kernel", "Security"]
+  allowed_probes: ["diag-ebpf", "diag-sysmon"]  # 未列出的 provider/probe 会被 REST API 拒绝
 ```
 
 ## API 使用指南
@@ -137,6 +142,55 @@ curl -X POST -H 'X-API-Key: changeme' http://127.0.0.1:8080/api/v1/tasks/<TASK_I
 
 # 查询在线 Agent
 curl -H 'X-API-Key: changeme' http://127.0.0.1:8080/api/v1/agents?status=online
+```
+
+### Collector 控制面示例
+
+Server 暴露 `/api/v1/collector/*` 用于统一的采集配置下发与状态汇报，典型操作如下：
+
+```bash
+# 由运维/控制台更新指定 Agent 的采集配置（自动生成版本号）
+curl -X POST http://127.0.0.1:8080/api/v1/collector/configs \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: changeme' \
+  -H 'X-User: ops-admin' \
+  -H 'X-User-Role: ops' \
+  -d '{
+        "agent_id": "b1d9ab8a-8134-45b3-83c7-592bb38d364f",
+        "config": {
+          "collectors": [
+            {"name": "diag-ebpf", "kind": "ebpf", "sampling": {"rate": 0.05}}
+          ]
+        }
+      }'
+
+# Agent 通过轮询拉取最新配置
+curl -H 'X-API-Key: changeme' \
+  http://127.0.0.1:8080/api/v1/collector/configs/b1d9ab8a-8134-45b3-83c7-592bb38d364f
+
+# Agent 上报运行状态（附带 tenant 维度、队列/丢包等指标）
+curl -X POST http://127.0.0.1:8080/api/v1/collector/status \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: changeme' \
+  -d '{
+        "agent_id": "b1d9ab8a-8134-45b3-83c7-592bb38d364f",
+        "agent_name": "agent-edge-01",
+        "state": "running",
+        "metadata": {"tenant": "acme-prod"},
+        "stats": {"drop_rate": 0.03, "latency_ms": 120}
+      }'
+
+# 运维或 SOC 控制台可通过 SSE 订阅指定租户/状态的流式告警
+curl -N -H 'X-API-Key: changeme' \
+  "http://127.0.0.1:8080/api/v1/collector/status/stream?tenant=acme-prod&crit_drop_threshold=0.15"
+
+> Prometheus 指标：`d_eyes_collector_config_updates_total` 用于统计配置下发次数，`d_eyes_collector_status_alerts_total{tenant,level}` 用于 Grafana 告警面板展示多租户 Collector 运行告警。
+
+> 默认 RBAC：`sre` 角色具备 `collector.config.*` 与 `collector.status.*` 权限；`operator`/`auditor` 仅能读取状态，确保多租户控制面隔离。
+
+更多 Grafana/Prometheus 面板建议见 `docs/collector-observability.md`。
+
+> 说明：Agent 在 Remote 模式下会自动将采集到的事件通过 `/api/v1/events/ingest` 上传，CLI/Probe 可通过 `collectors[].output.mode` 选择 stdout/file/stream 输出，确保关键事件可落盘或远程回传。
 ```
 
 ### gRPC 接口

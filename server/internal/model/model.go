@@ -88,6 +88,18 @@ type TaskResult struct {
 	CreatedAt    time.Time         `json:"createdAt"`
 }
 
+type TaskView struct {
+	ID        uuid.UUID              `json:"id"`
+	Name      string                 `json:"name"`
+	Owner     string                 `json:"owner"`
+	Filters   map[string]interface{} `json:"filters"`
+	PageSize  int                    `json:"pageSize"`
+	IsDefault bool                   `json:"isDefault"`
+	CreatedAt time.Time              `json:"createdAt"`
+	UpdatedAt time.Time              `json:"updatedAt"`
+	DeletedAt *time.Time             `json:"deletedAt,omitempty"`
+}
+
 const (
 	AgentStatusOnline  AgentStatus = "online"
 	AgentStatusOffline AgentStatus = "offline"

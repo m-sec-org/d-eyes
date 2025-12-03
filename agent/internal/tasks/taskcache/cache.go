@@ -25,7 +25,13 @@ var (
 )
 
 func ensureRoot() string {
+	if strings.TrimSpace(cacheRoot) != "" {
+		return cacheRoot
+	}
 	rootOnce.Do(func() {
+		if strings.TrimSpace(cacheRoot) != "" {
+			return
+		}
 		home, err := os.UserHomeDir()
 		if err != nil || strings.TrimSpace(home) == "" {
 			cacheRoot = filepath.Join(os.TempDir(), "d-eyes", "cache", "tasks")

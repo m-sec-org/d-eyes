@@ -41,6 +41,9 @@ type Event struct {
 	Status         string            `json:"status,omitempty"`
 	Classification string            `json:"classification,omitempty"`
 	Confidence     string            `json:"confidence,omitempty"`
+	ArtifactIDs    []string          `json:"artifact_ids,omitempty"`
+	ArtifactTypes  []string          `json:"artifact_types,omitempty"`
+	ErrorCode      string            `json:"error_code,omitempty"`
 	Message        string            `json:"message,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
 	Timestamp      time.Time         `json:"timestamp"`

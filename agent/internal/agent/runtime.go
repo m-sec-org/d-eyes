@@ -45,6 +45,7 @@ func NewRuntime(opts ...RuntimeOption) *Runtime {
 	}
 	app := internal.App
 	ensureRemoteCommand(app)
+	ensureCollectCommand(app)
 	return &Runtime{App: app, runnerFactory: config.runnerFactory}
 }
 

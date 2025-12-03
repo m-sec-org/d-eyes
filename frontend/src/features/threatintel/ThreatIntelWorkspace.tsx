@@ -3,12 +3,12 @@ import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { Button, Checkbox, Input, Select, Space, Switch, Tag, message } from 'antd';
+import { Alert, Button, Checkbox, Input, Select, Space, Switch, Tag, message, Segmented } from 'antd';
 import type { CheckboxValueType } from 'antd/es/checkbox/Group';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { lookupIndicator, fetchIndicator, fetchSample } from '@/services/api/threatIntel';
 import { listAuditEvents } from '@/services/api/audit';
-import type { ThreatIntelVerdict, ThreatIntelLookupResponse } from '@/services/types';
+import type { ThreatIntelVerdict, ThreatIntelLookupResponse, ThreatIntelSample } from '@/services/types';
 import { useThreatIntelStream } from '@/hooks/useThreatIntelStream';
 import { useThreatIntelEventStore } from '@/store/threatIntelEvents';
 
@@ -35,6 +35,9 @@ export function ThreatIntelWorkspace() {
   const [activeIndicator, setActiveIndicator] = useState<string | null>(null);
   const [lookupInfo, setLookupInfo] = useState<ThreatIntelLookupResponse | null>(null);
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
+  const [artifactSort, setArtifactSort] = useState<'time' | 'name'>('time');
+  const [jobFilter, setJobFilter] = useState('');
+  const [jobSort, setJobSort] = useState<'status' | 'time'>('status');
   const [messageApi, contextHolder] = message.useMessage();
 
   const events = useThreatIntelEventStore((state) => state.events);
@@ -148,6 +151,16 @@ export function ThreatIntelWorkspace() {
           </Space>
         }
       />
+
+      {streamStatus !== 'connected' && (
+        <Alert
+          showIcon
+          type={streamStatus === 'disconnected' ? 'error' : 'warning'}
+          message={`事件流连接：${streamStatus}`}
+          description="实时事件暂不可用时，可手动刷新详情或稍后重试。"
+          style={{ marginBottom: '1rem' }}
+        />
+      )}
 
       <section className="ti-card">
         <header>
@@ -282,40 +295,96 @@ export function ThreatIntelWorkspace() {
             <div className="ti-sample-detail">
               <div className="ti-meta-row">
                 <span>ID: {sampleDetail.id}</span>
-                <span>状态: {sampleDetail.status}</span>
+                <span>Indicator: {sampleDetail.indicator ?? '—'}</span>
                 {sampleDetail.hash && <span>Hash: {sampleDetail.hash}</span>}
+              </div>
+              <div className="ti-meta-row">
+                <span>状态: {sampleDetail.status}</span>
+                <span>Verdict: {sampleDetail.classification ?? '未知'}</span>
+                <span>来源: {sampleDetail.source ?? '—'}</span>
               </div>
               <div className="ti-meta-row">
                 <span>文件名: {sampleDetail.filename ?? '-'}</span>
                 <span>大小: {sampleDetail.size ?? 0} bytes</span>
               </div>
-              <table className="ti-audit-table" style={{ marginTop: '0.75rem' }}>
-                <thead>
-                  <tr>
-                    <th>来源</th>
-                    <th>状态</th>
-                    <th>尝试</th>
-                    <th>最近更新时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sampleDetail.jobs.map((job) => (
-                    <tr key={job.id}>
-                      <td>{job.source}</td>
-                      <td>{job.status}</td>
-                      <td>{job.attempt ?? 0}</td>
-                      <td>{dayjs(job.updated_at).format('MM-DD HH:mm')}</td>
-                    </tr>
+              {sampleDetail.job_statuses && (
+                <div className="ti-meta-row">
+                  {Object.entries(sampleDetail.job_statuses).map(([src, status]) => (
+                    <Tag key={src} color={statusColor(status)}>
+                      {src}:{status}
+                    </Tag>
                   ))}
-                  {sampleDetail.jobs.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="muted">
-                        尚无扫描任务
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                </div>
+              )}
+              {sampleDetail.artifact_details && sampleDetail.artifact_details.length > 0 ? (
+                <>
+                  <div className="ti-artifact-toolbar">
+                    <span>排序：</span>
+                    <Segmented
+                      size="small"
+                      options={[
+                        { label: '最近', value: 'time' },
+                        { label: '名称', value: 'name' },
+                      ]}
+                      value={artifactSort}
+                      onChange={(value) => setArtifactSort(value as 'time' | 'name')}
+                    />
+                  </div>
+                  <div className="ti-artifact-grid">
+                    {sortArtifacts(sampleDetail.artifact_details, artifactSort).map((artifact) => (
+                      <div key={artifact.id} className="ti-artifact-card">
+                        <strong>{artifact.mime_type ?? 'Artifact'}</strong>
+                        <div className="ti-meta-row">SHA256: {artifact.sha256 ?? '未知'}</div>
+                        {artifact.quarantine_path && <div className="ti-meta-row">路径: {artifact.quarantine_path}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="ti-meta-row">
+                  附件: {sampleDetail.artifact_ids?.length ? sampleDetail.artifact_ids.join(', ') : '—'}
+                </div>
+              )}
+              <div className="ti-job-toolbar">
+                <Input
+                  allowClear
+                  size="small"
+                  placeholder="按来源过滤"
+                  value={jobFilter}
+                  onChange={(event) => setJobFilter(event.target.value)}
+                  style={{ width: 200 }}
+                />
+                <Segmented
+                  size="small"
+                  options={[
+                    { label: '按状态', value: 'status' },
+                    { label: '按时间', value: 'time' },
+                  ]}
+                  value={jobSort}
+                  onChange={(value) => setJobSort(value as 'status' | 'time')}
+                />
+              </div>
+              <div className="ti-job-grid">
+                {filterJobs(sampleDetail.jobs, jobFilter, jobSort).map((job) => (
+                  <div key={job.id} className="ti-job-card">
+                    <div className="ti-job-card__header">
+                      <strong>{job.source}</strong>
+                      <Tag color={statusColor(job.status)}>{job.status}</Tag>
+                    </div>
+                    <div className="ti-meta-row">尝试: {job.attempt ?? 0}</div>
+                    <div className="ti-meta-row">更新时间: {dayjs(job.updated_at).format('MM-DD HH:mm')}</div>
+                    {job.error_code && (
+                      <Tag color="red">
+                        <a href={getErrorDocLink(job.error_code)} target="_blank" rel="noreferrer">
+                          {job.error_code}
+                        </a>
+                      </Tag>
+                    )}
+                    {job.error && <div className="ti-meta-row">错误: {job.error}</div>}
+                  </div>
+                ))}
+                {sampleDetail.jobs.length === 0 && <div className="muted">尚无扫描任务</div>}
+              </div>
             </div>
           )}
         </section>
@@ -339,6 +408,7 @@ export function ThreatIntelWorkspace() {
                 {event.sample_id && <span>样本: {event.sample_id}</span>}
                 {event.source && <span>来源: {event.source}</span>}
                 {event.status && <span>状态: {event.status}</span>}
+                {event.artifact_ids && event.artifact_ids.length > 0 && <span>附件: {event.artifact_ids.join(',')}</span>}
                 {event.message && <span>信息: {event.message}</span>}
               </div>
             ))}
@@ -408,4 +478,37 @@ function extractApiError(error: unknown): string | null {
     }
   }
   return null;
+}
+export function statusColor(status?: string) {
+  if (!status) return 'default';
+  const normalized = status.toLowerCase();
+  if (normalized === 'succeeded' || normalized === 'completed') return 'green';
+  if (normalized === 'failed') return 'red';
+  if (normalized === 'running' || normalized === 'scanning') return 'blue';
+  if (normalized === 'pending') return 'default';
+  return 'blue';
+}
+
+export function sortArtifacts(
+  artifacts: { id: string; mime_type?: string | null; sha256?: string | null }[],
+  sort: 'time' | 'name'
+) {
+  if (sort === 'name') {
+    return [...artifacts].sort((a, b) => (a.mime_type ?? '').localeCompare(b.mime_type ?? ''));
+  }
+  return artifacts;
+}
+
+export function filterJobs(jobs: ThreatIntelSample['jobs'], filter: string, sort: 'status' | 'time') {
+  const list = jobs.filter((job) => job.source.toLowerCase().includes(filter.toLowerCase()));
+  if (sort === 'status') {
+    const order = ['running', 'pending', 'succeeded', 'failed'];
+    return list.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status));
+  }
+  return list.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+}
+
+export function getErrorDocLink(code?: string) {
+  if (!code) return '#';
+  return `https://docs.example.com/threatintel/errors#${code.toLowerCase()}`;
 }

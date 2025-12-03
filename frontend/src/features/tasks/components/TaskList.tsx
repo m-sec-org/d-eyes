@@ -1,15 +1,21 @@
+import { useEffect, useMemo, useState } from 'react';
 import type { Task } from '@/services/types';
 import dayjs from 'dayjs';
-import { Card, Button, Table, Tag, Space } from 'antd';
+import { Card, Button, Table, Tag, Space, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 
 interface TaskListProps {
   tasks: Task[];
   loading?: boolean;
+  loadingMore?: boolean;
+  canLoadMore?: boolean;
   onRefresh: () => void;
   onSelect: (task: Task) => void;
   onRetry: (task: Task) => void;
   onCancel: (task: Task) => void;
+  onBulkRetry: (tasks: Task[]) => Promise<void> | void;
+  onBulkCancel: (tasks: Task[]) => Promise<void> | void;
+  onLoadMore: () => void;
 }
 
 const statusColor: Record<string, string> = {
@@ -20,7 +26,41 @@ const statusColor: Record<string, string> = {
   succeeded: 'success',
 };
 
-export function TaskList({ tasks, loading = false, onRefresh, onSelect, onRetry, onCancel }: TaskListProps) {
+export function TaskList({
+  tasks,
+  loading = false,
+  loadingMore = false,
+  canLoadMore = false,
+  onRefresh,
+  onSelect,
+  onRetry,
+  onCancel,
+  onBulkRetry,
+  onBulkCancel,
+  onLoadMore,
+}: TaskListProps) {
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const selectedTasks = useMemo(
+    () => tasks.filter((task) => selectedRowKeys.includes(task.id)),
+    [tasks, selectedRowKeys]
+  );
+
+  useEffect(() => {
+    setSelectedRowKeys((prev) => prev.filter((key) => tasks.some((task) => task.id === key)));
+  }, [tasks]);
+
+  const handleBulkRetryClick = async () => {
+    if (selectedTasks.length === 0) return;
+    await onBulkRetry(selectedTasks);
+    setSelectedRowKeys([]);
+  };
+
+  const handleBulkCancelClick = async () => {
+    if (selectedTasks.length === 0) return;
+    await onBulkCancel(selectedTasks);
+    setSelectedRowKeys([]);
+  };
+
   const columns: ColumnsType<Task> = [
     {
       title: 'ID',
@@ -81,6 +121,20 @@ export function TaskList({ tasks, loading = false, onRefresh, onSelect, onRetry,
         </Space>
       }
     >
+      {selectedTasks.length > 0 && (
+        <Space style={{ marginBottom: 12 }} wrap>
+          <Typography.Text>已选 {selectedTasks.length} 项</Typography.Text>
+          <Button size="small" onClick={handleBulkRetryClick}>
+            批量重试
+          </Button>
+          <Button size="small" danger onClick={handleBulkCancelClick}>
+            批量取消
+          </Button>
+          <Button size="small" type="link" onClick={() => setSelectedRowKeys([])}>
+            清除选择
+          </Button>
+        </Space>
+      )}
       <Table
         rowKey="id"
         columns={columns}
@@ -88,10 +142,24 @@ export function TaskList({ tasks, loading = false, onRefresh, onSelect, onRetry,
         loading={loading}
         aria-label="任务列表表格"
         aria-busy={loading}
-        pagination={{ pageSize: 10, showSizeChanger: false }}
+        pagination={false}
         locale={{ emptyText: '暂无任务' }}
         scroll={{ x: true }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: (keys) => setSelectedRowKeys(keys),
+          preserveSelectedRowKeys: true,
+        }}
       />
+      <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
+        {canLoadMore ? (
+          <Button onClick={onLoadMore} loading={loadingMore} type="primary" ghost>
+            加载更多
+          </Button>
+        ) : (
+          <Typography.Text type="secondary">没有更多任务</Typography.Text>
+        )}
+      </div>
     </Card>
   );
 }
