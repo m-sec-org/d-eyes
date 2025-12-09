@@ -14,13 +14,51 @@ func TestFromAppConfigConvertsCollectors(t *testing.T) {
 				Name:      "etw",
 				Kind:      "etw",
 				Providers: []string{"Kernel"},
+				Parser: config.CollectorParserConfig{
+					Enabled:  []string{"security"},
+					Disabled: []string{"legacy"},
+					Plugins: []config.CollectorParserPluginConfig{
+						{
+							Name:    "defender-ext",
+							Path:    "plugins/defender.so",
+							Enabled: true,
+							Config:  map[string]any{"severity": "high"},
+						},
+					},
+					Settings: map[string]any{"max_stack": 8},
+				},
 				Filters: config.CollectorFilterConfig{
 					Include: map[string][]string{"event_type": {"process"}},
+					Rules: []config.CollectorFilterRuleConfig{
+						{
+							Name:   "drop-debug",
+							Action: "drop",
+							Conditions: []config.CollectorFilterConditionConfig{
+								{Field: "level", Operator: "equals", Value: "debug"},
+							},
+							Threshold: config.CollectorFilterThresholdConfig{
+								Count:  10,
+								Window: 5 * time.Second,
+							},
+							Enabled: true,
+						},
+					},
 				},
 				Sampling: config.CollectorSamplingConfig{
 					Rate:     0.5,
 					Interval: time.Second,
 					Burst:    5,
+					Strategies: []config.CollectorSamplingStrategyConfig{
+						{
+							Name:       "high-priority",
+							EventTypes: []string{"process"},
+							Match:      map[string][]string{"level": {"5"}},
+							Rate:       0.2,
+							Burst:      1,
+							Window:     3 * time.Second,
+							Enabled:    true,
+						},
+					},
 				},
 				Output: config.CollectorOutputConfig{
 					Mode:       "file",
@@ -65,7 +103,16 @@ func TestFromAppConfigConvertsCollectors(t *testing.T) {
 	if got.Filters.Include["event_type"][0] != "process" {
 		t.Fatalf("filters mismatch: %+v", got.Filters)
 	}
+	if len(got.Filters.Rules) != 1 || got.Filters.Rules[0].Name != "drop-debug" {
+		t.Fatalf("filter rules mismatch: %+v", got.Filters.Rules)
+	}
+	if len(got.Parser.Plugins) != 1 || !got.Parser.Plugins[0].Enabled {
+		t.Fatalf("parser plugins mismatch: %+v", got.Parser)
+	}
 	if got.Settings["session"] != "default" {
 		t.Fatalf("settings mismatch: %+v", got.Settings)
+	}
+	if len(got.Sampling.Rules) != 1 || got.Sampling.Rules[0].Name != "high-priority" {
+		t.Fatalf("sampling rules mismatch: %+v", got.Sampling.Rules)
 	}
 }

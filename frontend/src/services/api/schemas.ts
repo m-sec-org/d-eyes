@@ -75,6 +75,67 @@ export const TaskEventSchema = z.object({
   updated_at: z.string().datetime(),
 });
 
+export const SystemEventRecordSchema = z.object({
+  id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  collector: z.string().optional().nullable(),
+  collector_kind: z.string().optional().nullable(),
+  event_type: z.string(),
+  source: z.string().optional().nullable(),
+  priority: z.string().optional().nullable(),
+  storage_tier: z.string().optional().nullable(),
+  timestamp: z.string().datetime(),
+  sequence: z.number().nonnegative(),
+  payload: z.any().optional(),
+  metadata: z.record(z.string()).optional(),
+  tags: z.record(z.string()).optional(),
+  raw: z.any().optional(),
+  received_at: z.string().datetime(),
+});
+
+export const SystemEventCursorSchema = z.object({
+  received_at: z.string().datetime(),
+  id: z.string().uuid(),
+});
+
+export const SystemEventListResponseSchema = z.object({
+  items: z.array(SystemEventRecordSchema),
+  next_cursor: SystemEventCursorSchema.optional().nullable(),
+});
+
+export const SystemEventAggregatesSchema = z.object({
+  total: z.number(),
+  by_event_type: z.record(z.number()).optional(),
+  by_source: z.record(z.number()).optional(),
+});
+
+export const DetectionStreamEventSchema = TaskEventSchema.extend({
+  event: z.string(),
+  metadata: z.record(z.string()).optional(),
+});
+
+export const CollectorConfigSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: z.string(),
+  region: z.string().optional().nullable(),
+  priority: z.string().optional().nullable(),
+  storage_tier: z.string(),
+  sampling_rate: z.number().min(0).max(1),
+  lag_threshold: z.number().nonnegative().optional().default(0),
+  enabled: z.boolean().default(true),
+  status: z.string().optional().nullable(),
+  last_heartbeat: z.string().datetime().optional().nullable(),
+  description: z.string().optional().nullable(),
+  tags: z.array(z.string()).optional(),
+});
+
+const TrendMetricSchema = z.object({
+  delta: z.number(),
+  trend: z.enum(['up', 'down', 'flat']).optional(),
+});
+
 export const ReportSummarySchema = z.object({
   items: z.array(
     z.object({
@@ -90,6 +151,13 @@ export const ReportSummarySchema = z.object({
   ),
   totals: z.record(z.number()),
   status: z.record(z.number()),
+  trends: z
+    .object({
+      period: z.string().optional(),
+      totals: z.record(TrendMetricSchema).optional(),
+      status: z.record(TrendMetricSchema).optional(),
+    })
+    .optional(),
 });
 
 export const TemplateSchema = z.object({

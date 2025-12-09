@@ -96,3 +96,26 @@ CLI 会将 `collector` 状态与错误写入 `/api/v1/collector/status`，可在
 | `ETW enable provider ... access denied` | 未以管理员运行或缺少权限 | 以管理员启动 CLI/服务或授予 `SeSystemProfilePrivilege` |
 
 完成以上准备后，即可结合 Server 的 `/api/v1/collector/configs`、`/status/stream` 控制面，实现跨平台 Collector 的统一部署与运维。
+
+## eBPF Probe Catalog & Build
+
+D-Eyes now ships a modular eBPF probe catalog (`agent/internal/collector/ebpf/probes.go`). 要查看可用 Probe 或构建 CO-RE 对象，可执行：
+
+> 网络/文件类 Probe 现已携带 IPv4/IPv6/Unix Socket 端点与路径等细粒度 payload，Collector 心跳还会上报编译日志、对象版本号以及探针附着状态，便于 Server 实时观测与回滚。
+
+```bash
+# 查看 catalog（含分类/描述/默认项）
+sed -n '1,200p' agent/internal/collector/ebpf/probes.go
+
+# 构建 BPF 对象（需要 clang + kernel headers）
+CLANG=clang \
+MODULES=process,network \
+KERNEL_INCLUDE=/usr/src/linux-headers-$(uname -r)/include \
+BTF_PATH=/sys/kernel/btf/vmlinux \
+bash scripts/build-ebpf.sh
+
+# CI 快速校验（dry-run，不依赖 clang）
+scripts/verify-ebpf-build.sh
+```
+
+脚本内部调用 `go run ./agent/internal/collector/ebpf/cmd/bpfbuild`，可通过 `OUT`/`SRC` 环境变量指定输出位置，或使用 `MODULES=category:<name>` 打包特定分类的 Probe。生成的 `programs/*.bpf.o` 将被 `ebpfCollector` 自动加载；若需要自定义，请将新对象与 catalog 中的 Program 字段保持一致，并更新配置 `collectors[].probes`。

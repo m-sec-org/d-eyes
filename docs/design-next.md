@@ -198,6 +198,21 @@ D-Eyes是一款综合性安全检测与响应工具，由M-SEC社区驱动，提
 
 3. **插件扩展**
    - 热插拔插件机制
+
+## 4. UI 设计指南（align-ui-workspaces）
+
+1. **自适应外壳与 Token**
+   - Sidebar ≤1280px 自动折叠为 icon-only，主内容 padding 固定为 `clamp(16px, 4vw, 32px)`。
+   - 所有按钮/输入/标签采用统一的 `action.*`、`field.*` tokens；危险动作需展示 `message.useMessage()` + `Modal.confirm` 组合并禁用浏览器 `alert`。
+2. **固定高度与 Bulk 工具栏**
+   - Compliance/BAS/行为异常详情使用固定高度 + Affix 组合，Remediation 表单需显示最近两条整改日志。
+   - 表格选择后必须渲染 `AppBulkToolbar`，摘要内说明已选数量及允许的批量操作。
+3. **SSE/实时反馈**
+   - QueueMonitor、PluginMarketplace、EventsWorkspace 等实时视图都要在 Card Extra 区或 Alert 中展示 `SSE: ${status}`，断线时提供重连按钮及降级描述。
+   - 直播列表（事件/审计/任务）默认虚拟滚动或 stick list，最大渲染 200 条以防性能退化。
+4. **图谱与可视化**
+   - 行为异常中心的“关联图谱”优先使用 `@ant-design/plots`（交互式力导）或 `vis-network`，节点色阶与风险分布相同。
+   - 事件工作台需要 Top Sources/Types、Heatmap 以及 Respond 快捷操作卡，以 `Tabs` 和 `Statistic` 组合呈现。
    - 插件自动更新
    - 插件沙箱隔离
 

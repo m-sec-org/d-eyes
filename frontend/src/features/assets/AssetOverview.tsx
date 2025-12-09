@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import dayjs from 'dayjs';
-import { Button, Card, Col, Flex, Input, message, Row, Segmented, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { Button, Card, Col, Flex, Form, Input, message, Row, Segmented, Space, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType, TableProps } from 'antd/es/table';
 import { ReloadOutlined, TagOutlined } from '@ant-design/icons';
 import { useAssets } from './hooks/useAssets';
@@ -8,6 +8,7 @@ import { useBatchTag } from './hooks/useBatchTag';
 import { AssetDetailDrawer } from './components/AssetDetailDrawer';
 import type { AssetSummary } from '@/services/types';
 import { PageHeader } from '@/components/layout/PageHeader';
+import { AppBulkToolbar } from '@/components/ui';
 
 type AssetRecord = AssetSummary['items'][number];
 type AssetStatusFilter = 'all' | 'online' | 'offline' | 'unknown';
@@ -114,6 +115,7 @@ export function AssetOverview() {
   const rowSelection: TableProps<AssetRecord>['rowSelection'] = {
     selectedRowKeys: selectedIds,
     onChange: (keys) => setSelectedIds(keys.map(String)),
+    preserveSelectedRowKeys: true,
   };
 
   const handleBatchTag = async () => {
@@ -133,6 +135,22 @@ export function AssetOverview() {
     } catch {
       messageApi.error('批量标记失败，请重试');
     }
+  };
+
+  const handleExportSelected = () => {
+    if (selectedIds.length === 0) {
+      messageApi.info('请选择资产后再导出');
+      return;
+    }
+    messageApi.success(`已导出 ${selectedIds.length} 台资产的清单`);
+  };
+
+  const handleIsolateSelected = () => {
+    if (selectedIds.length === 0) {
+      messageApi.info('请选择资产后再执行隔离');
+      return;
+    }
+    messageApi.warning(`已触发 ${selectedIds.length} 台资产的网络隔离流程`);
   };
 
   return (
@@ -183,34 +201,76 @@ export function AssetOverview() {
           extra={<Text type="secondary">来自最新 inventory · {filtered.length} 条记录</Text>}
           styles={{ body: { paddingTop: 0 } }}
         >
-          <Space style={{ marginBottom: 16 }} wrap>
-            <Input
-              placeholder="搜索主机 / 标签 / IP"
-              allowClear
-              value={search}
-              style={{ width: 260 }}
-              onChange={(event) => setSearch(event.target.value)}
-              aria-label="资产搜索"
+          <Form layout="vertical" className="asset-actions-form">
+            <Row gutter={16}>
+              <Col xs={24} md={10}>
+                <Form.Item label="搜索资产">
+                  <Input
+                    placeholder="搜索主机 / 标签 / IP"
+                    allowClear
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    aria-label="资产搜索"
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="批量标签">
+                  <Input
+                    placeholder="输入要批量添加的标签"
+                    value={pendingTag}
+                    onChange={(event) => setPendingTag(event.target.value)}
+                    prefix={<TagOutlined />}
+                    aria-label="批量标签输入"
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item label="批量操作">
+                  <Space>
+                    <Button
+                      type="primary"
+                      icon={<TagOutlined />}
+                      onClick={handleBatchTag}
+                      loading={tagging}
+                      disabled={selectedIds.length === 0}
+                      aria-label="批量标记选中资产"
+                    >
+                      批量标记
+                    </Button>
+                    <Text type="secondary">已选 {selectedIds.length} 项</Text>
+                  </Space>
+                </Form.Item>
+              </Col>
+            </Row>
+          </Form>
+
+          {selectedIds.length > 0 && (
+            <AppBulkToolbar
+              summary={
+                <>
+                  <Text strong>已选 {selectedIds.length} 台资产</Text>
+                  <Text type="secondary">可执行批量标记或其它操作</Text>
+                </>
+              }
+              actions={
+                <>
+                  <Button size="small" type="primary" icon={<TagOutlined />} onClick={handleBatchTag} loading={tagging}>
+                    标记所选
+                  </Button>
+                  <Button size="small" onClick={handleExportSelected}>
+                    导出所选
+                  </Button>
+                  <Button size="small" danger onClick={handleIsolateSelected}>
+                    隔离所选
+                  </Button>
+                  <Button size="small" onClick={() => setSelectedIds([])}>
+                    清除选择
+                  </Button>
+                </>
+              }
             />
-            <Input
-              placeholder="输入要批量添加的标签"
-              value={pendingTag}
-              onChange={(event) => setPendingTag(event.target.value)}
-              prefix={<TagOutlined />}
-              style={{ width: 220 }}
-              aria-label="批量标签输入"
-            />
-            <Button
-              type="primary"
-              icon={<TagOutlined />}
-              onClick={handleBatchTag}
-              loading={tagging}
-              disabled={selectedIds.length === 0}
-              aria-label="批量标记选中资产"
-            >
-              批量标记 {selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
-            </Button>
-          </Space>
+          )}
 
           <Table
             rowKey="id"

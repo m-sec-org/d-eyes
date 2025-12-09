@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import type { Task, TaskEvent } from '@/services/types';
 import { useTaskEventStore } from '@/store/taskEvents';
 import { performTaskAction } from '@/services/api/taskActions';
-import { Button, Select } from '@/components/ui';
+import { AppStickyToolbar, AppSummaryCard, Button, Select } from '@/components/ui';
 import { cn } from '@/utils/cn';
 import type { QueueSummary } from '@/services/api/queues';
 import type { QueueStreamStatus } from '@/store/queueSummary';
@@ -217,79 +217,103 @@ export function TaskLiveMonitor({ tasks, queueSummary, queueStatus = 'connecting
 
   return (
     <section className="card task-live-monitor">
-      <header className="section-heading task-live-monitor__header">
-        <div>
-          <h2>任务指挥中心 · 实时监控</h2>
-          <p className="muted">
-            任务流状态：{status}{' '}
-            {pendingEvents > 0 && frozen && (
-              <span className="live-monitor-pending">新事件 +{pendingEvents}</span>
+      <AppStickyToolbar
+        className="task-live-monitor__toolbar"
+        headline={
+          <>
+            <h2>任务指挥中心 · 实时监控</h2>
+            <p className="muted">
+              任务流状态：{status}{' '}
+              {pendingEvents > 0 && frozen && (
+                <span className="live-monitor-pending">新事件 +{pendingEvents}</span>
+              )}
+            </p>
+            <p className="muted">
+              队列流：{queueStatus} · 深度 {queueSummary?.queue_depth ?? '--'} · 运行 {queueSummary?.in_flight ?? '--'}
+            </p>
+            {queueSummary && (queueSummary.status_counts?.blocked ?? 0) > 0 && (
+              <span className="live-monitor-alert danger">
+                队列阻塞 {queueSummary.status_counts?.blocked} 个任务，请关注 QueueMonitor。
+              </span>
             )}
-          </p>
-          <p className="muted">
-            队列流：{queueStatus} · 深度 {queueSummary?.queue_depth ?? '--'} · 运行 {queueSummary?.in_flight ?? '--'}
-          </p>
-          {queueSummary && (queueSummary.status_counts?.blocked ?? 0) > 0 && (
-            <span className="live-monitor-alert danger">
-              队列阻塞 {queueSummary.status_counts?.blocked} 个任务，请关注 QueueMonitor。
-            </span>
-          )}
-          <Button type="button" variant="ghost" onClick={() => (window.location.href = '/queues')}>
-            查看命令队列
-          </Button>
-        </div>
-        <div className="actions task-live-monitor__actions">
-          <Select
-            value={timeWindow.toString()}
-            aria-label="时间窗口"
-            onChange={(e) =>
-              setTimeWindow(e.target.value === 'all' ? 'all' : Number(e.target.value) as TimeWindowValue)
-            }
-          >
-            {TIME_WINDOWS.map((window) => (
-              <option key={window.value} value={window.value}>
-                {window.label}
-              </option>
-            ))}
-          </Select>
-          <Select
-            value={visibleLimit.toString()}
-            aria-label="事件窗口大小"
-            onChange={(e) => setVisibleLimit(Number(e.target.value))}
-          >
-            {VISIBLE_LIMIT_OPTIONS.map((size) => (
-              <option key={size} value={size}>
-                最近 {size} 条
-              </option>
-            ))}
-          </Select>
-          <Button type="button" variant={frozen ? 'secondary' : 'ghost'} onClick={toggleFreeze}>
-            {frozen ? '恢复实时' : '冻结视图'}
-          </Button>
-          {pendingEvents > 0 && frozen && (
-            <Button type="button" variant="primary" size="sm" onClick={resumeFromFreeze}>
-              查看 {pendingEvents} 条新事件
+          </>
+        }
+        actions={
+          <>
+            <Select
+              value={timeWindow.toString()}
+              aria-label="时间窗口"
+              onChange={(e) =>
+                setTimeWindow(e.target.value === 'all' ? 'all' : (Number(e.target.value) as TimeWindowValue))
+              }
+            >
+              {TIME_WINDOWS.map((window) => (
+                <option key={window.value} value={window.value}>
+                  {window.label}
+                </option>
+              ))}
+            </Select>
+            <Select
+              value={filterSeverity}
+              onChange={(e) => setFilterSeverity(e.target.value)}
+              aria-label="筛选严重级别"
+            >
+              <option value="">全部级别</option>
+              <option value="info">Info</option>
+              <option value="warning">Warning</option>
+              <option value="danger">Danger</option>
+            </Select>
+            <Select
+              value={selectedTaskId}
+              onChange={(e) => setSelectedTaskId(e.target.value)}
+              aria-label="筛选任务"
+            >
+              <option value="">全部任务</option>
+              {tasks.map((task) => (
+                <option key={task.id} value={task.id}>
+                  {task.id.slice(0, 8)} · {task.type}
+                </option>
+              ))}
+            </Select>
+            <Select
+              value={visibleLimit.toString()}
+              aria-label="事件窗口大小"
+              onChange={(e) => setVisibleLimit(Number(e.target.value))}
+            >
+              {VISIBLE_LIMIT_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  最近 {size} 条
+                </option>
+              ))}
+            </Select>
+            <Button type="button" variant={frozen ? 'secondary' : 'ghost'} onClick={toggleFreeze}>
+              {frozen ? '恢复实时' : '冻结视图'}
             </Button>
-          )}
-        </div>
-      </header>
+            {pendingEvents > 0 && frozen && (
+              <Button type="button" variant="primary" size="sm" onClick={resumeFromFreeze}>
+                查看 {pendingEvents} 条新事件
+              </Button>
+            )}
+          </>
+        }
+      />
 
       <div className="live-monitor-summary">
         <div className="live-monitor-summary__grid">
-          <SummaryCard label="总事件" value={filteredEvents.length} />
-          <SummaryCard label="告警 (danger)" value={severitySummary.danger} variant="danger" />
-          <SummaryCard label="告警 (warning)" value={severitySummary.warning} variant="warning" />
-          <SummaryCard label="信息 (info)" value={severitySummary.info} />
+          <AppSummaryCard label="总事件" value={filteredEvents.length} />
+          <AppSummaryCard label="告警 (danger)" value={severitySummary.danger} tone="danger" />
+          <AppSummaryCard label="告警 (warning)" value={severitySummary.warning} tone="warning" />
+          <AppSummaryCard label="信息 (info)" value={severitySummary.info} tone="info" />
         </div>
         <div className="live-monitor-summary__grid">
-          <SummaryCard label="运行中" value={taskStatusSummary.running ?? 0} />
-          <SummaryCard label="待调度" value={taskStatusSummary.pending ?? 0} />
-          <SummaryCard label="失败" value={taskStatusSummary.failed ?? 0} variant="danger" />
-          <SummaryCard label="成功" value={taskStatusSummary.succeeded ?? 0} variant="success" />
+          <AppSummaryCard label="运行中" value={taskStatusSummary.running ?? 0} tone="info" />
+          <AppSummaryCard label="待调度" value={taskStatusSummary.pending ?? 0} tone="warning" />
+          <AppSummaryCard label="失败" value={taskStatusSummary.failed ?? 0} tone="danger" />
+          <AppSummaryCard label="成功" value={taskStatusSummary.succeeded ?? 0} tone="success" />
         </div>
       </div>
 
-  {lastAlert && (
+      {lastAlert && (
         <div className={cn('live-monitor-alert', lastAlert.severity)}>
           <strong>最新告警</strong>
           <span>
@@ -298,29 +322,7 @@ export function TaskLiveMonitor({ tasks, queueSummary, queueStatus = 'connecting
         </div>
       )}
 
-      <div className="live-monitor-filters">
-        <Select
-          value={selectedTaskId}
-          onChange={(e) => setSelectedTaskId(e.target.value)}
-          aria-label="筛选任务"
-        >
-          <option value="">全部任务</option>
-          {tasks.map((task) => (
-            <option key={task.id} value={task.id}>
-              {task.id.slice(0, 8)} · {task.type}
-            </option>
-          ))}
-        </Select>
-        <Select
-          value={filterSeverity}
-          onChange={(e) => setFilterSeverity(e.target.value)}
-          aria-label="筛选严重级别"
-        >
-          <option value="">全部级别</option>
-          <option value="info">Info</option>
-          <option value="warning">Warning</option>
-          <option value="danger">Danger</option>
-        </Select>
+      <div className="task-live-monitor__controls">
         <Button
           type="button"
           variant="ghost"
@@ -344,6 +346,9 @@ export function TaskLiveMonitor({ tasks, queueSummary, queueStatus = 'connecting
           onClick={() => handleAction('terminate')}
         >
           终止
+        </Button>
+        <Button type="button" variant="ghost" onClick={() => (window.location.href = '/queues')}>
+          查看命令队列
         </Button>
       </div>
 
@@ -427,23 +432,6 @@ export function TaskLiveMonitor({ tasks, queueSummary, queueStatus = 'connecting
         </div>
       )}
     </section>
-  );
-}
-
-function SummaryCard({
-  label,
-  value,
-  variant = 'neutral',
-}: {
-  label: string;
-  value: number;
-  variant?: 'neutral' | 'danger' | 'warning' | 'success';
-}) {
-  return (
-    <div className={cn('live-monitor-summary__card', `variant-${variant}`)}>
-      <span className="muted">{label}</span>
-      <strong>{value}</strong>
-    </div>
   );
 }
 

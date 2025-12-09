@@ -75,6 +75,7 @@ func setupTestRouter(t *testing.T) (*gin.Engine, store.Store, *scheduler.Schedul
 		nil, // metrics handler
 		nil, // task stream
 		nil, // queue stream
+		nil, // detection stream
 		nil, // threat stream
 		nil, // anomaly stream
 	)
@@ -301,6 +302,7 @@ func TestTaskCreateValidatesProfilePayload(t *testing.T) {
 		nil, // metrics handler
 		nil, // task stream
 		nil, // queue stream
+		nil, // detection stream
 		nil, // threat stream
 		nil, // anomaly stream
 	)
@@ -392,6 +394,7 @@ func TestCreateBASTaskRequiresApprovedScenario(t *testing.T) {
 		nil, // metrics handler
 		nil, // task stream
 		nil, // queue stream
+		nil, // detection stream
 		nil, // threat stream
 		nil, // anomaly stream
 	)

@@ -39,6 +39,12 @@ type ListTasksResult struct {
 	Summary    TaskListSummary
 }
 
+// CollectorRolloutFilter defines query options for rollout listings.
+type CollectorRolloutFilter struct {
+	Statuses []model.CollectorRolloutStatus
+	Limit    int
+}
+
 // Store defines the persistence contract required by scheduler and services.
 type Store interface {
 	UpsertAgent(ctx context.Context, agent *model.Agent) error
@@ -133,6 +139,8 @@ type Store interface {
 	// System event ingestion.
 	InsertSystemEvents(ctx context.Context, events []model.SystemEventRecord) error
 	CountSystemEvents(ctx context.Context, since time.Time) (int64, error)
+	QuerySystemEvents(ctx context.Context, query SystemEventQuery) ([]model.SystemEventRecord, error)
+	AggregateSystemEvents(ctx context.Context, query SystemEventQuery) (SystemEventAggregates, error)
 
 	// Collector control plane.
 	UpsertCollectorConfig(ctx context.Context, snapshot *model.CollectorConfigSnapshot) error
@@ -140,4 +148,35 @@ type Store interface {
 	ListCollectorConfigs(ctx context.Context) ([]*model.CollectorConfigSnapshot, error)
 	UpsertCollectorStatus(ctx context.Context, status *model.CollectorStatusSnapshot) error
 	ListCollectorStatuses(ctx context.Context) ([]*model.CollectorStatusSnapshot, error)
+	CreateCollectorRollout(ctx context.Context, rollout *model.CollectorRollout, targets []*model.CollectorRolloutTarget) error
+	UpdateCollectorRollout(ctx context.Context, rollout *model.CollectorRollout) error
+	GetCollectorRollout(ctx context.Context, rolloutID uuid.UUID) (*model.CollectorRollout, error)
+	ListCollectorRollouts(ctx context.Context, filter CollectorRolloutFilter) ([]*model.CollectorRollout, error)
+	ListCollectorRolloutTargets(ctx context.Context, rolloutID uuid.UUID) ([]*model.CollectorRolloutTarget, error)
+	FindCollectorRolloutTargetsByAgent(ctx context.Context, agentID uuid.UUID) ([]*model.CollectorRolloutTarget, error)
+	UpdateCollectorRolloutTarget(ctx context.Context, target *model.CollectorRolloutTarget) error
+}
+
+// SystemEventQuery captures filters for querying stored events.
+type SystemEventQuery struct {
+	AgentID          uuid.UUID
+	Collector        string
+	CollectorKind    string
+	EventType        string
+	Source           string
+	Priorities       []string
+	StorageTiers     []string
+	Since            time.Time
+	Until            time.Time
+	Limit            int
+	CursorReceivedAt time.Time
+	CursorID         uuid.UUID
+	SortAscending    bool
+}
+
+// SystemEventAggregates summarises counts per dimension.
+type SystemEventAggregates struct {
+	Total       int64            `json:"total"`
+	ByEventType map[string]int64 `json:"by_event_type"`
+	BySource    map[string]int64 `json:"by_source"`
 }

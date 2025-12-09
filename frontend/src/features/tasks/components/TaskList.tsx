@@ -3,6 +3,7 @@ import type { Task } from '@/services/types';
 import dayjs from 'dayjs';
 import { Card, Button, Table, Tag, Space, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { AppBulkToolbar } from '@/components/ui';
 
 interface TaskListProps {
   tasks: Task[];
@@ -16,6 +17,7 @@ interface TaskListProps {
   onBulkRetry: (tasks: Task[]) => Promise<void> | void;
   onBulkCancel: (tasks: Task[]) => Promise<void> | void;
   onLoadMore: () => void;
+  activeViewName?: string;
 }
 
 const statusColor: Record<string, string> = {
@@ -38,6 +40,7 @@ export function TaskList({
   onBulkRetry,
   onBulkCancel,
   onLoadMore,
+  activeViewName,
 }: TaskListProps) {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const selectedTasks = useMemo(
@@ -109,9 +112,15 @@ export function TaskList({
 
   return (
     <Card
+      className="task-list-card"
       title="任务列表"
       extra={
-        <Space aria-live="polite">
+        <Space aria-live="polite" wrap>
+          {activeViewName && (
+            <Typography.Text className="task-view-pill" aria-label="当前视图">
+              当前视图：{activeViewName}
+            </Typography.Text>
+          )}
           <Button onClick={onRefresh} loading={loading} aria-label="刷新任务列表">
             刷新
           </Button>
@@ -122,18 +131,28 @@ export function TaskList({
       }
     >
       {selectedTasks.length > 0 && (
-        <Space style={{ marginBottom: 12 }} wrap>
-          <Typography.Text>已选 {selectedTasks.length} 项</Typography.Text>
-          <Button size="small" onClick={handleBulkRetryClick}>
-            批量重试
-          </Button>
-          <Button size="small" danger onClick={handleBulkCancelClick}>
-            批量取消
-          </Button>
-          <Button size="small" type="link" onClick={() => setSelectedRowKeys([])}>
-            清除选择
-          </Button>
-        </Space>
+        <AppBulkToolbar
+          aria-live="polite"
+          summary={
+            <>
+              <Typography.Text strong>已选 {selectedTasks.length} 项</Typography.Text>
+              <Typography.Text type="secondary">可批量执行操作</Typography.Text>
+            </>
+          }
+          actions={
+            <>
+              <Button size="small" onClick={handleBulkRetryClick}>
+                批量重试
+              </Button>
+              <Button size="small" danger onClick={handleBulkCancelClick}>
+                批量取消
+              </Button>
+              <Button size="small" type="link" onClick={() => setSelectedRowKeys([])}>
+                清除选择
+              </Button>
+            </>
+          }
+        />
       )}
       <Table
         rowKey="id"

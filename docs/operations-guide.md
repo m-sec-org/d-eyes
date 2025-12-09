@@ -49,7 +49,47 @@ alerts:
   notify_sandbox_fallback: true
 templates:
   persist_path: /var/lib/d-eyes/templates.json
+
+events:
+  enabled: true
+  default_priority: normal
+  queue_capacity: 8192
+  max_batch: 512
+  flush_interval: 50ms
+  max_payload_size: 4MiB
+  priority_queues:
+    high:
+      queue_capacity: 2048
+      max_batch: 256
+    normal:
+      queue_capacity: 4096
+      max_batch: 512
+    low:
+      queue_capacity: 2048
+      max_batch: 256
+  retention:
+    hot: 168h   # 7d
+    warm: 720h  # 30d
+    cold: 4320h # 180d
+
+collectors:
+  allowed_providers: [Kernel, Security]
+  allowed_probes: [diag-ebpf, diag-sysmon]
+  heartbeat_lag_threshold: 30s
+  rollout_grace_period: 2m
 ```
+
+> **事件采集与回滚提示**：`events.priority_queues` 定义了高/中/低优先级队列容量与批量大小，`default_priority` 会在 Agent 未显式声明时自动落在 `normal`，同时 `/api/v1/events/ingest` 允许每条事件携带 `priority` 与 `storage_tier` 字段（默认为 `normal`/`hot`）。Server 会按优先级独立限流并在 `/metrics` 中输出 `d_eyes_events_queue_depth_priority{priority="high"}` 等指标，方便 Ops 在队列逼近容量时仅对低优先级返回 429。`events.retention` 指定热/温/冷数据分层策略，后台迁移或查询命中哪个层级可通过事件 `storage_tier` 字段在 UI 中直接展示。  
+> **Parser 告警**：新增 `d_eyes_events_parsers_configured{parser}`（Gauge=1 表示 parser 成功注册）与 `d_eyes_events_parser_failures_total{parser,reason}`（统计 metadata/tag/payload 缺失等原因）。推荐的 PromQL 告警：  
+> - `absent(d_eyes_events_parsers_configured{parser="process-schema"})` → parser 动态配置被意外禁用；  
+> - `rate(d_eyes_events_parser_failures_total[5m]) > 0` 且 `rate(d_eyes_events_dropped_total[5m]) > 0` → 持续出现 schema 校验失败。  
+> Parser 校验失败会自动累加 `d_eyes_events_dropped_total`，同时 HTTP 返回 400，便于在 Grafana 告警面板或 Ops 脚本中快速定位拒收来源。
+
+> **Events Workspace 提示**：`GET /api/v1/events` 默认按 `received_at` 倒序返回 100 条，可通过 `limit`（≤1000）与 `sort=asc|desc` 控制返回顺序，再结合 `cursor_time/cursor_id` 游标参数进行无偏移分页（响应体会返回 `next_cursor`）。前端若需要热图/聚合统计，可调用 `GET /api/v1/events/stats`，该接口会应用同样的过滤参数并返回 `total/by_event_type/by_source`，无需额外的 SQL 或外部聚合就能看到各优先级/层级的命中分布；具体 UI 操作与 Respond/Collector 流程见《[事件工作台使用指南](./events-workspace.md)》。
+
+Collector 控制面新增 `heartbeat_lag_threshold/rollout_grace_period` 控件，Server 会在 `/api/v1/collector/status` 与 SSE 流中返回 `lag_seconds/lagging` 字段，结合 Agent 上报的 `build.object_version`、`probe_attach_*` 等元数据，可以快速识别卡住的心跳或回滚中的探针版本。
+
+> **Collector Rollout 提示**：`POST /api/v1/collector/configs/rollouts` 允许运维按标签（如 `role=web`、`tenant=blue`）批量推送 ETW/EBPF 配置。Server 会为每次 rollout 生成 ID、记录 `target_count/ack_count/failed_count`，并通过 `/api/v1/collector/configs/rollouts`/`:id` API 与 SSE 反馈实时状态。Prometheus 暴露 `d_eyes_collector_rollout_targets{rollout,state}`（监控 pending/failed）与 `d_eyes_collector_rollout_actions_total{action,result}`（审计 push/rollback 成功率），一旦目标失败或超出 `rollout_grace_period`，API 将自动标记为 failed 并在 `/metrics` 告警。若某批次出现异常，可直接调用 `POST /api/v1/collector/configs/rollouts/:id/rollback` 回滚到上一个版本，Server 会落审计日志 `collector.rollout.rollback` 并在心跳中继续追踪 ack 进度。配合 `docs/collector-diagnostics.md`、`docs/dr-runbook.md` 中的健康检查/演练脚本，可在 rollout 前后快速拉通 ETW/EBPF 采集验收。
 
 Agent 需配置 `remote.server_grpc_addr`、`sandbox` 等信息，可参考 `docs/bas-sandbox-guide.md`。
 

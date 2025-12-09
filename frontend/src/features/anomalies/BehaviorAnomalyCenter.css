@@ -14,16 +14,73 @@
   gap: 0.75rem;
 }
 
-.anomaly-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1.1fr);
-  gap: 1.5rem;
+.anomaly-split {
+  display: flex;
+  gap: 1.25rem;
+  align-items: stretch;
+  min-height: 440px;
+  height: min(620px, 70vh);
 }
 
-@media (max-width: 1200px) {
-  .anomaly-grid {
-    grid-template-columns: 1fr;
-  }
+.anomaly-split.is-stacked {
+  flex-direction: column;
+  height: auto;
+}
+
+.anomaly-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.anomaly-panel-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.anomaly-panel-card .ant-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.anomaly-panel-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 1rem 1.25rem;
+}
+
+.anomaly-panel-card--list .anomaly-panel-scroll {
+  padding: 0;
+}
+
+.anomaly-panel-card--detail .anomaly-panel-scroll {
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.anomaly-divider {
+  width: 8px;
+  border: none;
+  background: linear-gradient(180deg, rgba(5, 5, 5, 0.05), rgba(5, 5, 5, 0.15));
+  border-radius: 999px;
+  cursor: col-resize;
+  align-self: stretch;
+  transition: background 0.2s ease;
+}
+
+.anomaly-divider:focus-visible {
+  outline: 2px solid var(--ant-color-primary);
+}
+
+.anomaly-divider:hover,
+.anomaly-split.is-resizing .anomaly-divider {
+  background: var(--ant-color-primary);
+}
+
+.anomaly-split.is-stacked .anomaly-divider {
+  display: none;
 }
 
 .anomaly-detail {
@@ -60,15 +117,58 @@
   color: var(--text-muted, #6b7280);
 }
 
-.anomaly-graph {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+.anomaly-graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: stretch;
 }
 
-.anomaly-graph ul {
-  padding-left: 1.2rem;
-  margin: 0.25rem 0;
+@media (max-width: 900px) {
+  .anomaly-graph-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.anomaly-graph-canvas-wrapper {
+  background: var(--surface-subtle, rgba(0, 0, 0, 0.02));
+  border-radius: 12px;
+  padding: 0.75rem;
+}
+
+.anomaly-graph-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.anomaly-graph-meta ul {
+  padding-left: 1.1rem;
+  margin: 0.35rem 0;
+}
+
+.anomaly-graph-canvas {
+  width: 100%;
+  height: auto;
+}
+
+.anomaly-graph-node {
+  cursor: default;
+}
+
+.anomaly-graph-node-label {
+  fill: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.anomaly-graph-edge-label {
+  fill: #8c8c8c;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .graph-node-type {

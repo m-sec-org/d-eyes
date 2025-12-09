@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { Button, Card, Empty, Form, Input, List, message, Space, Tag, Timeline, Typography } from 'antd';
 import { PageHeader } from '@/components/layout/PageHeader';
+import { CodeBlock } from '@/components/CodeBlock';
 import { createPlaybook, listPlaybooks, activatePlaybook, runPlaybook, listPlaybookRuns } from '@/services/api/playbooks';
 import type { Playbook, PlaybookRun } from '@/services/types';
 
@@ -46,6 +47,29 @@ const statusColor: Record<string, string> = {
   paused: 'orange',
 };
 
+const formHints = {
+  trigger: '包含 type/filter/criteria 等字段，使用 JSON 表达触发条件。',
+  actions: '数组形式，可包含 notify / task.dispatch 等动作。',
+  rollback: '可选数组，用于失败后的补偿动作。',
+  approvals: '格式：角色:秒数，例如 security.lead:1800。',
+  conditions: '每行一个表达式，例如 severity == "high"。',
+  payload: '当手动触发 Playbook 时，可自定义 payload JSON。',
+};
+
+const jsonValidator = (label: string) => ({
+  validator(_: unknown, value: string) {
+    if (!value || !value.trim()) {
+      return Promise.resolve();
+    }
+    try {
+      JSON.parse(value);
+      return Promise.resolve();
+    } catch {
+      return Promise.reject(new Error(`${label} 必须是合法 JSON`));
+    }
+  },
+});
+
 function safeParse(value: string, fallback: unknown) {
   if (!value.trim()) return fallback;
   try {
@@ -69,14 +93,6 @@ function parseKeyValueLines(input: string): Record<string, string> | undefined {
       }
     });
   return Object.keys(result).length > 0 ? result : undefined;
-}
-
-function formatJSON(value: unknown) {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value ?? '');
-  }
 }
 
 export function PlaybookConsole() {
@@ -211,20 +227,49 @@ export function PlaybookConsole() {
             <Form.Item name="description" label="描述">
               <Input placeholder="简要说明 Playbook 作用" />
             </Form.Item>
-            <Form.Item name="trigger" label="触发器 JSON" rules={[{ required: true, message: '请输入触发器配置' }]}>
-              <TextArea rows={4} />
+            <Form.Item
+              name="trigger"
+              label="触发器 JSON"
+              extra={<span className="playbook-form-hint">{formHints.trigger}</span>}
+              rules={[
+                { required: true, message: '请输入触发器配置' },
+                jsonValidator('触发器 JSON'),
+              ]}
+            >
+              <TextArea rows={4} spellCheck={false} />
             </Form.Item>
-            <Form.Item name="conditions" label="条件（每行一个表达式）">
-              <TextArea rows={2} placeholder={'agent.labels.env == "prod"'} />
+            <Form.Item
+              name="conditions"
+              label="条件（每行一个表达式）"
+              extra={<span className="playbook-form-hint">{formHints.conditions}</span>}
+            >
+              <TextArea rows={2} placeholder={'agent.labels.env == "prod"'} spellCheck={false} />
             </Form.Item>
-            <Form.Item name="approvals" label="审批链（示例：security.lead:1800）">
-              <TextArea rows={2} placeholder="security.lead:1800" />
+            <Form.Item
+              name="approvals"
+              label="审批链（示例：security.lead:1800）"
+              extra={<span className="playbook-form-hint">{formHints.approvals}</span>}
+            >
+              <TextArea rows={2} placeholder="security.lead:1800" spellCheck={false} />
             </Form.Item>
-            <Form.Item name="actions" label="动作 JSON" rules={[{ required: true, message: '请输入动作配置' }]}>
-              <TextArea rows={5} />
+            <Form.Item
+              name="actions"
+              label="动作 JSON"
+              extra={<span className="playbook-form-hint">{formHints.actions}</span>}
+              rules={[
+                { required: true, message: '请输入动作配置' },
+                jsonValidator('动作 JSON'),
+              ]}
+            >
+              <TextArea rows={5} spellCheck={false} />
             </Form.Item>
-            <Form.Item name="rollback" label="回滚动作 JSON">
-              <TextArea rows={3} />
+            <Form.Item
+              name="rollback"
+              label="回滚动作 JSON"
+              extra={<span className="playbook-form-hint">{formHints.rollback}</span>}
+              rules={[jsonValidator('回滚动作 JSON')]}
+            >
+              <TextArea rows={3} spellCheck={false} />
             </Form.Item>
             <Button type="primary" onClick={handleCreate} block>
               创建 Playbook
@@ -243,10 +288,7 @@ export function PlaybookConsole() {
               </div>
               <Paragraph type="secondary">{selectedPlaybook.description || '暂无描述'}</Paragraph>
               <div className="playbook-detail-grid">
-                <div>
-                  <strong>触发器</strong>
-                  <pre>{formatJSON(selectedPlaybook.trigger)}</pre>
-                </div>
+                <CodeBlock value={selectedPlaybook.trigger} title="触发器" data-testid="playbook-trigger-block" />
                 <div>
                   <strong>条件</strong>
                   {selectedPlaybook.conditions?.length ? (
@@ -260,16 +302,8 @@ export function PlaybookConsole() {
                   )}
                 </div>
               </div>
-              <div>
-                <strong>动作</strong>
-                <pre>{formatJSON(selectedPlaybook.actions)}</pre>
-              </div>
-              {selectedPlaybook.rollback && selectedPlaybook.rollback.length > 0 && (
-                <div>
-                  <strong>回滚</strong>
-                  <pre>{formatJSON(selectedPlaybook.rollback)}</pre>
-                </div>
-              )}
+              <CodeBlock value={selectedPlaybook.actions} title="动作" />
+              {selectedPlaybook.rollback && selectedPlaybook.rollback.length > 0 && <CodeBlock value={selectedPlaybook.rollback} title="回滚" />}
               <div>
                 <strong>审批链</strong>
                 {selectedPlaybook.approvals?.length ? (
@@ -291,9 +325,24 @@ export function PlaybookConsole() {
         <Card title="手动触发" className="playbook-card">
           {selectedPlaybook ? (
             <Form layout="vertical" form={runForm} initialValues={{ type: selectedPlaybook.trigger?.type ?? 'behavior.anomaly' }}>
-              <Form.Item name="type" label="事件类型" rules={[{ required: true, message: '请输入事件类型' }]}> <Input /> </Form.Item>
-              <Form.Item name="attributes" label="属性（key=value，一行一个）"> <TextArea rows={3} placeholder="severity=high" /> </Form.Item>
-              <Form.Item name="payload" label="Payload JSON"> <TextArea rows={3} placeholder="{}" /> </Form.Item>
+              <Form.Item name="type" label="事件类型" rules={[{ required: true, message: '请输入事件类型' }]}>
+                <Input />
+              </Form.Item>
+              <Form.Item
+                name="attributes"
+                label="属性（key=value，一行一个）"
+                extra={<span className="playbook-form-hint">示例：severity=high</span>}
+              >
+                <TextArea rows={3} placeholder="severity=high" spellCheck={false} />
+              </Form.Item>
+              <Form.Item
+                name="payload"
+                label="Payload JSON"
+                extra={<span className="playbook-form-hint">{formHints.payload}</span>}
+                rules={[jsonValidator('Payload JSON')]}
+              >
+                <TextArea rows={3} placeholder="{}" spellCheck={false} />
+              </Form.Item>
               <Button type="primary" onClick={handleRun} block>
                 触发 Playbook
               </Button>

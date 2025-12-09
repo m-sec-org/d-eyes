@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
+import { Modal } from 'antd';
 
 import {
   activateBASScenario,
@@ -21,7 +22,7 @@ import type {
   Task,
   TaskListResponse,
 } from '@/services/types';
-import { Button, Checkbox, FormField, Textarea, TextInput } from '@/components/ui';
+import { AppCard, AppFormSection, AppStickyToolbar, AppSummaryCard, Button, Checkbox, FormField, Textarea, TextInput } from '@/components/ui';
 
 interface DraftStep {
   id: string;
@@ -66,6 +67,12 @@ const defaultStep: DraftStep = {
   timeoutSeconds: 60,
 };
 
+type ScenarioActionType = 'approve' | 'publish' | 'run';
+interface ScenarioActionModalState {
+  type: ScenarioActionType;
+  scenario: BASScenario;
+}
+
 export function BASScenarioConsole() {
   const { data: scenarios, mutate, isLoading } = useSWR('bas-scenarios', listBASScenarios);
   const {
@@ -78,6 +85,10 @@ export function BASScenarioConsole() {
   const [form, setForm] = useState<DraftScenario>(defaultDraft);
   const [stepDraft, setStepDraft] = useState<DraftStep>(defaultStep);
   const [submitting, setSubmitting] = useState(false);
+  const [draggingStepId, setDraggingStepId] = useState<string | null>(null);
+  const [actionModal, setActionModal] = useState<ScenarioActionModalState | null>(null);
+  const [actionPayload, setActionPayload] = useState({ actor: 'secops.lead', notes: '', profile: 'default' });
+  const [actionSubmitting, setActionSubmitting] = useState(false);
   const basRuns = useMemo(() => (runResponse ?? []).filter((task) => task.type?.toLowerCase().startsWith('bas')), [runResponse]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const selectedRun = basRuns.find((task) => task.id === selectedRunId) ?? null;
@@ -148,6 +159,33 @@ export function BASScenarioConsole() {
     }));
   };
 
+  const reorderSteps = useCallback((sourceId: string, targetId: string) => {
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    setForm((prev) => {
+      const steps = [...prev.steps];
+      const sourceIndex = steps.findIndex((step) => step.id === sourceId);
+      const targetIndex = steps.findIndex((step) => step.id === targetId);
+      if (sourceIndex === -1 || targetIndex === -1) return prev;
+      const [moved] = steps.splice(sourceIndex, 1);
+      steps.splice(targetIndex, 0, moved);
+      return { ...prev, steps };
+    });
+  }, []);
+
+  const handleStepDragStart = (stepId: string) => {
+    setDraggingStepId(stepId);
+  };
+
+  const handleStepDrop = (targetId: string) => {
+    if (!draggingStepId) return;
+    reorderSteps(draggingStepId, targetId);
+    setDraggingStepId(null);
+  };
+
+  const handleStepDragEnd = () => {
+    setDraggingStepId(null);
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!form.name.trim() || form.steps.length === 0) return;
@@ -198,10 +236,7 @@ export function BASScenarioConsole() {
   };
 
   const handlePublish = async (scenario: BASScenario) => {
-    const actor = window.prompt('请输入发布人', 'secops.lead');
-    if (!actor) return;
-    await publishBASScenario(scenario.id, actor);
-    await mutate();
+    openActionModal('publish', scenario);
   };
 
   const handleClone = async (scenario: BASScenario) => {
@@ -211,26 +246,78 @@ export function BASScenarioConsole() {
     await mutate();
   };
 
-  const handleRunScenario = async (scenario: BASScenario) => {
+  const handleRunScenario = (scenario: BASScenario) => {
     if (!['approved', 'active'].includes(scenario.status)) {
       window.alert('请先审批/启用该场景后再运行');
       return;
     }
-    const profile = window.prompt('选择执行 Profile（默认 default）', 'default')?.trim() || 'default';
+    openActionModal('run', scenario);
+  };
+
+  const openActionModal = (type: ScenarioActionType, scenario: BASScenario) => {
+    setActionModal({ type, scenario });
+    setActionPayload({
+      actor: scenario.updated_by ?? 'secops.lead',
+      notes: '',
+      profile: 'default',
+    });
+  };
+
+  const closeActionModal = () => {
+    setActionModal(null);
+    setActionPayload({ actor: 'secops.lead', notes: '', profile: 'default' });
+  };
+
+  const handleActionSubmit = async () => {
+    if (!actionModal) return;
+    const { scenario, type } = actionModal;
+    const trimmedActor = actionPayload.actor.trim();
+    const trimmedNotes = actionPayload.notes.trim();
+    const trimmedProfile = actionPayload.profile.trim() || 'default';
+
+    const ensureActor = () => {
+      if (!trimmedActor) {
+        window.alert('请输入操作人');
+        return false;
+      }
+      return true;
+    };
+
+    setActionSubmitting(true);
     try {
-      await createTask({
-        type: 'bas.advanced',
-        profile,
-        metadata: {
-          scenario_id: scenario.id,
-          required_capabilities: 'bas',
-        },
-        priority: 5,
-      });
-      await mutateRuns();
+      if (type === 'approve') {
+        if (!ensureActor()) {
+          setActionSubmitting(false);
+          return;
+        }
+        await approveBASScenario(scenario.id, trimmedActor, trimmedNotes || 'console approval');
+        await mutate();
+      } else if (type === 'publish') {
+        if (!ensureActor()) {
+          setActionSubmitting(false);
+          return;
+        }
+        await publishBASScenario(scenario.id, trimmedActor);
+        await mutate();
+      } else if (type === 'run') {
+        await createTask({
+          type: 'bas.advanced',
+          profile: trimmedProfile,
+          metadata: {
+            scenario_id: scenario.id,
+            required_capabilities: 'bas',
+            note: trimmedNotes || undefined,
+          },
+          priority: 5,
+        });
+        await mutateRuns();
+      }
+      closeActionModal();
     } catch (error) {
-      window.alert('调度任务失败，请稍后重试');
+      window.alert('操作失败，请稍后重试');
       console.error(error);
+    } finally {
+      setActionSubmitting(false);
     }
   };
 
@@ -239,15 +326,13 @@ export function BASScenarioConsole() {
   };
 
   return (
-    <div className="stack bas-workbench">
-      <section className="card">
-        <header className="section-header">
-          <div>
-            <h2>BAS 场景管理</h2>
-            <p className="muted">创建、审批并控制 BAS 场景执行边界，并直接调度演练。</p>
-          </div>
-          {isLoading && <span className="muted">加载中…</span>}
-        </header>
+    <>
+      <div className="stack bas-workbench">
+      <AppCard
+        title="BAS 场景管理"
+        description="创建、审批并控制 BAS 场景执行边界，并直接调度演练。"
+        actions={isLoading ? <span className="muted">加载中…</span> : undefined}
+      >
         <div className="scenario-grid">
           {sortedScenarios.map((scenario) => (
             <article key={scenario.id} className="scenario-card">
@@ -285,15 +370,22 @@ export function BASScenarioConsole() {
                   </Button>
                 </div>
               </header>
-              <div>
+              <div className="scenario-steps-preview">
                 <strong>步骤</strong>
-                <ol>
-                  {scenario.steps?.map((step) => (
-                    <li key={step.id}>
-                      {step.name} · {step.action}{' '}
-                      {step.require_sandbox && <span className="muted">(强制 Sandbox)</span>}
+                <ol className="scenario-step-list">
+                  {scenario.steps?.map((step, idx) => (
+                    <li key={step.id} className="scenario-step-item">
+                      <div className="scenario-step-title">
+                        <span>{idx + 1}. {step.name}</span>
+                      </div>
+                      <div className="step-pill-row">
+                        <span className="step-pill">{step.action}</span>
+                        <span className="step-pill step-pill--muted">超时 {step.timeout_seconds ?? step.timeoutSeconds ?? 60}s</span>
+                        {step.require_sandbox && <span className="step-pill step-pill--warning">Sandbox</span>}
+                      </div>
                     </li>
                   ))}
+                  {!(scenario.steps?.length) && <li className="muted">尚未配置步骤</li>}
                 </ol>
               </div>
               <footer>
@@ -313,11 +405,10 @@ export function BASScenarioConsole() {
           ))}
           {!sortedScenarios.length && !isLoading && <p className="muted">暂无场景，创建第一个吧。</p>}
         </div>
-      </section>
+      </AppCard>
 
-      <section className="card">
-        <h2>新建场景</h2>
-        <form className="form-grid" onSubmit={handleSubmit}>
+      <AppFormSection as="form" title="新建场景" onSubmit={handleSubmit}>
+        <div className="form-grid">
           <FormField label="场景名称" required>
             <TextInput value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
           </FormField>
@@ -424,15 +515,30 @@ export function BASScenarioConsole() {
               </Button>
             </div>
 
-            <ol>
+            <p className="muted">支持拖拽步骤卡片快速排序，或使用箭头按钮微调。</p>
+            <ol className="step-list-editor">
               {form.steps.map((step, index) => (
-                <li key={step.id} className="step-row">
+                <li
+                  key={step.id}
+                  className={`step-row ${draggingStepId === step.id ? 'is-dragging' : ''}`}
+                  draggable
+                  onDragStart={() => handleStepDragStart(step.id)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    handleStepDrop(step.id);
+                  }}
+                  onDragEnd={handleStepDragEnd}
+                  aria-grabbed={draggingStepId === step.id}
+                >
                   <div>
                     <strong>
-                      {index + 1}. {step.name}
+                      {index + 1}. {step.name || '未命名步骤'}
                     </strong>
-                    <div className="muted">
-                      {step.action} · 超时 {step.timeoutSeconds}s · {step.requireSandbox ? 'Sandbox' : '原地'}
+                    <div className="step-pill-row">
+                      <span className="step-pill">{step.action || '未定义动作'}</span>
+                      <span className="step-pill step-pill--muted">超时 {step.timeoutSeconds}s</span>
+                      {step.requireSandbox && <span className="step-pill step-pill--warning">Sandbox</span>}
                     </div>
                   </div>
                   <div className="step-actions">
@@ -459,19 +565,19 @@ export function BASScenarioConsole() {
               重置
             </Button>
           </div>
-        </form>
-      </section>
+        </div>
+      </AppFormSection>
 
-      <section className="card bas-run-panel">
-        <header className="section-header">
-          <div>
-            <h2>BAS 执行队列</h2>
-            <p className="muted">实时跟踪最近的 BAS 任务，对比成功率与失败点。</p>
-          </div>
+      <AppCard
+        className="bas-run-panel"
+        title="BAS 执行队列"
+        description="实时跟踪最近的 BAS 任务，对比成功率与失败点。"
+        actions={
           <Button type="button" variant="ghost" size="sm" onClick={refreshRuns} disabled={isRunsLoading}>
             刷新
           </Button>
-        </header>
+        }
+      >
         <div className="run-list">
           {basRuns.map((task) => (
             <button
@@ -494,24 +600,99 @@ export function BASScenarioConsole() {
           ))}
           {!basRuns.length && <p className="muted">暂无 BAS 任务，选择场景后点击“运行”即可发起。</p>}
         </div>
-      </section>
+      </AppCard>
 
-      <section className="card bas-run-detail">
-        <header className="section-header">
-          <div>
-            <h2>执行时间线 & 攻击链</h2>
-            <p className="muted">
-              展示单次 BAS 演练的步骤进度、失败节点及沙箱使用情况，辅助溯源与调试。
-            </p>
-          </div>
-        </header>
-        {selectedRunId && runReport && (
-          <BASRunInsight report={runReport} loading={isReportLoading} />
-        )}
+      <AppCard className="bas-run-detail">
+        <AppStickyToolbar
+          className="bas-run-toolbar"
+          headline={
+            <>
+              <h2>执行时间线 & 攻击链</h2>
+              <p className="muted">展示单次 BAS 演练的步骤进度、失败节点及沙箱使用情况，辅助溯源与调试。</p>
+            </>
+          }
+          actions={
+            <span className="muted">
+              {selectedRun
+                ? `任务 #${selectedRun.id.slice(-6)} · ${translateStatus(selectedRun.status)}`
+                : '选择左侧任务查看详情'}
+            </span>
+          }
+        />
+        {selectedRunId && runReport && <BASRunInsight report={runReport} loading={isReportLoading} />}
         {selectedRunId && !runReport && isReportLoading && <p className="muted">载入执行详情…</p>}
         {!selectedRunId && <p className="muted">请选择左侧执行队列中的任务查看详情。</p>}
-      </section>
-    </div>
+      </AppCard>
+      </div>
+
+      <Modal
+        open={!!actionModal}
+        onCancel={closeActionModal}
+        title={
+          actionModal?.type === 'approve'
+            ? '审批 BAS 场景'
+            : actionModal?.type === 'publish'
+              ? '发布 BAS 场景'
+              : '运行 BAS 场景'
+        }
+        onOk={handleActionSubmit}
+        okText={actionModal?.type === 'run' ? '运行' : '确认'}
+        confirmLoading={actionSubmitting}
+        destroyOnHidden
+      >
+        {actionModal && (
+          <div className="scenario-modal">
+            <div className="scenario-modal-summary">
+              <h3>{actionModal.scenario.name}</h3>
+              <p className="muted">{actionModal.scenario.description || '暂无描述'}</p>
+              <div className="step-pill-row">
+                <span className="step-pill step-pill--muted">
+                  步骤 {actionModal.scenario.steps?.length ?? 0}
+                </span>
+                <span className="step-pill step-pill--muted">
+                  状态 {translateStatus(actionModal.scenario.status)}
+                </span>
+              </div>
+            </div>
+            {actionModal.type === 'run' ? (
+              <>
+                <FormField label="执行 Profile">
+                  <TextInput
+                    value={actionPayload.profile}
+                    onChange={(event) => setActionPayload((prev) => ({ ...prev, profile: event.target.value }))}
+                    placeholder="default"
+                  />
+                </FormField>
+                <FormField label="备注">
+                  <Textarea
+                    rows={3}
+                    value={actionPayload.notes}
+                    onChange={(event) => setActionPayload((prev) => ({ ...prev, notes: event.target.value }))}
+                  />
+                </FormField>
+              </>
+            ) : (
+              <>
+                <FormField label={actionModal.type === 'approve' ? '审批人' : '发布人'}>
+                  <TextInput
+                    value={actionPayload.actor}
+                    onChange={(event) => setActionPayload((prev) => ({ ...prev, actor: event.target.value }))}
+                    placeholder="secops.lead"
+                  />
+                </FormField>
+                <FormField label="备注">
+                  <Textarea
+                    rows={3}
+                    value={actionPayload.notes}
+                    onChange={(event) => setActionPayload((prev) => ({ ...prev, notes: event.target.value }))}
+                  />
+                </FormField>
+              </>
+            )}
+          </div>
+        )}
+      </Modal>
+    </>
   );
 }
 
@@ -590,10 +771,10 @@ function BASRunInsight({ report, loading }: { report: BASRunReport; loading: boo
         {loading && <span className="muted">同步中…</span>}
       </div>
       <div className="bas-summary-grid">
-        <SummaryCard label="成功" value={report.summary.success} tone="success" />
-        <SummaryCard label="失败" value={report.summary.failed} tone="danger" />
-        <SummaryCard label="已跳过" value={report.summary.skipped} />
-        <SummaryCard label="总步骤" value={report.summary.total} />
+        <AppSummaryCard label="成功" value={report.summary.success} tone="success" />
+        <AppSummaryCard label="失败" value={report.summary.failed} tone="danger" />
+        <AppSummaryCard label="已跳过" value={report.summary.skipped} tone="warning" />
+        <AppSummaryCard label="总步骤" value={report.summary.total} />
       </div>
       <RunTimeline steps={report.steps} />
       <AttackPathPreview steps={report.steps} />
@@ -662,14 +843,5 @@ function AttackPathPreview({ steps }: { steps?: BASRunReport['steps'] }) {
         </div>
       ))}
     </div>
-  );
-}
-
-function SummaryCard({ label, value, tone }: { label: string; value: number; tone?: 'success' | 'danger' }) {
-  return (
-    <article className={`summary-card ${tone ? `tone-${tone}` : ''}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
   );
 }

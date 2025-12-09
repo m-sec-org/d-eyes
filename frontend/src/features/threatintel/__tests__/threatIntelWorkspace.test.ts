@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { filterJobs, getErrorDocLink, sortArtifacts, statusColor } from '../ThreatIntelWorkspace';
+import { classificationColor, filterJobs, getErrorDocLink, sortArtifacts, statusColor } from '../ThreatIntelWorkspace';
 import type { ThreatIntelJob } from '@/services/types';
 
 describe('ThreatIntelWorkspace helpers', () => {
@@ -29,5 +29,10 @@ describe('ThreatIntelWorkspace helpers', () => {
   it('maps status to color', () => {
     expect(statusColor('succeeded')).toBe('green');
     expect(statusColor('failed')).toBe('red');
+  });
+
+  it('maps classification to unified color', () => {
+    expect(classificationColor('High')).toBe('red');
+    expect(classificationColor(undefined)).toBe('default');
   });
 });

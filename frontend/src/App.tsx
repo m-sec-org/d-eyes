@@ -1,4 +1,5 @@
 import './App.css';
+import { useEffect, useState } from 'react';
 import { CommandPalette } from './components/CommandPalette';
 import { Header } from './components/layout/Header';
 import { Sidebar } from './components/layout/Sidebar';
@@ -12,6 +13,7 @@ import { AssetOverview } from './features/assets/AssetOverview';
 import { SystemConfigCenter } from './features/settings/SystemConfigCenter';
 import { AuditLogView } from './features/audit/AuditLogView';
 import { QueueMonitor } from './features/queues/QueueMonitor';
+import { EventsWorkspace } from './features/events/EventsWorkspace';
 import { TopologyOverview } from './features/topology/TopologyOverview';
 import { BASScenarioConsole } from './features/bas/BASScenarioConsole';
 import { AgentDirectory } from './features/agents/AgentDirectory';
@@ -30,6 +32,16 @@ function App() {
   const { session, loading } = useAuth();
   const navigate = useNavigate();
   useTaskStream();
+  const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setSidebarCollapsed(window.innerWidth <= 1280);
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const handleCommandSelect = (item: CommandItem) => {
     if (item.route) {
@@ -41,13 +53,13 @@ function App() {
     return <div className="app-shell">加载中…</div>;
   }
   return (
-    <div className="app-shell">
+    <div className={isSidebarCollapsed ? 'app-shell sidebar-collapsed' : 'app-shell'}>
       <a href="#main-content" className="skip-link">
         跳至主要内容
       </a>
       <Header onCommandPalette={toggle} user={session?.user} paletteOpen={open} />
       <div className="app-body">
-        <Sidebar />
+        <Sidebar collapsed={isSidebarCollapsed} />
         <main className="app-main" id="main-content" role="main" tabIndex={-1}>
           <Routes>
             <Route
@@ -79,6 +91,14 @@ function App() {
               element={
                 <ProtectedRoute route="/plugins" allowedRoles={['admin']}>
                   <PluginMarketplace />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/events"
+              element={
+                <ProtectedRoute route="/events" allowedRoles={['operator', 'auditor', 'admin']}>
+                  <EventsWorkspace />
                 </ProtectedRoute>
               }
             />

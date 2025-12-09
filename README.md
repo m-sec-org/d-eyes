@@ -34,7 +34,9 @@ D-Eyes是一款由M-SEC社区驱动的综合性安全检测与响应工具，提
 - **灵活的报告机制**：支持多格式输出，便于自动化集成和安全流程对接
 - **开源社区生态**：持续更新的规则库和功能模块，保持对最新威胁的响应能力
 
-## 2. 功能与特性
+## 2. Agent 核心能力
+
+D-Eyes Agent 以 `agent/internal/app.go` 中的 CLI 框架为中心，所有任务共享统一的配置加载、报告管理、威胁情报和沙箱控制逻辑。CLI 与 `remote` 守护进程共用 Runner、Collector、缓存和遥测能力，可在本地一次性执行与 Server 下发模式间自由切换。
 
 ### 2.1 应急响应 (respond)
 
@@ -100,7 +102,7 @@ D-Eyes是一款由M-SEC社区驱动的综合性安全检测与响应工具，提
 - `generate`：从源代码或依赖文件生成SBOM
 - `capture`：捕获当前运行环境的包信息
 
-### 2.6 检测插件系统 (detect)
+### 2.6 检测插件扩展 (detect)
 
 检测插件系统采用插件化架构设计，支持灵活扩展检测能力。
 
@@ -108,7 +110,7 @@ D-Eyes是一款由M-SEC社区驱动的综合性安全检测与响应工具，提
 - **子命令注册机制**：支持向detect命令注册子命令
 - **多样检测能力**：可扩展支持各种检测场景，如恶意代码检测、异常行为分析等
 
-### 2.6 入侵和攻击模拟 (bas)
+### 2.7 入侵和攻击模拟 (bas)
 
 入侵和攻击模拟模块提供主动验证安全防御有效性的能力，通过模拟真实攻击场景，评估系统和网络的安全防护水平。
 
@@ -124,31 +126,81 @@ D-Eyes是一款由M-SEC社区驱动的综合性安全检测与响应工具，提
 - `privilege`：权限提升测试，评估权限控制有效性
 - `lateral`：横向移动模拟，测试网络隔离和访问控制
 - `persistence`：持久化机制测试，验证系统自防护能力
+- 
+### 2.8 操作系统事件采集分析 Collector
 
-### 2.7 分布式管理能力
+跨平台 Collector（Windows ETW、Linux eBPF）需要额外的系统权限与依赖，可参考《[Collector 安装与权限指南](docs/collector-installation-guide.md)》。Collector 管道支持：
 
-D-Eyes提供Agent-Server分布式架构，支持大规模环境的集中管理与分布式执行。
+- **多后端采集**：ETW Provider、eBPF Probe、文件/网络采样器通过 `collector.NewService` 统一管理。
+- **过滤与抽样**：内建过滤引擎、采样规则、动态禁用/启用策略，支持按事件类型、标签与字段匹配。
+- **检测回调**：Collector 命中规则后会将 `DetectionResult` 通过 DetectionSink 注入任务流水线，可配置自动 Respond、打标签或仅记录。
+- **事件流导出**：所有事件写入 `eventstream.Pipeline`，既能排队上报 Server，也能在本地堆栈调试或落盘。
 
-- **Agent注册与心跳**：Agent自动向Server注册并保持心跳连接
-- **任务分发与执行**：Server可向多个Agent分发任务并监控执行状态
-- **结果收集与汇总**：自动收集和汇总各Agent的执行结果
-- **离线工作能力**：支持断线重连和结果缓存，保证任务可靠执行
-- **集中配置管理**：通过Server统一管理Agent配置
-- **BAS场景协调**：支持跨Agent的协同攻击模拟，实现复杂场景验证
+### 2.9 Agent-Server联动
 
-### 2.8 Collector 部署与权限
+D-Eyes 提供 Agent-Server 分布式架构，`agent/internal/agent/daemon.go` 的远程 Runner 负责：
 
-跨平台 Collector（Windows ETW、Linux eBPF）需要额外的系统权限与依赖，可参考《[Collector 安装与权限指南](docs/collector-installation-guide.md)》：
+- **注册与心跳**：Agent 启动后携带能力、标签向 Server 注册，实时上报负载、Collector 状态与遥测指标。
+- **任务调度**：自动轮询 gRPC 任务租约，支持并发运行、优先级自适应和 BAS 沙箱标记，未识别任务会以失败结果回报。
+- **断点续传**：本地 FileStore 缓存所有执行结果与工件，网络抖动时会自动补报并跟踪重试次数。
+- **配置热更新**：守护进程附带配置文件 watch，远程模式下也能动态加载 Collector 与任务配置。
+- **自动化联动**：Collector 检测可触发 Respond 任务，通过 `tasks.ExecuteWithResult` 直接复用 CLI 逻辑，保证在线与离线体验一致。
 
-- Windows：以管理员身份运行 `d-eyes collect --backend=etw` 或配置服务账户，确保 Provider 注册与 ETW Session 权限。
-- Linux：内核 ≥5.8，安装 `clang/llvm` 与 `linux-headers-$(uname -r)`，为二进制授予 `CAP_BPF/CAP_SYS_RESOURCE` 或以 root 启动，并调大 `memlock` 限制。
-- CLI 可通过 `--backend`、`--output-mode`、`--stream-*` 等参数快速调试 Collector，状态会上报到 Server `/api/v1/collector/status`/SSE。
+### 2.10 任务执行框架与扩展能力
 
-## 3. 代码组织结构
+- **Runner 工厂**：`agent/internal/app.go` 注册 respond/baseline/bas 等 Runner，可被测试或插件通过 `OverrideRunnerFactoryForTesting` 和 `TaskRunnerByName` 替换。
+- **TaskRequest 统一参数**：`agent/internal/tasks/types.go` 负责配置默认值、Threat Intel 管理器、报告目录以及策略校验，所有命令复用同一套元数据字段。
+- **威胁情报与沙箱注入**：`tasks.SetThreatIntelProvider`、`sandbox.SetControllerFactory`、`detect/rules.SetRuleEngineFactory` 支持在测试、企业定制或插件内替换底层实现。
+- **结果缓存与策略控制**：`tasks.Execute` 默认启用资源采样、策略评估、JSON 摘要打印，并利用 `taskcache` 在 respond/inventory/supplychain 等任务中做去重与增量扫描。
+
+### 2.11 遥测、情报与Artifact流水线
+
+- **系统遥测**：`agent/internal/telemetry` 周期性采集 CPU、内存、IO 与任务资源，打入每次心跳及执行结果，Server 可直接复现现场。
+- **Artifact 上传**：远程模式根据 `remote.ServerAPIBase` 自动创建 `artifacts.Client`，将报告/样本通过 `/api/v1/artifacts` 安全上传，再由 Server 统一入库或提交情报。
+- **事件与情报桥接**：`event_uploader` 将 Collector 事件批量推送到 `/api/v1/events/ingest`，Server 的检测引擎、Playbook、威胁情报编排都以此为触发源。
+
+## 3. Server 核心能力
+
+Server 端 (`server/internal/app`) 会在启动时初始化数据库存储、任务队列、调度器、事件服务、威胁情报、行为分析、Playbook 与 API。各模块之间通过 Hub/SSE、队列或存储解耦，便于水平扩展与压测。
+
+### 3.1 调度与任务编排
+
+- **多队列调度**：`scheduler.Scheduler` 将任务落盘在 PostgreSQL（或内存）后，再写入内存/Redis 队列，按 Agent 能力、标签、并发上限与 BAS 专属配额发放租约。
+- **自愈与监控**：支持心跳超时判定、任务 Lease 续租、`ops/self-heal` 接口手动恢复，以及 Prometheus 监控 `TasksInFlight`、BAS 队列深度等指标。
+- **结果写回**：`grpcsvc.Service` 负责接收执行摘要、工件与遥测，并驱动审计记录、威胁情报样本提交与行为图谱更新。
+- **多租使用例**：BAS 场景管理器 (`internal/basscenarios`) 内置审批策略与资源上限，可按租户/网络边界缓存场景定义，支持跨 Agent 协同。
+
+### 3.2 事件采集、检测与响应
+
+- **优先级事件管道**：`internal/eventing.Service` 把 `/api/v1/events/ingest` 接收到的事件按优先级堆积、溢写与缓存，支持自定义溢出策略、告警与限流。
+- **解析与保留**：可配置多种 Parser 插件/禁用列表，事件持久化后按租户、优先级和保留策略清理。
+- **检测引擎**：`DetectionEngine` 支持规则匹配与轻量 ML 模型，命中后可以触发 Respond 任务、提交威胁情报、发送 SSE 告警并统计指标。
+- **Collector 控制面**：`collectorctrl.Hub` 与 `/api/v1/collector` API 可实时查看 Agent 上的 Collector 运行、下发禁用或审批策略。
+
+### 3.3 自动化、模板与扩展
+
+- **Playbook 引擎**：`internal/playbook.Engine` 监听任务、行为、情报 Hub，支持按触发条件执行多步骤操作（如隔离、补采、BAS 触发），并可通过 API 手动执行。
+- **任务模板/目录**：`templates.Manager` 与 `taskcatalog.Manager` 提供任务元数据、Profile 校验与版本化，方便 Ops/前端构建任务向导。
+- **插件生命周期**：`internal/plugins.Manager` 维护插件 Manifest、回滚历史和 SSE 事件，可配合 Server API 进行安装、回退与准入审查。
+- **报告中心**：`reporttemplates`、`/api/v1/reports` 支持 HTML/JSON 模板渲染与归档，便于审计和导出。
+
+### 3.4 威胁情报与行为分析
+
+- **情报编排**：`threatintel.Orchestrator` 将 Agent 上传的样本与指标派发到 OpenTIP、MetaDefender 等 Provider，聚合 verdict 后写入数据库与 SSE Hub。
+- **行为分析**：`behavior.Recorder/Analyzer/GraphService` 接收心跳与任务遥测，生成异常 (Anomaly) 事件、图谱和趋势数据，供 Playbook 与前端订阅。
+- **事件回溯**：`auditlog.Manager`、`audit.Logger`、BAS 审计记录共同构成全过程轨迹，支持 API 查询与文件留存。
+
+### 3.5 运维与安全治理
+
+- **认证授权**：`rbac`、`security.MFAStore`、`security.Principal` 提供角色权限、MFA 头校验与上下文注入，敏感接口可要求管理员级别+MFA。
+- **工件与密钥管理**：`artifacts.Manager` 通过分片上传、TTL、哈希校验保护大文件，`certmanager` 统一发放 TLS 与 Agent 证书。
+- **运维接口**：`/api/v1/ops/self-heal`、`/api/v1/queue`、`/api/v1/metrics`、`streams.SSE` 帮助快速定位调度瓶颈、审批阻塞与 Collector 状态。
+
+## 4. 代码组织结构
 
 D-Eyes项目采用清晰的代码组织结构，将Agent和Server功能分离，便于独立开发和部署。
 
-### 3.1 整体结构
+### 4.1 整体结构
 
 ```
 ├── agent/               # Agent端代码，包含命令行工具实现
@@ -170,7 +222,7 @@ D-Eyes项目采用清晰的代码组织结构，将Agent和Server功能分离，
 └── openspec/            # 规范文档
 ```
 
-### 3.2 Agent端详细结构
+### 4.2 Agent端详细结构
 
 Agent端采用模块化设计，各功能模块相对独立，便于维护和扩展。
 
@@ -199,7 +251,7 @@ Agent端采用模块化设计，各功能模块相对独立，便于维护和扩
   - **reporting/**：报告生成
 - **yaraRules/**：YARA规则文件，用于恶意软件检测
 
-### 3.3 Server端详细结构
+### 4.3 Server端详细结构
 
 Server端采用微服务思想设计，各组件通过接口交互，便于扩展和维护。
 
@@ -247,9 +299,9 @@ Server端采用微服务思想设计，各组件通过接口交互，便于扩�
 - [日志与 Trace](docs/logging-trace-guide.md) & `scripts/logging/*.sh`：集中化审计日志、追踪任务调度与 SSE Trace 关联。
 - [阶段二发布 Checklist](docs/release-checklist.md)：回归测试、性能/安全评估与上线记录模板。
 
-## 4. 开发规范
+## 6. 开发规范
 
-### 4.1 代码规范
+### 6.1 代码规范
 
 1. **Go语言规范**
    - 遵循Go官方代码规范和惯例
@@ -271,7 +323,7 @@ Server端采用微服务思想设计，各组件通过接口交互，便于扩�
    - 使用适当的同步原语（mutex、channel等）
    - 避免死锁和资源竞争
 
-### 4.2 架构规范
+### 6.2 架构规范
 
 1. **模块化设计**
    - 功能模块间低耦合、高内聚
@@ -293,7 +345,7 @@ Server端采用微服务思想设计，各组件通过接口交互，便于扩�
    - 支持配置文件、环境变量和命令行参数
    - 提供合理的默认值
 
-### 4.3 测试规范
+### 6.3 测试规范
 
 1. **单元测试**
    - 关键功能必须有单元测试
@@ -310,7 +362,7 @@ Server端采用微服务思想设计，各组件通过接口交互，便于扩�
    - 定期检查测试覆盖率
    - 新增代码必须添加相应测试
 
-### 4.4 文档规范
+### 6.4 文档规范
 
 1. **代码文档**
    - 包、函数和类型必须有文档注释
@@ -327,7 +379,7 @@ Server端采用微服务思想设计，各组件通过接口交互，便于扩�
    - 包含流程图和组件关系图
    - 说明设计决策和权衡
 
-### 4.5 版本控制规范
+### 6.5 版本控制规范
 
 1. **Git工作流**
    - 使用功能分支开发
@@ -344,9 +396,9 @@ Server端采用微服务思想设计，各组件通过接口交互，便于扩�
    - 锁定依赖版本
    - 定期更新依赖以修复安全漏洞
 
-## 5. 快速开始
+## 7. 快速开始
 
-### 5.1 安装
+### 7.1 安装
 
 ```bash
 # 从源码编译
@@ -356,7 +408,7 @@ go build -o d-eyes ./cmd/agent
 # 或下载预编译二进制文件
 ```
 
-### 5.2 基本使用
+### 7.2 基本使用
 
 ```bash
 # 查看版本
@@ -378,7 +430,7 @@ d-eyes supplychain --mode generate --path ./project
 d-eyes bas --profile reconnaissance --targets 192.168.1.0/24
 ```
 
-### 5.3 分布式模式
+### 7.3 分布式模式
 
 1. 启动Server端：
 ```bash
@@ -404,7 +456,7 @@ remote:
 d-eyes remote
 ```
 
-## 6. 核心服务注入
+## 8. 核心服务注入
 
 为了方便测试与高级扩展，Agent 暴露了三个核心 service 的注入接口：
 
@@ -414,7 +466,7 @@ d-eyes remote
 
 不调用这些 setter 时，CLI 与远程运行仍使用默认实现，行为保持一致。
 
-## 7. 贡献指南
+## 9. 贡献指南
 
 我们欢迎社区贡献！如果您有兴趣参与D-Eyes的开发，请遵循以下步骤：
 
@@ -426,6 +478,6 @@ d-eyes remote
 
 详细的贡献指南请参考项目文档。
 
-## 8. 许可证
+## 10. 许可证
 
 本项目采用开源许可证，详见LICENSE文件。

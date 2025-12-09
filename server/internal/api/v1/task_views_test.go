@@ -48,6 +48,7 @@ func TestTaskViewCRUD(t *testing.T) {
 		nil, // metrics
 		nil, // task stream
 		nil, // queue stream
+		nil, // detection stream
 		nil, // threat stream
 		nil, // anomaly stream
 	)

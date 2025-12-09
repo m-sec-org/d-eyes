@@ -33,6 +33,15 @@ const seedCommands: CommandItem[] = [
     keywords: ['risk', '风险'],
   },
   {
+    id: 'view-events',
+    type: 'view',
+    label: '打开事件工作台',
+    description: '浏览 ETW/eBPF 事件时间线与检测告警',
+    shortcut: 'G E',
+    route: '/events',
+    keywords: ['event', '事件', 'workspace'],
+  },
+  {
     id: 'action-create-task',
     type: 'action',
     label: '创建响应任务',

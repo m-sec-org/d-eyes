@@ -7,32 +7,41 @@ import (
 )
 
 type Metrics struct {
-	Heartbeats             prometheus.Counter
-	TasksLeased            prometheus.Counter
-	TasksCompleted         *prometheus.CounterVec
-	TaskQueueDepth         prometheus.Gauge
-	TaskTimeToLease        prometheus.Histogram
-	TaskRunDuration        prometheus.Histogram
-	TasksInFlight          prometheus.Gauge
-	TaskStatus             *prometheus.GaugeVec
-	AgentCPUPercent        prometheus.Histogram
-	AgentMemoryPercent     prometheus.Histogram
-	AgentIOUtilPercent     prometheus.Histogram
-	BASRuns                *prometheus.CounterVec
-	BASSandboxFallbacks    *prometheus.CounterVec
-	BASApprovals           *prometheus.CounterVec
-	BASBacklog             prometheus.Gauge
-	BASInFlight            prometheus.Gauge
-	BASQueueWait           prometheus.Histogram
-	ThreatIntelJobs        *prometheus.CounterVec
-	ThreatIntelQueue       prometheus.Gauge
-	ThreatIntelLatency     *prometheus.HistogramVec
-	SystemEventsIngested   prometheus.Counter
-	SystemEventsDropped    prometheus.Counter
-	SystemEventsQueue      prometheus.Gauge
-	SystemEventsLatency    prometheus.Histogram
-	CollectorConfigUpdates prometheus.Counter
-	CollectorStatusAlerts  *prometheus.CounterVec
+	Heartbeats                   prometheus.Counter
+	TasksLeased                  prometheus.Counter
+	TasksCompleted               *prometheus.CounterVec
+	TaskQueueDepth               prometheus.Gauge
+	TaskTimeToLease              prometheus.Histogram
+	TaskRunDuration              prometheus.Histogram
+	TasksInFlight                prometheus.Gauge
+	TaskStatus                   *prometheus.GaugeVec
+	AgentCPUPercent              prometheus.Histogram
+	AgentMemoryPercent           prometheus.Histogram
+	AgentIOUtilPercent           prometheus.Histogram
+	BASRuns                      *prometheus.CounterVec
+	BASSandboxFallbacks          *prometheus.CounterVec
+	BASApprovals                 *prometheus.CounterVec
+	BASBacklog                   prometheus.Gauge
+	BASInFlight                  prometheus.Gauge
+	BASQueueWait                 prometheus.Histogram
+	ThreatIntelJobs              *prometheus.CounterVec
+	ThreatIntelQueue             prometheus.Gauge
+	ThreatIntelLatency           *prometheus.HistogramVec
+	SystemEventsIngested         prometheus.Counter
+	SystemEventsDropped          prometheus.Counter
+	SystemEventsQueue            prometheus.Gauge
+	SystemEventsQueueByPriority  *prometheus.GaugeVec
+	SystemEventsLatency          prometheus.Histogram
+	SystemEventsIngestedByTier   *prometheus.CounterVec
+	SystemEventsBackpressure     *prometheus.CounterVec
+	SystemEventParsersConfigured *prometheus.GaugeVec
+	SystemEventParserFailures    *prometheus.CounterVec
+	DetectionsTriggered          *prometheus.CounterVec
+	DetectionsAutoResponded      *prometheus.CounterVec
+	CollectorConfigUpdates       prometheus.Counter
+	CollectorStatusAlerts        *prometheus.CounterVec
+	CollectorRolloutTargets      *prometheus.GaugeVec
+	CollectorRolloutActions      *prometheus.CounterVec
 }
 
 func New(reg prometheus.Registerer) *Metrics {
@@ -182,6 +191,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name:      "queue_depth",
 			Help:      "Current buffered system events waiting to be flushed to storage.",
 		}),
+		SystemEventsQueueByPriority: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "queue_depth_priority",
+			Help:      "Buffered system events per priority lane.",
+		}, []string{"priority"}),
 		SystemEventsLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Namespace: "d_eyes",
 			Subsystem: "events",
@@ -189,6 +204,42 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help:      "Time from event receipt to durable storage.",
 			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
 		}),
+		SystemEventsIngestedByTier: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "ingested_by_tier_total",
+			Help:      "Count of system events ingested by priority/tier.",
+		}, []string{"priority", "tier"}),
+		SystemEventsBackpressure: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "backpressure_total",
+			Help:      "Count of backpressure signals grouped by priority and reason.",
+		}, []string{"priority", "reason"}),
+		SystemEventParsersConfigured: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "parsers_configured",
+			Help:      "Configured parser plugins registered at runtime.",
+		}, []string{"parser"}),
+		SystemEventParserFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "parser_failures_total",
+			Help:      "Count of parser validation failures grouped by parser and reason.",
+		}, []string{"parser", "reason"}),
+		DetectionsTriggered: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "detections_triggered_total",
+			Help:      "Count of detection alerts grouped by rule and severity.",
+		}, []string{"rule", "severity"}),
+		DetectionsAutoResponded: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "events",
+			Name:      "detections_auto_respond_total",
+			Help:      "Count of auto respond tasks created from detections grouped by rule.",
+		}, []string{"rule"}),
 		CollectorConfigUpdates: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "d_eyes",
 			Subsystem: "collector",
@@ -201,6 +252,18 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name:      "status_alerts_total",
 			Help:      "Collector status reports grouped by tenant and alert level.",
 		}, []string{"tenant", "level"}),
+		CollectorRolloutTargets: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "d_eyes",
+			Subsystem: "collector",
+			Name:      "rollout_targets",
+			Help:      "Number of rollout targets grouped by rollout and state.",
+		}, []string{"rollout", "state"}),
+		CollectorRolloutActions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "d_eyes",
+			Subsystem: "collector",
+			Name:      "rollout_actions_total",
+			Help:      "Count of rollout actions grouped by action and result.",
+		}, []string{"action", "result"}),
 	}
 	reg.MustRegister(
 		m.Heartbeats,
@@ -226,9 +289,18 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.SystemEventsIngested,
 		m.SystemEventsDropped,
 		m.SystemEventsQueue,
+		m.SystemEventsQueueByPriority,
 		m.SystemEventsLatency,
+		m.SystemEventsIngestedByTier,
+		m.SystemEventsBackpressure,
+		m.SystemEventParsersConfigured,
+		m.SystemEventParserFailures,
+		m.DetectionsTriggered,
+		m.DetectionsAutoResponded,
 		m.CollectorConfigUpdates,
 		m.CollectorStatusAlerts,
+		m.CollectorRolloutTargets,
+		m.CollectorRolloutActions,
 	)
 	return m
 }

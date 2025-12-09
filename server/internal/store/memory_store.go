@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -41,6 +42,9 @@ type memoryStore struct {
 	basScenarios      map[uuid.UUID]*model.BASScenario
 	collectorConfigs  map[uuid.UUID]*model.CollectorConfigSnapshot
 	collectorStatuses map[uuid.UUID]*model.CollectorStatusSnapshot
+	collectorRollouts map[uuid.UUID]*model.CollectorRollout
+	rolloutTargets    map[uuid.UUID]map[uuid.UUID]*model.CollectorRolloutTarget
+	rolloutByAgent    map[uuid.UUID]map[uuid.UUID]*model.CollectorRolloutTarget
 }
 
 func newMemoryStore() Store {
@@ -70,6 +74,9 @@ func newMemoryStore() Store {
 		basScenarios:      make(map[uuid.UUID]*model.BASScenario),
 		collectorConfigs:  make(map[uuid.UUID]*model.CollectorConfigSnapshot),
 		collectorStatuses: make(map[uuid.UUID]*model.CollectorStatusSnapshot),
+		collectorRollouts: make(map[uuid.UUID]*model.CollectorRollout),
+		rolloutTargets:    make(map[uuid.UUID]map[uuid.UUID]*model.CollectorRolloutTarget),
+		rolloutByAgent:    make(map[uuid.UUID]map[uuid.UUID]*model.CollectorRolloutTarget),
 	}
 }
 
@@ -1761,6 +1768,79 @@ func (m *memoryStore) CountSystemEvents(_ context.Context, since time.Time) (int
 	return count, nil
 }
 
+func (m *memoryStore) QuerySystemEvents(_ context.Context, query SystemEventQuery) ([]model.SystemEventRecord, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	limit := ClampEventQueryLimit(query.Limit)
+	priorities := normalizeStringSet(query.Priorities)
+	tiers := normalizeStringSet(query.StorageTiers)
+	collector := strings.ToLower(strings.TrimSpace(query.Collector))
+	collectorKind := strings.ToLower(strings.TrimSpace(query.CollectorKind))
+	eventType := strings.ToLower(strings.TrimSpace(query.EventType))
+	source := strings.ToLower(strings.TrimSpace(query.Source))
+	results := make([]model.SystemEventRecord, 0, limit)
+	iterate := func(start, end, step int) {
+		for i := start; i != end; i += step {
+			if len(results) >= limit {
+				return
+			}
+			evt := m.systemEvents[i]
+			if !matchEventFilters(evt, query, priorities, tiers, collector, collectorKind, eventType, source) {
+				continue
+			}
+			if !passesCursor(evt, query.SortAscending, query.CursorReceivedAt, query.CursorID) {
+				continue
+			}
+			cp := cloneSystemEventRecord(evt)
+			if cp.Priority == "" {
+				cp.Priority = DefaultPriorityLabel(evt.Priority)
+			}
+			if cp.StorageTier == "" {
+				cp.StorageTier = DefaultTierLabel(evt.StorageTier)
+			}
+			results = append(results, cp)
+		}
+	}
+	if query.SortAscending {
+		iterate(0, len(m.systemEvents), 1)
+	} else {
+		iterate(len(m.systemEvents)-1, -1, -1)
+	}
+	return results, nil
+}
+
+func (m *memoryStore) AggregateSystemEvents(_ context.Context, query SystemEventQuery) (SystemEventAggregates, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	priorities := normalizeStringSet(query.Priorities)
+	tiers := normalizeStringSet(query.StorageTiers)
+	collector := strings.ToLower(strings.TrimSpace(query.Collector))
+	collectorKind := strings.ToLower(strings.TrimSpace(query.CollectorKind))
+	eventType := strings.ToLower(strings.TrimSpace(query.EventType))
+	src := strings.ToLower(strings.TrimSpace(query.Source))
+	result := SystemEventAggregates{
+		ByEventType: make(map[string]int64),
+		BySource:    make(map[string]int64),
+	}
+	for _, evt := range m.systemEvents {
+		if !matchEventFilters(evt, query, priorities, tiers, collector, collectorKind, eventType, src) {
+			continue
+		}
+		result.Total++
+		typeKey := evt.EventType
+		if typeKey == "" {
+			typeKey = "(unknown)"
+		}
+		result.ByEventType[typeKey]++
+		sourceKey := evt.Source
+		if sourceKey == "" {
+			sourceKey = "(unknown)"
+		}
+		result.BySource[sourceKey]++
+	}
+	return result, nil
+}
+
 func (m *memoryStore) UpsertCollectorConfig(_ context.Context, snapshot *model.CollectorConfigSnapshot) error {
 	if snapshot == nil || snapshot.AgentID == uuid.Nil {
 		return errors.New("collector config: agent id required")
@@ -1850,6 +1930,160 @@ func (m *memoryStore) ListCollectorStatuses(_ context.Context) ([]*model.Collect
 	return results, nil
 }
 
+func (m *memoryStore) CreateCollectorRollout(_ context.Context, rollout *model.CollectorRollout, targets []*model.CollectorRolloutTarget) error {
+	if rollout == nil {
+		return errors.New("collector rollout: rollout required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rollout.ID == uuid.Nil {
+		rollout.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	if rollout.CreatedAt.IsZero() {
+		rollout.CreatedAt = now
+	}
+	if rollout.StartedAt.IsZero() {
+		rollout.StartedAt = rollout.CreatedAt
+	}
+	if rollout.Status == "" {
+		rollout.Status = model.CollectorRolloutStatusInProgress
+	}
+	rollout.TargetCount = len(targets)
+	m.collectorRollouts[rollout.ID] = cloneRollout(rollout)
+	targetMap := make(map[uuid.UUID]*model.CollectorRolloutTarget, len(targets))
+	for _, target := range targets {
+		if target == nil || target.AgentID == uuid.Nil {
+			continue
+		}
+		if target.RolloutID == uuid.Nil {
+			target.RolloutID = rollout.ID
+		}
+		if target.CreatedAt.IsZero() {
+			target.CreatedAt = now
+		}
+		if target.UpdatedAt.IsZero() {
+			target.UpdatedAt = now
+		}
+		if target.State == "" {
+			target.State = model.CollectorRolloutTargetStatePending
+		}
+		clone := cloneRolloutTarget(target)
+		targetMap[clone.AgentID] = clone
+		if _, ok := m.rolloutByAgent[clone.AgentID]; !ok {
+			m.rolloutByAgent[clone.AgentID] = make(map[uuid.UUID]*model.CollectorRolloutTarget)
+		}
+		m.rolloutByAgent[clone.AgentID][rollout.ID] = clone
+	}
+	m.rolloutTargets[rollout.ID] = targetMap
+	return nil
+}
+
+func (m *memoryStore) UpdateCollectorRollout(_ context.Context, rollout *model.CollectorRollout) error {
+	if rollout == nil || rollout.ID == uuid.Nil {
+		return errors.New("collector rollout: id required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.collectorRollouts[rollout.ID]; !ok {
+		return ErrNotFound
+	}
+	m.collectorRollouts[rollout.ID] = cloneRollout(rollout)
+	return nil
+}
+
+func (m *memoryStore) GetCollectorRollout(_ context.Context, rolloutID uuid.UUID) (*model.CollectorRollout, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rollout, ok := m.collectorRollouts[rolloutID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return cloneRollout(rollout), nil
+}
+
+func (m *memoryStore) ListCollectorRollouts(_ context.Context, filter CollectorRolloutFilter) ([]*model.CollectorRollout, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	statuses := make(map[model.CollectorRolloutStatus]struct{}, len(filter.Statuses))
+	for _, st := range filter.Statuses {
+		statuses[st] = struct{}{}
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	results := make([]*model.CollectorRollout, 0, len(m.collectorRollouts))
+	for _, roll := range m.collectorRollouts {
+		if len(statuses) > 0 {
+			if _, ok := statuses[roll.Status]; !ok {
+				continue
+			}
+		}
+		results = append(results, cloneRollout(roll))
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].CreatedAt.After(results[j].CreatedAt)
+	})
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+func (m *memoryStore) ListCollectorRolloutTargets(_ context.Context, rolloutID uuid.UUID) ([]*model.CollectorRolloutTarget, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	targets, ok := m.rolloutTargets[rolloutID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	results := make([]*model.CollectorRolloutTarget, 0, len(targets))
+	for _, tgt := range targets {
+		results = append(results, cloneRolloutTarget(tgt))
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return strings.Compare(results[i].AgentName, results[j].AgentName) < 0
+	})
+	return results, nil
+}
+
+func (m *memoryStore) FindCollectorRolloutTargetsByAgent(_ context.Context, agentID uuid.UUID) ([]*model.CollectorRolloutTarget, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rollouts, ok := m.rolloutByAgent[agentID]
+	if !ok {
+		return nil, nil
+	}
+	results := make([]*model.CollectorRolloutTarget, 0, len(rollouts))
+	for _, tgt := range rollouts {
+		results = append(results, cloneRolloutTarget(tgt))
+	}
+	return results, nil
+}
+
+func (m *memoryStore) UpdateCollectorRolloutTarget(_ context.Context, target *model.CollectorRolloutTarget) error {
+	if target == nil || target.RolloutID == uuid.Nil || target.AgentID == uuid.Nil {
+		return errors.New("collector rollout target: invalid identifiers")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	targets, ok := m.rolloutTargets[target.RolloutID]
+	if !ok {
+		return ErrNotFound
+	}
+	if _, ok := targets[target.AgentID]; !ok {
+		return ErrNotFound
+	}
+	clone := cloneRolloutTarget(target)
+	targets[target.AgentID] = clone
+	if _, ok := m.rolloutByAgent[target.AgentID]; !ok {
+		m.rolloutByAgent[target.AgentID] = make(map[uuid.UUID]*model.CollectorRolloutTarget)
+	}
+	m.rolloutByAgent[target.AgentID][target.RolloutID] = clone
+	return nil
+}
+
 func copyTISample(src *model.ThreatIntelSample) model.ThreatIntelSample {
 	cp := *src
 	if src.Metadata != nil {
@@ -1893,6 +2127,46 @@ func copyTIVerdict(src *model.ThreatIntelVerdict) model.ThreatIntelVerdict {
 		cp.Raw = append([]byte(nil), src.Raw...)
 	}
 	return cp
+}
+
+func cloneRollout(src *model.CollectorRollout) *model.CollectorRollout {
+	if src == nil {
+		return nil
+	}
+	cp := *src
+	if src.Config != nil {
+		cp.Config = append([]byte(nil), src.Config...)
+	}
+	if len(src.Selector) > 0 {
+		cp.Selector = copyMap(src.Selector)
+	}
+	if src.CompletedAt != nil {
+		val := *src.CompletedAt
+		cp.CompletedAt = &val
+	}
+	if src.RolledBackAt != nil {
+		val := *src.RolledBackAt
+		cp.RolledBackAt = &val
+	}
+	return &cp
+}
+
+func cloneRolloutTarget(src *model.CollectorRolloutTarget) *model.CollectorRolloutTarget {
+	if src == nil {
+		return nil
+	}
+	cp := *src
+	if src.Metadata != nil {
+		cp.Metadata = copyMap(src.Metadata)
+	}
+	if src.PreviousConfig != nil {
+		cp.PreviousConfig = append([]byte(nil), src.PreviousConfig...)
+	}
+	if src.AckedAt != nil {
+		val := *src.AckedAt
+		cp.AckedAt = &val
+	}
+	return &cp
 }
 
 func cloneBASScenario(src *model.BASScenario) *model.BASScenario {
@@ -1960,6 +2234,98 @@ func copyMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func matchEventFilters(evt model.SystemEventRecord, query SystemEventQuery, priorities map[string]struct{}, tiers map[string]struct{}, collector, collectorKind, eventType, source string) bool {
+	if query.AgentID != uuid.Nil && evt.AgentID != query.AgentID {
+		return false
+	}
+	if collector != "" && strings.ToLower(evt.Collector) != collector {
+		return false
+	}
+	if collectorKind != "" && strings.ToLower(evt.CollectorKind) != collectorKind {
+		return false
+	}
+	if eventType != "" && strings.ToLower(evt.EventType) != eventType {
+		return false
+	}
+	if source != "" && strings.ToLower(evt.Source) != source {
+		return false
+	}
+	if !query.Since.IsZero() && evt.ReceivedAt.Before(query.Since) {
+		return false
+	}
+	if !query.Until.IsZero() && evt.ReceivedAt.After(query.Until) {
+		return false
+	}
+	if len(priorities) > 0 {
+		label := DefaultPriorityLabel(evt.Priority)
+		if _, ok := priorities[label]; !ok {
+			return false
+		}
+	}
+	if len(tiers) > 0 {
+		label := DefaultTierLabel(evt.StorageTier)
+		if _, ok := tiers[label]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func passesCursor(evt model.SystemEventRecord, ascending bool, cursorTime time.Time, cursorID uuid.UUID) bool {
+	if cursorTime.IsZero() {
+		return true
+	}
+	if ascending {
+		if evt.ReceivedAt.After(cursorTime) {
+			return true
+		}
+		if evt.ReceivedAt.Equal(cursorTime) && compareUUID(evt.ID, cursorID) > 0 {
+			return true
+		}
+		return false
+	}
+	if evt.ReceivedAt.Before(cursorTime) {
+		return true
+	}
+	if evt.ReceivedAt.Equal(cursorTime) && compareUUID(evt.ID, cursorID) < 0 {
+		return true
+	}
+	return false
+}
+
+func compareUUID(a, b uuid.UUID) int {
+	return bytes.Compare(a[:], b[:])
+}
+
+func cloneSystemEventRecord(evt model.SystemEventRecord) model.SystemEventRecord {
+	cp := evt
+	if cp.Metadata != nil {
+		cp.Metadata = copyMap(cp.Metadata)
+	}
+	if cp.Tags != nil {
+		cp.Tags = copyMap(cp.Tags)
+	}
+	if cp.Payload != nil {
+		cp.Payload = append([]byte(nil), cp.Payload...)
+	}
+	if cp.Raw != nil {
+		cp.Raw = append([]byte(nil), cp.Raw...)
+	}
+	return cp
+}
+
+func normalizeStringSet(values []string) map[string]struct{} {
+	normalized := NormalizeStringList(values)
+	if len(normalized) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(normalized))
+	for _, v := range normalized {
+		set[v] = struct{}{}
+	}
+	return set
 }
 
 func nowIfZero(t time.Time) time.Time {

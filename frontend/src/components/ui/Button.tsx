@@ -10,6 +10,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   block?: boolean;
   leadingIcon?: ReactNode;
   trailingIcon?: ReactNode;
+  danger?: boolean;
 }
 
 export function Button({
@@ -20,13 +21,16 @@ export function Button({
   leadingIcon,
   trailingIcon,
   children,
+  danger,
   ...props
 }: ButtonProps) {
+  const composedVariant = danger ? 'danger' : variant;
+
   return (
     <button
       className={cn(
         'ui-button',
-        `ui-button--${variant}`,
+        `ui-button--${composedVariant}`,
         size === 'sm' && 'ui-button--sm',
         block && 'ui-button--block',
         className

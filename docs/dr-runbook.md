@@ -55,6 +55,7 @@
 | `GET /api/v1/security/mfa` | 查看当前 MFA 配置、Header 名称和缓存的秘钥。 |
 | `POST /api/v1/security/mfa/secrets` | 从 Vault/Secrets Manager 拉取或直接提交 JSON，实时更新验证码。 |
 | `POST /api/v1/playbooks/:id/approvals` | 在灾备演练中走完审批链确保自动化脚本受控。 |
+| `POST /api/v1/collector/configs/rollouts` | DR 场景下可批量禁用/启用 Collector 配置，配合 `docs/collector-diagnostics.md` 验证新 Region 的采集健康度。 |
 
 ## 7. 复盘 checklist
 

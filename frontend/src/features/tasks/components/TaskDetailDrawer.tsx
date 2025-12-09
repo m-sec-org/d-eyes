@@ -44,7 +44,7 @@ export function TaskDetailDrawer({ task, onClose }: TaskDetailDrawerProps) {
       width={480}
       onClose={onClose}
       open={!!task}
-      destroyOnClose
+      destroyOnHidden
       aria-label="任务详情抽屉"
     >
       {task && (

@@ -20,4 +20,15 @@ export const mockReportSummary = {
   ],
   totals: { respond: 128, inventory: 64 },
   status: { running: 4, succeeded: 97, failed: 27 },
+  trends: {
+    period: '较前 24 小时',
+    totals: {
+      respond: { delta: 12, trend: 'up' },
+      inventory: { delta: -3, trend: 'down' },
+    },
+    status: {
+      failed: { delta: -4, trend: 'down' },
+      running: { delta: 6, trend: 'up' },
+    },
+  },
 };

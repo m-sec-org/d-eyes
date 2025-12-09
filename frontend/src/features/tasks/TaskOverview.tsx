@@ -36,6 +36,8 @@ export function TaskOverview() {
     refresh();
   };
 
+  const activeViewName = filterState.views.find((view) => view.id === filterState.filters.viewId)?.name;
+
   return (
     <div className="task-overview">
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -56,6 +58,8 @@ export function TaskOverview() {
           }
         />
 
+        <TaskBoard tasks={tasks} loading={isLoading} summary={summary} />
+
         <TaskFilters
           filters={filterState.filters}
           views={filterState.views}
@@ -69,12 +73,6 @@ export function TaskOverview() {
           onRemoveView={filterState.removeView}
         />
 
-        <TaskLiveMonitor
-          tasks={tasks}
-          queueSummary={queue.summary}
-          queueStatus={queue.status}
-        />
-        <TaskBoard tasks={tasks} loading={isLoading} summary={summary} />
         <TaskList
           tasks={tasks}
           loading={isLoading}
@@ -87,6 +85,13 @@ export function TaskOverview() {
           onBulkRetry={handleBulkRetry}
           onBulkCancel={handleBulkCancel}
           onLoadMore={loadMore}
+          activeViewName={activeViewName}
+        />
+        
+        <TaskLiveMonitor
+          tasks={tasks}
+          queueSummary={queue.summary}
+          queueStatus={queue.status}
         />
       </Space>
 

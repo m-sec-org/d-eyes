@@ -1,0 +1,52 @@
+.queue-monitor-panel .ant-tabs-content-holder {
+  max-height: 420px;
+  overflow: hidden;
+}
+
+.queue-panel-scroll {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.queue-timeline-row {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--ant-color-border-secondary);
+}
+
+.queue-timeline-meta {
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.queue-timeline-body {
+  display: grid;
+  grid-template-columns: 6px 1fr;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.queue-timeline-status {
+  width: 6px;
+  border-radius: 999px;
+  height: 100%;
+  background: var(--ant-color-primary);
+  margin-top: 4px;
+}
+
+.queue-timeline-status[data-status='failed'] {
+  background: var(--ant-color-error);
+}
+
+.queue-timeline-status[data-status='running'],
+.queue-timeline-status[data-status='leased'] {
+  background: var(--ant-color-success);
+}
+
+.queue-timeline-status[data-status='pending'] {
+  background: var(--ant-color-warning);
+}

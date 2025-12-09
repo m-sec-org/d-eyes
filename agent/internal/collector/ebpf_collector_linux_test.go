@@ -16,6 +16,9 @@ func TestConvertEBPFEvent(t *testing.T) {
 	raw.Timestamp = 123456789
 	raw.PID = 42
 	raw.TGID = 84
+	raw.UID = 1000
+	raw.GID = 2000
+	raw.CgroupID = 777
 	raw.EventType = ebpfEventTypeExec
 	raw.Aux = 7
 	copy(raw.Comm[:], []byte("bash\x00"))
@@ -42,6 +45,18 @@ func TestConvertEBPFEvent(t *testing.T) {
 	}
 	if comm, ok := event.Payload["comm"].(string); !ok || comm != "bash" {
 		t.Fatalf("unexpected comm payload: %+v", event.Payload["comm"])
+	}
+	if uid, ok := event.Payload["uid"].(uint32); !ok || uid != raw.UID {
+		t.Fatalf("unexpected uid payload: %+v", event.Payload["uid"])
+	}
+	if gid, ok := event.Payload["gid"].(uint32); !ok || gid != raw.GID {
+		t.Fatalf("unexpected gid payload: %+v", event.Payload["gid"])
+	}
+	if metaUID := event.Metadata["process.uid"]; metaUID != "1000" {
+		t.Fatalf("expected process uid metadata, got %s", metaUID)
+	}
+	if metaGID := event.Metadata["process.gid"]; metaGID != "2000" {
+		t.Fatalf("expected process gid metadata, got %s", metaGID)
 	}
 	if backend := event.Metadata["backend"]; backend != "ebpf" {
 		t.Fatalf("unexpected backend metadata: %s", backend)

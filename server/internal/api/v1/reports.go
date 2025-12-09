@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -79,12 +80,25 @@ type reportItem struct {
 type summaryResponse struct {
 	Items  []reportItem   `json:"items"`
 	Totals map[string]int `json:"totals"`
-	Status map[string]int `json:"status_totals"`
+	Status map[string]int `json:"status"`
+	Trends *summaryTrends `json:"trends,omitempty"`
+}
+
+type metricTrend struct {
+	Delta float64 `json:"delta"`
+	Trend string  `json:"trend,omitempty"`
+}
+
+type summaryTrends struct {
+	Period string                 `json:"period,omitempty"`
+	Totals map[string]metricTrend `json:"totals,omitempty"`
+	Status map[string]metricTrend `json:"status,omitempty"`
 }
 
 func (h *ReportHandler) summary(c *gin.Context) {
 	taskType := model.TaskType(strings.TrimSpace(c.Query("type")))
 	limit := parseLimit(c.Query("limit"), 50)
+	windowHours := parseWindowHours(c.Query("window_hours"), 24)
 	results, err := h.Store.ListTaskResults(c.Request.Context(), taskType, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -93,15 +107,34 @@ func (h *ReportHandler) summary(c *gin.Context) {
 	items := make([]reportItem, 0, len(results))
 	totals := make(map[string]int)
 	statusTotals := make(map[string]int)
+	currentTotals := make(map[string]int)
+	previousTotals := make(map[string]int)
+	currentStatus := make(map[string]int)
+	previousStatus := make(map[string]int)
+	now := time.Now().UTC()
+	windowDuration := time.Duration(windowHours) * time.Hour
+	currentWindowStart := now.Add(-windowDuration)
+	previousWindowStart := currentWindowStart.Add(-windowDuration)
 	for _, res := range results {
 		items = append(items, toReportItem(res))
-		totals[string(res.TaskType)]++
-		statusTotals[string(res.Status)]++
+		tType := string(res.TaskType)
+		status := string(res.Status)
+		totals[tType]++
+		statusTotals[status]++
+		switch {
+		case !res.CompletedAt.Before(currentWindowStart):
+			currentTotals[tType]++
+			currentStatus[status]++
+		case !res.CompletedAt.Before(previousWindowStart):
+			previousTotals[tType]++
+			previousStatus[status]++
+		}
 	}
 	c.JSON(http.StatusOK, summaryResponse{
 		Items:  items,
 		Totals: totals,
 		Status: statusTotals,
+		Trends: buildSummaryTrends(windowHours, currentTotals, previousTotals, currentStatus, previousStatus),
 	})
 }
 
@@ -329,6 +362,55 @@ func templateHTMLEscape(s string) string {
 	return replacer.Replace(s)
 }
 
+func buildSummaryTrends(windowHours int, currentTotals, previousTotals, currentStatus, previousStatus map[string]int) *summaryTrends {
+	totalTrends := combineTrends(currentTotals, previousTotals)
+	statusTrends := combineTrends(currentStatus, previousStatus)
+	if len(totalTrends) == 0 && len(statusTrends) == 0 {
+		return nil
+	}
+	return &summaryTrends{
+		Period: fmt.Sprintf("较前 %d 小时", windowHours),
+		Totals: totalTrends,
+		Status: statusTrends,
+	}
+}
+
+func combineTrends(current map[string]int, previous map[string]int) map[string]metricTrend {
+	if len(current) == 0 && len(previous) == 0 {
+		return nil
+	}
+	result := make(map[string]metricTrend)
+	for key := range previous {
+		result[key] = metricTrendFrom(current[key], previous[key])
+	}
+	for key := range current {
+		if _, exists := result[key]; exists {
+			continue
+		}
+		result[key] = metricTrendFrom(current[key], previous[key])
+	}
+	return result
+}
+
+func metricTrendFrom(current int, previous int) metricTrend {
+	if previous == 0 {
+		if current == 0 {
+			return metricTrend{Delta: 0, Trend: "flat"}
+		}
+		return metricTrend{Delta: 100, Trend: "up"}
+	}
+	change := float64(current-previous) / float64(previous) * 100
+	change = math.Round(change*10) / 10
+	direction := "flat"
+	switch {
+	case change > 0:
+		direction = "up"
+	case change < 0:
+		direction = "down"
+	}
+	return metricTrend{Delta: change, Trend: direction}
+}
+
 func parseLimit(raw string, fallback int) int {
 	if raw == "" {
 		return fallback
@@ -337,6 +419,26 @@ func parseLimit(raw string, fallback int) int {
 		return v
 	}
 	return fallback
+}
+
+func parseWindowHours(raw string, fallback int) int {
+	if fallback <= 0 {
+		fallback = 24
+	}
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	if v < 1 {
+		return fallback
+	}
+	if v > 168 {
+		return 168
+	}
+	return v
 }
 
 func (h *ReportHandler) loadExecution(ctx context.Context, taskID uuid.UUID) (*model.Task, *model.TaskRun, *model.ExecutionResult, error) {

@@ -32,7 +32,7 @@ export function AssetDetailDrawer({ assetId, onClose }: AssetDetailDrawerProps) 
   const { detail, isLoading } = useAssetDetail(assetId);
 
   return (
-    <Drawer title="资产详情" width={520} onClose={onClose} open={!!assetId} destroyOnClose aria-label="资产详情抽屉">
+    <Drawer title="资产详情" width={520} onClose={onClose} open={!!assetId} destroyOnHidden aria-label="资产详情抽屉">
       {isLoading ? (
         <Skeleton active />
       ) : detail ? (

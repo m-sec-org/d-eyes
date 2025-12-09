@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import type { CommandItem } from '../hooks/useCommandPalette';
 
 interface CommandPaletteProps {
@@ -10,13 +11,13 @@ interface CommandPaletteProps {
 }
 
 export function CommandPalette({ open, items, query, onQueryChange, onClose, onSelect }: CommandPaletteProps) {
-  if (!open) return null;
+  if (!open || typeof document === 'undefined') return null;
 
   const titleId = 'command-palette-title';
   const listId = 'command-palette-list';
 
-  return (
-    <div className="command-overlay" role="presentation">
+  return createPortal(
+    <div className="command-overlay" role="presentation" data-testid="command-palette-overlay">
       <div
         className="command-panel"
         role="dialog"
@@ -33,6 +34,7 @@ export function CommandPalette({ open, items, query, onQueryChange, onClose, onS
           </label>
           <input
             id="command-search"
+            className="ui-control"
             autoFocus
             value={query}
             placeholder="搜索任务、风险、资产或操作…"
@@ -65,6 +67,7 @@ export function CommandPalette({ open, items, query, onQueryChange, onClose, onS
           </ul>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

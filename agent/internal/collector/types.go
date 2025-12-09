@@ -61,6 +61,11 @@ type EventCollector interface {
 	Status() CollectorStatus
 }
 
+// ConfigurableCollector can apply runtime config updates without restart.
+type ConfigurableCollector interface {
+	UpdateConfig(cfg Config)
+}
+
 // Factory creates collectors for the supplied configuration.
 type Factory func(cfg Config) (EventCollector, error)
 
@@ -71,6 +76,7 @@ type Config struct {
 	Disabled  bool              `json:"disabled,omitempty"`
 	Providers []string          `json:"providers,omitempty"`
 	Probes    []string          `json:"probes,omitempty"`
+	Parser    ParserConfig      `json:"parser"`
 	Filters   Filters           `json:"filters"`
 	Sampling  Sampling          `json:"sampling"`
 	Output    Output            `json:"output"`
@@ -79,18 +85,75 @@ type Config struct {
 	Tags      map[string]string `json:"tags,omitempty"`
 }
 
+// ParserConfig configures builtin/plug-in parsers.
+type ParserConfig struct {
+	Enabled  []string             `json:"enabled,omitempty"`
+	Disabled []string             `json:"disabled,omitempty"`
+	Plugins  []ParserPluginConfig `json:"plugins,omitempty"`
+	Settings map[string]any       `json:"settings,omitempty"`
+}
+
+// ParserPluginConfig declares an external parser module.
+type ParserPluginConfig struct {
+	Name     string            `json:"name"`
+	Path     string            `json:"path,omitempty"`
+	Type     string            `json:"type,omitempty"`
+	Checksum string            `json:"checksum,omitempty"`
+	Config   map[string]any    `json:"config,omitempty"`
+	Enabled  bool              `json:"enabled"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
 // Filters controls include/exclude rules for events.
 type Filters struct {
 	Include map[string][]string `json:"include,omitempty"`
 	Exclude map[string][]string `json:"exclude,omitempty"`
+	Rules   []FilterRule        `json:"rules,omitempty"`
+}
+
+// FilterRule describes a rule-based filter evaluation.
+type FilterRule struct {
+	Name       string            `json:"name,omitempty"`
+	Action     string            `json:"action,omitempty"`
+	Conditions []FilterCondition `json:"conditions,omitempty"`
+	Tags       map[string]string `json:"tags,omitempty"`
+	Threshold  FilterThreshold   `json:"threshold,omitempty"`
+	Enabled    bool              `json:"enabled"`
+}
+
+// FilterCondition describes an individual clause.
+type FilterCondition struct {
+	Field    string   `json:"field,omitempty"`
+	Operator string   `json:"operator,omitempty"`
+	Value    string   `json:"value,omitempty"`
+	Values   []string `json:"values,omitempty"`
+	Regex    string   `json:"regex,omitempty"`
+}
+
+// FilterThreshold controls frequency-based gating.
+type FilterThreshold struct {
+	Count  int           `json:"count,omitempty"`
+	Window time.Duration `json:"window,omitempty"`
 }
 
 // Sampling tunes rate/interval controls.
 type Sampling struct {
-	Rate              float64       `json:"rate,omitempty"`
-	Interval          time.Duration `json:"interval,omitempty"`
-	Burst             int           `json:"burst,omitempty"`
-	MaxEventsPerBatch int           `json:"max_events_per_batch,omitempty"`
+	Rate              float64        `json:"rate,omitempty"`
+	Interval          time.Duration  `json:"interval,omitempty"`
+	Burst             int            `json:"burst,omitempty"`
+	MaxEventsPerBatch int            `json:"max_events_per_batch,omitempty"`
+	Rules             []SamplingRule `json:"rules,omitempty"`
+}
+
+// SamplingRule adjusts rates for subsets of events.
+type SamplingRule struct {
+	Name       string              `json:"name,omitempty"`
+	EventTypes []string            `json:"event_types,omitempty"`
+	Match      map[string][]string `json:"match,omitempty"`
+	Rate       float64             `json:"rate,omitempty"`
+	Burst      int                 `json:"burst,omitempty"`
+	Window     time.Duration       `json:"window,omitempty"`
+	Enabled    bool                `json:"enabled"`
 }
 
 // Output determines how events are emitted (stream/file/etc).

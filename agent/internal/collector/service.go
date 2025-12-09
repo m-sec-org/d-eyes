@@ -11,6 +11,7 @@ type Service struct {
 	manager *Manager
 	configs []Config
 	outputs map[string]func()
+	detect  DetectionSink
 }
 
 // ServiceOption customises a Service.
@@ -30,7 +31,6 @@ func NewService(configs []Config, opts ...ServiceOption) *Service {
 		manager: NewManager(),
 		outputs: make(map[string]func()),
 	}
-	registerDefaultFactories(svc.manager)
 	for _, opt := range opts {
 		if opt != nil {
 			opt(svc)
@@ -39,6 +39,7 @@ func NewService(configs []Config, opts ...ServiceOption) *Service {
 	if svc.manager == nil {
 		svc.manager = NewManager()
 	}
+	registerDefaultFactories(svc)
 	return svc
 }
 
@@ -127,5 +128,21 @@ func (s *Service) cleanupOutputs() {
 			cleanup()
 		}
 		delete(s.outputs, name)
+	}
+}
+
+func (s *Service) applyDetectionSink(instance EventCollector) {
+	if s == nil || s.detect == nil || instance == nil {
+		return
+	}
+	if aware, ok := instance.(detectionAwareCollector); ok {
+		aware.SetDetectionSink(s.detect)
+	}
+}
+
+// WithDetectionSink wires a detection sink into detection-aware collectors.
+func WithDetectionSink(sink DetectionSink) ServiceOption {
+	return func(s *Service) {
+		s.detect = sink
 	}
 }

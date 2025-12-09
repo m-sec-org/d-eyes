@@ -1,5 +1,7 @@
+import './QueueMonitor.css';
 import { useMemo, useState } from 'react';
-import { Card, Space, Statistic, Tag, Timeline, Typography, Alert, Button, Table, Input } from 'antd';
+import { Bar } from '@ant-design/plots';
+import { Card, Space, Statistic, Tag, Typography, Alert, Button, Table, Input, Tabs, Empty, Badge } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ReloadOutlined } from '@ant-design/icons';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -14,18 +16,6 @@ export function QueueMonitor() {
   const statusCounts = summary?.status_counts ?? {};
   const blockedCount = statusCounts.blocked ?? 0;
   const failedCount = statusCounts.failed ?? 0;
-
-  const timelineItems = history.map((snapshot) => ({
-    color: snapshot.queue_depth > 5 ? 'red' : 'blue',
-    children: (
-      <Space direction="vertical" size={0}>
-        <Typography.Text strong>
-          队列深度 {snapshot.queue_depth} · 运行 {snapshot.in_flight}
-        </Typography.Text>
-        <Typography.Text type="secondary">{new Date(snapshot.updated_at).toLocaleTimeString()}</Typography.Text>
-      </Space>
-    ),
-  }));
 
   const agentColumns: ColumnsType<AgentActivityRow> = [
     {
@@ -60,17 +50,69 @@ export function QueueMonitor() {
   ];
 
   const [agentFilter, setAgentFilter] = useState('');
-  const [showAllAgents, setShowAllAgents] = useState(false);
   const [typeFilter, setTypeFilter] = useState('');
   const [showAllTypes, setShowAllTypes] = useState(false);
+  const [panelTab, setPanelTab] = useState('types');
+  const [eventFilter, setEventFilter] = useState('');
 
   const agentRows = useMemo(() => buildAgentRows(taskEvents), [taskEvents]);
   const filteredAgentRows = agentRows.filter((row) => row.agent.toLowerCase().includes(agentFilter.toLowerCase()));
-  const visibleAgents = showAllAgents ? filteredAgentRows : filteredAgentRows.slice(0, 5);
 
   const typeDistribution = useMemo(() => buildTaskTypeDistribution(taskEvents), [taskEvents]);
   const filteredTypes = typeDistribution.filter((row) => row.type.toLowerCase().includes(typeFilter.toLowerCase()));
-  const visibleTypes = showAllTypes ? filteredTypes : filteredTypes.slice(0, 6);
+  const typesToRender = useMemo(
+    () => (showAllTypes ? filteredTypes : filteredTypes.slice(0, 8)),
+    [filteredTypes, showAllTypes]
+  );
+  const typeColorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    typesToRender.forEach((item, index) => map.set(item.type, TYPE_BAR_COLORS[index % TYPE_BAR_COLORS.length]));
+    return map;
+  }, [typesToRender]);
+  const typeBarHeight = Math.max(120, typesToRender.length * 36);
+
+  const typeBarConfig = useMemo(
+    () => ({
+      data: typesToRender,
+      xField: 'count',
+      yField: 'type',
+      legend: false,
+      seriesField: 'type',
+      color: (datum: { type: string }) => typeColorMap.get(datum.type) ?? TYPE_BAR_COLORS[0],
+      barStyle: { radius: [0, 6, 6, 0] },
+      label: {
+        position: 'right',
+        formatter: (datum: { count: number }) => `${datum.count}`,
+      },
+      tooltip: {
+        showMarkers: false,
+        formatter: (datum: { type: string; count: number }) => ({
+          name: datum.type,
+          value: `${datum.count} 次`,
+        }),
+      },
+      xAxis: {
+        label: {
+          formatter: (value: string) => value,
+        },
+      },
+      yAxis: {
+        label: { autoRotate: false },
+      },
+      interactions: [{ type: 'active-region' }],
+    }),
+    [typeColorMap, typesToRender]
+  );
+
+  const queueEvents = useMemo(() => taskEvents.slice(0, 200), [taskEvents]);
+  const filteredQueueEvents = useMemo(() => {
+    if (!eventFilter.trim()) return queueEvents;
+    const keyword = eventFilter.toLowerCase();
+    return queueEvents.filter((event) => {
+      const text = `${event.task_id ?? ''} ${event.task_type ?? ''} ${event.event ?? ''} ${event.agent_id ?? ''}`.toLowerCase();
+      return text.includes(keyword);
+    });
+  }, [eventFilter, queueEvents]);
 
   return (
     <div className="queue-monitor">
@@ -125,56 +167,133 @@ export function QueueMonitor() {
           </Space>
         </Card>
 
-        <Card title="任务类型分布">
-          <Space style={{ marginBottom: 12 }} wrap>
-            <Input
-              allowClear
-              size="small"
-              placeholder="按类型过滤"
-              value={typeFilter}
-              onChange={(event) => setTypeFilter(event.target.value)}
-              style={{ width: 200 }}
-            />
-            <Button size="small" onClick={() => setShowAllTypes((prev) => !prev)}>
-              {showAllTypes ? '收起' : '展开全部'}
-            </Button>
-          </Space>
-          <Space wrap>
-            {visibleTypes.length === 0 && <Typography.Text type="secondary">暂无任务事件</Typography.Text>}
-            {visibleTypes.map((item) => (
-              <Tag key={item.type}>
-                {item.type}：{item.count}
-              </Tag>
-            ))}
-          </Space>
-        </Card>
-
-        <Card title="Agent 活动（最近事件）">
-          <Space style={{ marginBottom: 12 }} wrap>
-            <Input
-              allowClear
-              size="small"
-              placeholder="搜索 Agent"
-              value={agentFilter}
-              onChange={(event) => setAgentFilter(event.target.value)}
-              style={{ width: 200 }}
-            />
-            <Button size="small" onClick={() => setShowAllAgents((prev) => !prev)}>
-              {showAllAgents ? '收起' : '展开全部'}
-            </Button>
-          </Space>
-          <Table
-            rowKey="agent"
-            columns={agentColumns}
-            dataSource={visibleAgents}
-            size="small"
-            pagination={false}
-            locale={{ emptyText: '暂无 Agent 活动' }}
+        <Card
+          title="队列运行洞察"
+          extra={<Badge status={statusBadge(status)} text={`SSE: ${status}`} />}
+          className="queue-monitor-panel"
+        >
+          <Tabs
+            activeKey={panelTab}
+            onChange={setPanelTab}
+            items={[
+              {
+                key: 'types',
+                label: '任务类型',
+                children: (
+                  <div className="queue-panel-scroll">
+                    <Space style={{ marginBottom: 12 }} wrap align="center">
+                      <Input
+                        allowClear
+                        size="small"
+                        placeholder="按类型过滤"
+                        value={typeFilter}
+                        onChange={(event) => setTypeFilter(event.target.value)}
+                        style={{ width: 200 }}
+                      />
+                      <Button size="small" onClick={() => setShowAllTypes((prev) => !prev)}>
+                        {showAllTypes ? '仅展示前 8 个' : '展开全部'}
+                      </Button>
+                      <Typography.Text type="secondary">
+                        {filteredTypes.length
+                          ? `显示 ${typesToRender.length} / ${filteredTypes.length} 种任务`
+                          : '暂无任务事件'}
+                      </Typography.Text>
+                    </Space>
+                    {typesToRender.length === 0 ? (
+                      <Empty description="暂无任务事件" />
+                    ) : (
+                      <div style={{ minHeight: typeBarHeight }}>
+                        <Bar {...typeBarConfig} height={typeBarHeight} />
+                      </div>
+                    )}
+                  </div>
+                ),
+              },
+              {
+                key: 'agents',
+                label: 'Agent 活动',
+                children: (
+                  <div className="queue-panel-scroll">
+                    <Space style={{ marginBottom: 12 }} wrap align="center">
+                      <Input
+                        allowClear
+                        size="small"
+                        placeholder="搜索 Agent"
+                        value={agentFilter}
+                        onChange={(event) => setAgentFilter(event.target.value)}
+                        style={{ width: 200 }}
+                      />
+                      <Typography.Text type="secondary">
+                        共 {filteredAgentRows.length} 个 Agent
+                      </Typography.Text>
+                    </Space>
+                    <Table
+                      rowKey="agent"
+                      columns={agentColumns}
+                      dataSource={filteredAgentRows}
+                      size="small"
+                      pagination={{
+                        pageSize: 5,
+                        showSizeChanger: false,
+                        showTotal: (total, range) => `显示 ${range[0]}-${range[1]} / ${total} 个 Agent`,
+                      }}
+                      locale={{ emptyText: '暂无 Agent 活动' }}
+                      scroll={{ y: 320 }}
+                    />
+                  </div>
+                ),
+              },
+              {
+                key: 'timeline',
+                label: '调度事件',
+                children: (
+                  <div className="queue-panel-scroll">
+                    <Space style={{ marginBottom: 12 }} wrap>
+                      <Input
+                        allowClear
+                        size="small"
+                        placeholder="搜索任务/Agent"
+                        value={eventFilter}
+                        onChange={(event) => setEventFilter(event.target.value)}
+                        style={{ width: 220 }}
+                      />
+                      <Button size="small" icon={<ReloadOutlined />} onClick={() => refresh()}>
+                        刷新
+                      </Button>
+                    </Space>
+                    {filteredQueueEvents.length === 0 ? (
+                      <Empty description="暂无调度事件" />
+                    ) : (
+                      filteredQueueEvents.map((event) => (
+                        <div
+                          key={`${event.task_id ?? 'task'}-${event.updated_at ?? event.event ?? 'unknown'}`}
+                          className="queue-timeline-row"
+                        >
+                          <div className="queue-timeline-meta">
+                            <Typography.Text strong>{event.task_type ?? '任务'}</Typography.Text>
+                            <Typography.Text type="secondary">
+                              {event.updated_at ? new Date(event.updated_at).toLocaleTimeString() : '未知时间'}
+                            </Typography.Text>
+                          </div>
+                          <div className="queue-timeline-body">
+                            <div className="queue-timeline-status" data-status={event.status ?? 'unknown'} />
+                            <div>
+                              <Typography.Text>
+                                Agent {event.agent_id?.slice(0, 8) ?? 'unknown'} · {event.event}
+                              </Typography.Text>
+                              <Typography.Paragraph type="secondary" ellipsis={{ rows: 2, tooltip: event.message }}>
+                                {event.message ?? '无附加信息'}
+                              </Typography.Paragraph>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ),
+              },
+            ]}
           />
-        </Card>
-
-        <Card title="调度事件（最近）">
-          <Timeline items={timelineItems} />
         </Card>
       </Space>
     </div>
@@ -224,4 +343,13 @@ function buildTaskTypeDistribution(events: TaskEvent[]) {
   return Array.from(counts.entries())
     .map(([type, count]) => ({ type, count }))
     .sort((a, b) => b.count - a.count);
+}
+
+const TYPE_BAR_COLORS = ['#1677ff', '#13c2c2', '#52c41a', '#faad14', '#eb2f96', '#722ed1', '#a0d911', '#2f54eb'];
+
+function statusBadge(status: string) {
+  if (status === 'connected') return 'success';
+  if (status === 'connecting') return 'processing';
+  if (status === 'reconnecting') return 'warning';
+  return 'error';
 }

@@ -164,6 +164,7 @@ type CollectorConfig struct {
 	Disabled  bool
 	Providers []string
 	Probes    []string
+	Parser    CollectorParserConfig
 	Filters   CollectorFilterConfig
 	Sampling  CollectorSamplingConfig
 	Output    CollectorOutputConfig
@@ -174,6 +175,7 @@ type CollectorConfig struct {
 type CollectorFilterConfig struct {
 	Include map[string][]string
 	Exclude map[string][]string
+	Rules   []CollectorFilterRuleConfig
 }
 
 // CollectorSamplingConfig controls sampling behaviour.
@@ -182,6 +184,7 @@ type CollectorSamplingConfig struct {
 	Interval          time.Duration
 	Burst             int
 	MaxEventsPerBatch int
+	Strategies        []CollectorSamplingStrategyConfig
 }
 
 // CollectorOutputConfig defines output sink parameters.
@@ -200,6 +203,61 @@ type CollectorStreamConfig struct {
 	AgentName     string
 	MaxBatch      int
 	FlushInterval time.Duration
+}
+
+// CollectorParserConfig describes which parsers are enabled.
+type CollectorParserConfig struct {
+	Enabled  []string
+	Disabled []string
+	Plugins  []CollectorParserPluginConfig
+	Settings map[string]any
+}
+
+// CollectorParserPluginConfig defines a parser plugin entry.
+type CollectorParserPluginConfig struct {
+	Name     string
+	Path     string
+	Type     string
+	Checksum string
+	Config   map[string]any
+	Enabled  bool
+	Metadata map[string]string
+}
+
+// CollectorFilterRuleConfig describes advanced filter expressions.
+type CollectorFilterRuleConfig struct {
+	Name       string
+	Action     string
+	Conditions []CollectorFilterConditionConfig
+	Tags       map[string]string
+	Threshold  CollectorFilterThresholdConfig
+	Enabled    bool
+}
+
+// CollectorFilterConditionConfig represents a single clause.
+type CollectorFilterConditionConfig struct {
+	Field    string
+	Operator string
+	Value    string
+	Values   []string
+	Regex    string
+}
+
+// CollectorFilterThresholdConfig configures frequency gating.
+type CollectorFilterThresholdConfig struct {
+	Count  int
+	Window time.Duration
+}
+
+// CollectorSamplingStrategyConfig defines per-event sampling overrides.
+type CollectorSamplingStrategyConfig struct {
+	Name       string
+	EventTypes []string
+	Match      map[string][]string
+	Rate       float64
+	Burst      int
+	Window     time.Duration
+	Enabled    bool
 }
 
 // Config contains global defaults for D-Eyes.
@@ -534,6 +592,7 @@ type fileCollectorConfig struct {
 	Disabled  *bool                        `yaml:"disabled"`
 	Providers []string                     `yaml:"providers"`
 	Probes    []string                     `yaml:"probes"`
+	Parser    *fileCollectorParserConfig   `yaml:"parser"`
 	Filters   *fileCollectorFilterConfig   `yaml:"filters"`
 	Sampling  *fileCollectorSamplingConfig `yaml:"sampling"`
 	Output    *fileCollectorOutputConfig   `yaml:"output"`
@@ -541,15 +600,17 @@ type fileCollectorConfig struct {
 }
 
 type fileCollectorFilterConfig struct {
-	Include map[string][]string `yaml:"include"`
-	Exclude map[string][]string `yaml:"exclude"`
+	Include map[string][]string              `yaml:"include"`
+	Exclude map[string][]string              `yaml:"exclude"`
+	Rules   []*fileCollectorFilterRuleConfig `yaml:"rules"`
 }
 
 type fileCollectorSamplingConfig struct {
-	Rate              *float64       `yaml:"rate"`
-	Interval          *time.Duration `yaml:"interval"`
-	Burst             *int           `yaml:"burst"`
-	MaxEventsPerBatch *int           `yaml:"max_events_per_batch"`
+	Rate              *float64                               `yaml:"rate"`
+	Interval          *time.Duration                         `yaml:"interval"`
+	Burst             *int                                   `yaml:"burst"`
+	MaxEventsPerBatch *int                                   `yaml:"max_events_per_batch"`
+	Strategies        []*fileCollectorSamplingStrategyConfig `yaml:"strategies"`
 }
 
 type fileCollectorOutputConfig struct {
@@ -567,6 +628,55 @@ type fileCollectorStreamConfig struct {
 	AgentName     *string        `yaml:"agent_name"`
 	MaxBatch      *int           `yaml:"max_batch"`
 	FlushInterval *time.Duration `yaml:"flush_interval"`
+}
+
+type fileCollectorParserConfig struct {
+	Enabled  []string                           `yaml:"enabled"`
+	Disabled []string                           `yaml:"disabled"`
+	Plugins  []*fileCollectorParserPluginConfig `yaml:"plugins"`
+	Settings map[string]any                     `yaml:"settings"`
+}
+
+type fileCollectorParserPluginConfig struct {
+	Name     *string           `yaml:"name"`
+	Path     *string           `yaml:"path"`
+	Type     *string           `yaml:"type"`
+	Checksum *string           `yaml:"checksum"`
+	Config   map[string]any    `yaml:"config"`
+	Enabled  *bool             `yaml:"enabled"`
+	Metadata map[string]string `yaml:"metadata"`
+}
+
+type fileCollectorFilterRuleConfig struct {
+	Name       *string                               `yaml:"name"`
+	Action     *string                               `yaml:"action"`
+	Conditions []*fileCollectorFilterConditionConfig `yaml:"conditions"`
+	Tags       map[string]string                     `yaml:"tags"`
+	Threshold  *fileCollectorFilterThresholdConfig   `yaml:"threshold"`
+	Enabled    *bool                                 `yaml:"enabled"`
+}
+
+type fileCollectorFilterConditionConfig struct {
+	Field    *string  `yaml:"field"`
+	Operator *string  `yaml:"operator"`
+	Value    *string  `yaml:"value"`
+	Values   []string `yaml:"values"`
+	Regex    *string  `yaml:"regex"`
+}
+
+type fileCollectorFilterThresholdConfig struct {
+	Count  *int           `yaml:"count"`
+	Window *time.Duration `yaml:"window"`
+}
+
+type fileCollectorSamplingStrategyConfig struct {
+	Name       *string             `yaml:"name"`
+	EventTypes []string            `yaml:"event_types"`
+	Match      map[string][]string `yaml:"match"`
+	Rate       *float64            `yaml:"rate"`
+	Burst      *int                `yaml:"burst"`
+	Window     *time.Duration      `yaml:"window"`
+	Enabled    *bool               `yaml:"enabled"`
 }
 
 func mergeConfig(base Config, overrides fileConfig) Config {
@@ -881,10 +991,19 @@ func normalizeCollectorConfigs(overrides []*fileCollectorConfig) []CollectorConf
 			Probes:    append([]string(nil), item.Probes...),
 			Settings:  cloneAnyMap(item.Settings),
 		}
+		if item.Parser != nil {
+			cfg.Parser = CollectorParserConfig{
+				Enabled:  append([]string(nil), item.Parser.Enabled...),
+				Disabled: append([]string(nil), item.Parser.Disabled...),
+				Settings: cloneAnyMap(item.Parser.Settings),
+				Plugins:  convertParserPlugins(item.Parser.Plugins),
+			}
+		}
 		if item.Filters != nil {
 			cfg.Filters = CollectorFilterConfig{
 				Include: cloneStringSliceMap(item.Filters.Include),
 				Exclude: cloneStringSliceMap(item.Filters.Exclude),
+				Rules:   convertFilterRules(item.Filters.Rules),
 			}
 		}
 		if item.Sampling != nil {
@@ -893,6 +1012,7 @@ func normalizeCollectorConfigs(overrides []*fileCollectorConfig) []CollectorConf
 				Interval:          durationValue(item.Sampling.Interval),
 				Burst:             intValue(item.Sampling.Burst),
 				MaxEventsPerBatch: intValue(item.Sampling.MaxEventsPerBatch),
+				Strategies:        convertSamplingStrategies(item.Sampling.Strategies),
 			}
 		}
 		if item.Output != nil {
@@ -960,6 +1080,120 @@ func cloneStringSliceMap(input map[string][]string) map[string][]string {
 	out := make(map[string][]string, len(input))
 	for key, vals := range input {
 		out[key] = append([]string(nil), vals...)
+	}
+	return out
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(input))
+	for k, v := range input {
+		out[k] = v
+	}
+	return out
+}
+
+func convertParserPlugins(items []*fileCollectorParserPluginConfig) []CollectorParserPluginConfig {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]CollectorParserPluginConfig, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		out = append(out, CollectorParserPluginConfig{
+			Name:     stringValue(item.Name),
+			Path:     stringValue(item.Path),
+			Type:     stringValue(item.Type),
+			Checksum: stringValue(item.Checksum),
+			Config:   cloneAnyMap(item.Config),
+			Enabled:  boolValue(item.Enabled),
+			Metadata: cloneStringMap(item.Metadata),
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func convertFilterRules(items []*fileCollectorFilterRuleConfig) []CollectorFilterRuleConfig {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]CollectorFilterRuleConfig, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		rule := CollectorFilterRuleConfig{
+			Name:       stringValue(item.Name),
+			Action:     stringValue(item.Action),
+			Conditions: convertFilterConditions(item.Conditions),
+			Tags:       cloneStringMap(item.Tags),
+			Enabled:    boolValue(item.Enabled),
+		}
+		if item.Threshold != nil {
+			rule.Threshold = CollectorFilterThresholdConfig{
+				Count:  intValue(item.Threshold.Count),
+				Window: durationValue(item.Threshold.Window),
+			}
+		}
+		out = append(out, rule)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func convertFilterConditions(items []*fileCollectorFilterConditionConfig) []CollectorFilterConditionConfig {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]CollectorFilterConditionConfig, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		out = append(out, CollectorFilterConditionConfig{
+			Field:    stringValue(item.Field),
+			Operator: stringValue(item.Operator),
+			Value:    stringValue(item.Value),
+			Values:   append([]string(nil), item.Values...),
+			Regex:    stringValue(item.Regex),
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func convertSamplingStrategies(items []*fileCollectorSamplingStrategyConfig) []CollectorSamplingStrategyConfig {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]CollectorSamplingStrategyConfig, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		out = append(out, CollectorSamplingStrategyConfig{
+			Name:       stringValue(item.Name),
+			EventTypes: append([]string(nil), item.EventTypes...),
+			Match:      cloneStringSliceMap(item.Match),
+			Rate:       floatValue(item.Rate),
+			Burst:      intValue(item.Burst),
+			Window:     durationValue(item.Window),
+			Enabled:    boolValue(item.Enabled),
+		})
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

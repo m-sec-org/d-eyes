@@ -16,6 +16,8 @@ type SystemEventRecord struct {
 	CollectorKind string            `json:"collector_kind"`
 	EventType     string            `json:"event_type"`
 	Source        string            `json:"source"`
+	Priority      string            `json:"priority"`
+	StorageTier   string            `json:"storage_tier"`
 	Timestamp     time.Time         `json:"timestamp"`
 	Sequence      uint64            `json:"sequence"`
 	Payload       json.RawMessage   `json:"payload"`

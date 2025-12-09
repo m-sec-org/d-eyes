@@ -2,6 +2,7 @@
 import { mockTaskEvents } from './data/taskEvents';
 import { mockThreatIntelEvents } from './data/threatIntelEvents';
 import { mockAnomalyEvents } from './data/anomalyEvents';
+import { mockDetectionEvents } from './data/detectionEvents';
 
 const CONNECTING = 0;
 const OPEN = 1;
@@ -181,4 +182,62 @@ export class MockAnomalyEventSource extends EventTarget {
   }
 
   static intervalMs = 2500;
+}
+
+export class MockDetectionEventSource extends EventTarget {
+  readonly CONNECTING = CONNECTING;
+
+  readonly OPEN = OPEN;
+
+  readonly CLOSED = CLOSED;
+
+  url = 'mock://detection-stream';
+
+  withCredentials = false;
+
+  readyState: number = CONNECTING;
+
+  onopen: ((this: EventSource, ev: Event) => any) | null = null;
+
+  onmessage: ((this: EventSource, ev: MessageEvent) => any) | null = null;
+
+  onerror: ((this: EventSource, ev: Event) => any) | null = null;
+
+  private timer?: Timer;
+
+  private index = 0;
+
+  constructor() {
+    super();
+    this.start();
+  }
+
+  private start() {
+    this.readyState = OPEN;
+    const openEvent = new Event('open');
+    this.onopen?.call(this as unknown as EventSource, openEvent);
+    this.dispatchEvent(openEvent);
+    this.pushNext();
+  }
+
+  private pushNext() {
+    this.timer = globalThis.setTimeout(() => {
+      const payload = mockDetectionEvents[this.index % mockDetectionEvents.length];
+      const event = new MessageEvent('message', { data: JSON.stringify(payload) });
+      this.onmessage?.call(this as unknown as EventSource, event);
+      this.dispatchEvent(event);
+      this.index += 1;
+      this.pushNext();
+    }, MockDetectionEventSource.intervalMs);
+  }
+
+  close(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+    }
+    this.readyState = CLOSED;
+    this.dispatchEvent(new Event('close'));
+  }
+
+  static intervalMs = 1800;
 }

@@ -38,6 +38,7 @@ func NewRouter(
 	metricsHandler gin.HandlerFunc,
 	taskStreamHandler gin.HandlerFunc,
 	queueStreamHandler gin.HandlerFunc,
+	detectionStreamHandler gin.HandlerFunc,
 	threatStreamHandler gin.HandlerFunc,
 	anomalyStreamHandler gin.HandlerFunc,
 ) *gin.Engine {
@@ -129,6 +130,9 @@ func NewRouter(
 	}
 	if queueStreamHandler != nil {
 		apiGroup.GET("/queues/stream", queueStreamHandler)
+	}
+	if detectionStreamHandler != nil {
+		apiGroup.GET("/detections/stream", detectionStreamHandler)
 	}
 	if threatStreamHandler != nil {
 		apiGroup.GET("/threat-intel/stream", threatStreamHandler)

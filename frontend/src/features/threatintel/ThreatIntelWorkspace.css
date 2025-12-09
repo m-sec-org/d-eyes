@@ -32,16 +32,30 @@
   gap: 0.5rem;
 }
 
-.ti-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+.ti-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
 }
 
-.ti-field-row {
+.ti-form-grid .span-2 {
+  grid-column: span 2;
+}
+
+@media (max-width: 640px) {
+  .ti-form-grid .span-2 {
+    grid-column: span 1;
+  }
+}
+
+.ti-form-grid .ant-form-item {
+  margin-bottom: 0.5rem;
+}
+
+.ti-form-grid .ant-checkbox-group {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 0.35rem 1rem;
 }
 
 .ti-verdict-list {
@@ -190,4 +204,23 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.ti-status-descriptions {
+  margin-top: 0.75rem;
+}
+
+.ti-detail-collapse {
+  margin-top: 0.75rem;
+  border: 1px solid var(--color-border, #e3e8ef);
+  border-radius: var(--radius-base, 12px);
+  background: var(--color-surface-muted, #f6f8fb);
+}
+
+.ti-detail-collapse .ant-collapse-item {
+  border-color: transparent;
+}
+
+.ti-detail-collapse .ant-collapse-content {
+  background: transparent;
 }

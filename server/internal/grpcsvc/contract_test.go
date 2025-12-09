@@ -182,6 +182,7 @@ func newContractRouter(cfg config.Config, st store.Store, sched *scheduler.Sched
 		nil, // metrics
 		nil, // task stream
 		nil, // queue stream
+		nil, // detection stream
 		nil, // threat stream
 		nil, // anomaly stream
 	)

@@ -4,14 +4,6 @@
   gap: 1rem;
 }
 
-.task-live-monitor__header {
-  align-items: flex-start;
-}
-
-.task-live-monitor__actions {
-  flex-wrap: wrap;
-}
-
 .live-monitor-summary {
   display: flex;
   flex-direction: column;
@@ -22,35 +14,6 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 0.75rem;
-}
-
-.live-monitor-summary__card {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  padding: 0.75rem 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  background: var(--color-surface-muted);
-}
-
-.live-monitor-summary__card strong {
-  font-size: 1.5rem;
-}
-
-.live-monitor-summary__card.variant-danger {
-  border-color: rgba(255, 99, 99, 0.4);
-  background: rgba(255, 99, 99, 0.08);
-}
-
-.live-monitor-summary__card.variant-warning {
-  border-color: rgba(255, 196, 0, 0.4);
-  background: rgba(255, 196, 0, 0.08);
-}
-
-.live-monitor-summary__card.variant-success {
-  border-color: rgba(41, 204, 123, 0.35);
-  background: rgba(41, 204, 123, 0.08);
 }
 
 .live-monitor-pending {
@@ -81,12 +44,6 @@
 .live-monitor-alert.danger {
   background: rgba(255, 77, 79, 0.12);
   border-color: rgba(255, 77, 79, 0.4);
-}
-
-.live-monitor-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
 }
 
 .live-monitor-table {
@@ -198,6 +155,21 @@
   background: rgba(82, 131, 255, 0.15);
   border-color: rgba(82, 131, 255, 0.4);
   color: #1f5ed1;
+}
+
+.task-live-monitor__toolbar {
+  top: calc(var(--header-height) + 12px);
+}
+
+.task-live-monitor__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-base);
+  padding: 0.75rem 1rem;
+  background: var(--color-surface-card);
+  box-shadow: var(--shadow-card);
 }
 
 .task-live-monitor .mono {

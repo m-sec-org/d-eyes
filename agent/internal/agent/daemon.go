@@ -136,21 +136,23 @@ func newRemoteRunner(cfg config.RemoteConfig, opts ...remoteRunnerOption) (*remo
 		pollInterval = 2 * time.Second
 	}
 	runner := &remoteRunner{
-		cfg:              cfg,
-		remoteCfg:        remoteCfg,
-		client:           remote.NewClient(remoteCfg),
-		store:            store,
-		pollInterval:     pollInterval,
-		timeSource:       realTimeSource{},
-		resolveTask:      internal.TaskRunnerByName,
-		throttle:         adaptive.NewController(cfg.Adaptive),
-		cacheStats:       make(map[string]string),
-		collectorFactory: defaultCollectorFactory,
+		cfg:          cfg,
+		remoteCfg:    remoteCfg,
+		client:       remote.NewClient(remoteCfg),
+		store:        store,
+		pollInterval: pollInterval,
+		timeSource:   realTimeSource{},
+		resolveTask:  internal.TaskRunnerByName,
+		throttle:     adaptive.NewController(cfg.Adaptive),
+		cacheStats:   make(map[string]string),
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(runner)
 		}
+	}
+	if runner.collectorFactory == nil {
+		runner.collectorFactory = runner.defaultCollectorFactory
 	}
 	artifactClient, err := newArtifactClient(cfg)
 	if err != nil {
@@ -250,6 +252,7 @@ type remoteRunner struct {
 	collectorErr             string
 	collectorWatcherStop     func()
 	collectorFactory         func([]collector.Config) collectorController
+	detectionSink            collector.DetectionSink
 	disableCollectorWatchers bool
 
 	configWatcherStop   context.CancelFunc
@@ -293,11 +296,15 @@ func (r *remoteRunner) newTicker(d time.Duration) ticker {
 	return r.timeSource.NewTicker(d)
 }
 
-func defaultCollectorFactory(configs []collector.Config) collectorController {
+func (r *remoteRunner) defaultCollectorFactory(configs []collector.Config) collectorController {
 	if len(configs) == 0 {
 		return nil
 	}
-	return collector.NewService(configs)
+	opts := make([]collector.ServiceOption, 0, 1)
+	if sink := r.ensureDetectionSink(); sink != nil {
+		opts = append(opts, collector.WithDetectionSink(sink))
+	}
+	return collector.NewService(configs, opts...)
 }
 
 func (r *remoteRunner) initCollectors() {
@@ -374,6 +381,144 @@ func (r *remoteRunner) updateCollectorConfigs(configs []collector.Config) {
 	if r.collectorCancel != nil {
 		r.restartCollectorsLocked()
 	}
+}
+
+func (r *remoteRunner) dispatchAutoRespond(ctx context.Context, event *collector.SystemEvent, result collector.DetectionResult) {
+	if r == nil || result.Action != collector.DetectionActionRespond {
+		return
+	}
+	go func(evt *collector.SystemEvent, detection collector.DetectionResult) {
+		if err := r.runRespondAutomation(evt, detection); err != nil {
+			log.Printf("[remote] auto respond failed: %v", err)
+		}
+	}(cloneCollectorEvent(event), result)
+}
+
+func (r *remoteRunner) runRespondAutomation(event *collector.SystemEvent, detection collector.DetectionResult) error {
+	runner, ok := r.taskRunnerByName("respond")
+	if !ok || runner == nil {
+		return fmt.Errorf("respond runner unavailable")
+	}
+	cfg := internal.GetGlobalConfig()
+	req := tasks.TaskRequest{
+		Profile:        detection.RespondProfile,
+		Name:           fmt.Sprintf("auto-respond-%s", detection.RuleID),
+		Config:         cfg,
+		Flags:          map[string]any{"detection_rule": detection.RuleID, "detection_name": detection.Name},
+		Metadata:       map[string]string{"automation": "respond", "detection.rule": detection.RuleID, "detection.name": detection.Name},
+		Quiet:          true,
+		JSONOutput:     true,
+		ArtifactClient: r.artifactClient,
+	}
+	if detection.Severity != "" {
+		req.Metadata["detection.severity"] = detection.Severity
+	}
+	if detection.Category != "" {
+		req.Metadata["detection.category"] = detection.Category
+	}
+	if event != nil {
+		req.Flags["detection_event_type"] = event.EventType
+		req.Metadata["detection.event_type"] = event.EventType
+		req.Metadata["detection.source"] = event.Source
+		if event.Metadata != nil {
+			if kind := event.Metadata["collector_kind"]; kind != "" {
+				req.Metadata["collector_kind"] = kind
+			}
+			if name := event.Metadata["collector"]; name != "" {
+				req.Metadata["collector_name"] = name
+			}
+		}
+	}
+	if req.Profile == "" {
+		req.Profile = cfg.Tasks.Respond.Profile
+	}
+	req.ApplyDefaults("respond")
+	if err := tasks.ValidateRequest("respond", &req); err != nil {
+		return err
+	}
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = cfg.Performance.Timeout
+		if timeout <= 0 {
+			timeout = 2 * time.Minute
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	summary, result, execErr := tasks.ExecuteWithResult(ctx, "respond", runner, req, internal.GetReportManager())
+	execModel := tasks.ToExecutionResult(summary, result, execErr)
+	if r.eventPipeline != nil {
+		payload := map[string]any{
+			"detection": map[string]any{
+				"rule":     detection.RuleID,
+				"name":     detection.Name,
+				"severity": detection.Severity,
+				"category": detection.Category,
+				"metadata": detection.Metadata,
+				"tags":     detection.Tags,
+			},
+			"respond": execModel,
+		}
+		meta := map[string]string{
+			"automation": "respond",
+		}
+		if event != nil && event.Metadata != nil {
+			for _, key := range []string{"collector", "collector_kind"} {
+				if val := event.Metadata[key]; val != "" {
+					meta[key] = val
+				}
+			}
+		}
+		respEvent := &collector.SystemEvent{
+			Timestamp: time.Now(),
+			EventType: "agent.respond.automation",
+			Source:    "collector.auto_respond",
+			Metadata:  meta,
+			Payload:   payload,
+			Tags: map[string]string{
+				"automation": "respond",
+			},
+		}
+		_ = r.eventPipeline.Handle(respEvent)
+	}
+	return execErr
+}
+
+func cloneCollectorEvent(event *collector.SystemEvent) *collector.SystemEvent {
+	if event == nil {
+		return nil
+	}
+	out := &collector.SystemEvent{
+		Timestamp: event.Timestamp,
+		EventType: event.EventType,
+		Source:    event.Source,
+		Sequence:  event.Sequence,
+	}
+	if len(event.Metadata) > 0 {
+		out.Metadata = make(map[string]string, len(event.Metadata))
+		for k, v := range event.Metadata {
+			out.Metadata[k] = v
+		}
+	}
+	if len(event.Tags) > 0 {
+		out.Tags = make(map[string]string, len(event.Tags))
+		for k, v := range event.Tags {
+			out.Tags[k] = v
+		}
+	}
+	if len(event.Payload) > 0 {
+		out.Payload = make(map[string]any, len(event.Payload))
+		for k, v := range event.Payload {
+			out.Payload[k] = v
+		}
+	}
+	if len(event.Raw) > 0 {
+		out.Raw = make(map[string]interface{}, len(event.Raw))
+		for k, v := range event.Raw {
+			out.Raw[k] = v
+		}
+	}
+	return out
 }
 
 func (r *remoteRunner) shutdownCollectors() {
@@ -1035,6 +1180,9 @@ func (r *remoteRunner) collectHeartbeatMetadata() map[string]string {
 			for k, v := range st.Stats {
 				stats[fmt.Sprintf("%s.%s", prefix, k)] = fmt.Sprint(v)
 			}
+			for k, v := range st.Metadata {
+				stats[fmt.Sprintf("%s.meta.%s", prefix, sanitizeHeartbeatKey(k))] = v
+			}
 		}
 	}
 	if collectorErr != "" {
@@ -1067,6 +1215,16 @@ func (r *remoteRunner) updateCacheStats(meta map[string]string) {
 			r.cacheStats[k] = v
 		}
 	}
+}
+
+func sanitizeHeartbeatKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	key = strings.ReplaceAll(key, " ", "_")
+	key = strings.ReplaceAll(key, "/", "_")
+	key = strings.ReplaceAll(key, ":", "_")
+	return key
 }
 
 func withRemoteClient(client remoteClient) remoteRunnerOption {
@@ -1121,4 +1279,25 @@ func withEventPipeline(p *eventstream.Pipeline) remoteRunnerOption {
 	return func(r *remoteRunner) {
 		r.eventPipeline = p
 	}
+}
+
+type autoRespondSink struct {
+	runner *remoteRunner
+}
+
+func (s *autoRespondSink) OnDetection(ctx context.Context, event *collector.SystemEvent, result collector.DetectionResult) {
+	if s == nil || s.runner == nil || result.Action != collector.DetectionActionRespond {
+		return
+	}
+	s.runner.dispatchAutoRespond(ctx, event, result)
+}
+
+func (r *remoteRunner) ensureDetectionSink() collector.DetectionSink {
+	if r == nil {
+		return nil
+	}
+	if r.detectionSink == nil {
+		r.detectionSink = &autoRespondSink{runner: r}
+	}
+	return r.detectionSink
 }

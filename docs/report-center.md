@@ -5,12 +5,13 @@
 ### 汇总查询
 
 ```
-GET /api/v1/reports/summary?type=bas&limit=50
+GET /api/v1/reports/summary?type=bas&limit=50&window_hours=24
 Header: X-API-Key: <key>
 ```
 
 - `type`（可选）：按任务类型过滤，例如 `bas`、`baseline`。
 - `limit`（可选）：返回结果条数，默认 50。
+- `window_hours`（可选）：趋势计算窗口，默认 24 小时（最大 168）。
 
 响应示例（部分）：
 
@@ -27,7 +28,17 @@ Header: X-API-Key: <key>
     }
   ],
   "totals": {"bas": 12, "baseline": 8},
-  "status_totals": {"succeeded": 18, "failed": 2}
+  "status": {"succeeded": 18, "failed": 2},
+  "trends": {
+    "period": "较前 24 小时",
+    "totals": {
+      "bas": {"delta": 25, "trend": "up"},
+      "baseline": {"delta": -12.5, "trend": "down"}
+    },
+    "status": {
+      "failed": {"delta": -50, "trend": "down"}
+    }
+  }
 }
 ```
 

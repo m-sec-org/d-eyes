@@ -21,6 +21,88 @@ type PostgresStore struct {
 	pool *pgxpool.Pool
 }
 
+type eventFilterBuilder struct {
+	clauses []string
+	args    []any
+	next    int
+}
+
+func newEventFilterBuilder() *eventFilterBuilder {
+	return &eventFilterBuilder{next: 1}
+}
+
+func (b *eventFilterBuilder) add(expr string, value any) {
+	b.clauses = append(b.clauses, fmt.Sprintf(expr, b.next))
+	b.args = append(b.args, value)
+	b.next++
+}
+
+func (b *eventFilterBuilder) addIn(expr string, values []string) {
+	placeholders := make([]string, len(values))
+	for i, v := range values {
+		placeholders[i] = fmt.Sprintf("$%d", b.next)
+		b.args = append(b.args, v)
+		b.next++
+	}
+	b.clauses = append(b.clauses, fmt.Sprintf("%s IN (%s)", expr, strings.Join(placeholders, ",")))
+}
+
+func (b *eventFilterBuilder) sql() (string, []any) {
+	if len(b.clauses) == 0 {
+		return "", b.args
+	}
+	return " WHERE " + strings.Join(b.clauses, " AND "), b.args
+}
+
+func buildEventFilters(query store.SystemEventQuery, includeCursor bool) *eventFilterBuilder {
+	b := newEventFilterBuilder()
+	collector := strings.ToLower(strings.TrimSpace(query.Collector))
+	collectorKind := strings.ToLower(strings.TrimSpace(query.CollectorKind))
+	eventType := strings.ToLower(strings.TrimSpace(query.EventType))
+	source := strings.ToLower(strings.TrimSpace(query.Source))
+	priorities := store.NormalizeStringList(query.Priorities)
+	tiers := store.NormalizeStringList(query.StorageTiers)
+	if query.AgentID != uuid.Nil {
+		b.add("agent_id=$%d", query.AgentID)
+	}
+	if collector != "" {
+		b.add("LOWER(collector)=$%d", collector)
+	}
+	if collectorKind != "" {
+		b.add("LOWER(collector_kind)=$%d", collectorKind)
+	}
+	if eventType != "" {
+		b.add("LOWER(event_type)=$%d", eventType)
+	}
+	if source != "" {
+		b.add("LOWER(source)=$%d", source)
+	}
+	if len(priorities) > 0 {
+		b.addIn("LOWER(COALESCE(priority,'normal'))", priorities)
+	}
+	if len(tiers) > 0 {
+		b.addIn("LOWER(COALESCE(storage_tier,'hot'))", tiers)
+	}
+	if !query.Since.IsZero() {
+		b.add("received_at >= $%d", query.Since)
+	}
+	if !query.Until.IsZero() {
+		b.add("received_at <= $%d", query.Until)
+	}
+	if includeCursor && !query.CursorReceivedAt.IsZero() {
+		if query.SortAscending {
+			b.clauses = append(b.clauses, fmt.Sprintf("(received_at > $%d OR (received_at = $%d AND id > $%d))", b.next, b.next, b.next+1))
+			b.args = append(b.args, query.CursorReceivedAt, query.CursorReceivedAt, query.CursorID)
+			b.next += 3
+		} else {
+			b.clauses = append(b.clauses, fmt.Sprintf("(received_at < $%d OR (received_at = $%d AND id < $%d))", b.next, b.next, b.next+1))
+			b.args = append(b.args, query.CursorReceivedAt, query.CursorReceivedAt, query.CursorID)
+			b.next += 3
+		}
+	}
+	return b
+}
+
 func New(ctx context.Context, cfg config.DatabaseConfig) (*PostgresStore, error) {
 	pool, err := pgxpool.New(ctx, cfg.DSN)
 	if err != nil {
@@ -204,6 +286,8 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
 		    collector_kind TEXT,
 		    event_type TEXT NOT NULL,
 		    source TEXT,
+		    priority TEXT,
+		    storage_tier TEXT,
 		    event_timestamp TIMESTAMPTZ NOT NULL,
 		    sequence BIGINT,
 		    payload JSONB,
@@ -214,6 +298,8 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS system_events_agent_idx ON system_events(agent_id, received_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS system_events_type_idx ON system_events(event_type, received_at DESC)`,
+		`ALTER TABLE system_events ADD COLUMN IF NOT EXISTS priority TEXT`,
+		`ALTER TABLE system_events ADD COLUMN IF NOT EXISTS storage_tier TEXT`,
 		`CREATE TABLE IF NOT EXISTS collector_configs (
 		    agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
 		    version BIGINT NOT NULL,
@@ -231,6 +317,44 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
 		    metadata JSONB,
 		    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`CREATE TABLE IF NOT EXISTS collector_rollouts (
+		    id UUID PRIMARY KEY,
+		    name TEXT,
+		    description TEXT,
+		    selector JSONB,
+		    status TEXT NOT NULL,
+		    config JSONB NOT NULL,
+		    version BIGINT,
+		    strategy TEXT,
+		    created_by TEXT,
+		    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		    completed_at TIMESTAMPTZ,
+		    rolled_back_at TIMESTAMPTZ,
+		    rollback_reason TEXT,
+		    grace_period_seconds BIGINT,
+		    target_count INT NOT NULL DEFAULT 0,
+		    ack_count INT NOT NULL DEFAULT 0,
+		    failed_count INT NOT NULL DEFAULT 0,
+		    notes TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS collector_rollout_targets (
+		    rollout_id UUID NOT NULL REFERENCES collector_rollouts(id) ON DELETE CASCADE,
+		    agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+		    agent_name TEXT,
+		    desired_version BIGINT,
+		    previous_version BIGINT,
+		    previous_config JSONB,
+		    state TEXT NOT NULL,
+		    acked_at TIMESTAMPTZ,
+		    last_heartbeat TIMESTAMPTZ,
+		    last_error TEXT,
+		    metadata JSONB,
+		    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		    PRIMARY KEY (rollout_id, agent_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS collector_rollout_targets_agent_idx ON collector_rollout_targets(agent_id)`,
 		`CREATE TABLE IF NOT EXISTS anomalies (
 		    id UUID PRIMARY KEY,
 		    agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
@@ -807,9 +931,9 @@ func (p *PostgresStore) InsertSystemEvents(ctx context.Context, events []model.S
 		}
 		batch.Queue(`INSERT INTO system_events (
 		    id, agent_id, agent_name, collector, collector_kind, event_type, source,
-		    event_timestamp, sequence, payload, metadata, tags, raw, received_at
+		    priority, storage_tier, event_timestamp, sequence, payload, metadata, tags, raw, received_at
 		) VALUES (
-		    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+		    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
 		)`,
 			id,
 			evt.AgentID,
@@ -818,6 +942,8 @@ func (p *PostgresStore) InsertSystemEvents(ctx context.Context, events []model.S
 			evt.CollectorKind,
 			evt.EventType,
 			evt.Source,
+			evt.Priority,
+			evt.StorageTier,
 			ts,
 			int64(evt.Sequence),
 			payloadJSON,
@@ -846,6 +972,116 @@ func (p *PostgresStore) CountSystemEvents(ctx context.Context, since time.Time) 
 		err = p.pool.QueryRow(ctx, `SELECT COUNT(*) FROM system_events WHERE received_at >= $1`, since).Scan(&count)
 	}
 	return count, err
+}
+
+func (p *PostgresStore) QuerySystemEvents(ctx context.Context, query store.SystemEventQuery) ([]model.SystemEventRecord, error) {
+	limit := store.ClampEventQueryLimit(query.Limit)
+	filter := buildEventFilters(query, true)
+	filterSQL, args := filter.sql()
+	order := "DESC"
+	if query.SortAscending {
+		order = "ASC"
+	}
+	var sb strings.Builder
+	sb.WriteString(`SELECT id, agent_id, agent_name, collector, collector_kind, event_type, source, priority, storage_tier, event_timestamp, sequence, payload, metadata, tags, raw, received_at FROM system_events`)
+	sb.WriteString(filterSQL)
+	sb.WriteString(fmt.Sprintf(" ORDER BY received_at %s, id %s LIMIT $%d", order, order, filter.next))
+	args = append(args, limit)
+	rows, err := p.pool.Query(ctx, sb.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	results := make([]model.SystemEventRecord, 0, limit)
+	for rows.Next() {
+		var evt model.SystemEventRecord
+		var seq int64
+		var payloadJSON, metadataJSON, tagsJSON, rawJSON []byte
+		if err := rows.Scan(
+			&evt.ID,
+			&evt.AgentID,
+			&evt.AgentName,
+			&evt.Collector,
+			&evt.CollectorKind,
+			&evt.EventType,
+			&evt.Source,
+			&evt.Priority,
+			&evt.StorageTier,
+			&evt.Timestamp,
+			&seq,
+			&payloadJSON,
+			&metadataJSON,
+			&tagsJSON,
+			&rawJSON,
+			&evt.ReceivedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan system event: %w", err)
+		}
+		if len(payloadJSON) > 0 {
+			evt.Payload = append([]byte(nil), payloadJSON...)
+		}
+		if len(rawJSON) > 0 {
+			evt.Raw = append([]byte(nil), rawJSON...)
+		}
+		if len(metadataJSON) > 0 {
+			_ = json.Unmarshal(metadataJSON, &evt.Metadata)
+		}
+		if len(tagsJSON) > 0 {
+			_ = json.Unmarshal(tagsJSON, &evt.Tags)
+		}
+		if evt.Priority == "" {
+			evt.Priority = store.DefaultPriorityLabel(evt.Priority)
+		}
+		if evt.StorageTier == "" {
+			evt.StorageTier = store.DefaultTierLabel(evt.StorageTier)
+		}
+		evt.Sequence = uint64(seq)
+		results = append(results, evt)
+	}
+	return results, rows.Err()
+}
+
+func (p *PostgresStore) AggregateSystemEvents(ctx context.Context, query store.SystemEventQuery) (store.SystemEventAggregates, error) {
+	result := store.SystemEventAggregates{
+		ByEventType: make(map[string]int64),
+		BySource:    make(map[string]int64),
+	}
+	filter := buildEventFilters(query, false)
+	filterSQL, args := filter.sql()
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM system_events%s", filterSQL)
+	if err := p.pool.QueryRow(ctx, countSQL, args...).Scan(&result.Total); err != nil {
+		return result, err
+	}
+	typeSQL := fmt.Sprintf("SELECT COALESCE(event_type,'') AS key, COUNT(*) FROM system_events%s GROUP BY 1", filterSQL)
+	if err := p.collectAggregateCounts(ctx, typeSQL, args, result.ByEventType); err != nil {
+		return result, err
+	}
+	sourceSQL := fmt.Sprintf("SELECT COALESCE(source,'') AS key, COUNT(*) FROM system_events%s GROUP BY 1", filterSQL)
+	if err := p.collectAggregateCounts(ctx, sourceSQL, args, result.BySource); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (p *PostgresStore) collectAggregateCounts(ctx context.Context, sql string, args []any, dest map[string]int64) error {
+	rows, err := p.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var count int64
+		if err := rows.Scan(&key, &count); err != nil {
+			return err
+		}
+		name := strings.TrimSpace(key)
+		if name == "" {
+			name = "(unknown)"
+		}
+		dest[name] = count
+	}
+	return rows.Err()
 }
 
 func (p *PostgresStore) UpsertCollectorConfig(ctx context.Context, snapshot *model.CollectorConfigSnapshot) error {
@@ -954,8 +1190,195 @@ func (p *PostgresStore) ListCollectorStatuses(ctx context.Context) ([]*model.Col
 	return statuses, rows.Err()
 }
 
+func (p *PostgresStore) CreateCollectorRollout(ctx context.Context, rollout *model.CollectorRollout, targets []*model.CollectorRolloutTarget) error {
+	if rollout == nil {
+		return errors.New("collector rollout: rollout required")
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if rollout.ID == uuid.Nil {
+		rollout.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	if rollout.CreatedAt.IsZero() {
+		rollout.CreatedAt = now
+	}
+	if rollout.StartedAt.IsZero() {
+		rollout.StartedAt = rollout.CreatedAt
+	}
+	if rollout.Status == "" {
+		rollout.Status = model.CollectorRolloutStatusInProgress
+	}
+	rollout.TargetCount = len(targets)
+	selectorJSON, _ := json.Marshal(rollout.Selector)
+	_, err = tx.Exec(ctx, `INSERT INTO collector_rollouts (id, name, description, selector, status, config, version, strategy, created_by, created_at, started_at, completed_at, rolled_back_at, rollback_reason, grace_period_seconds, target_count, ack_count, failed_count, notes)
+	    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+		rollout.ID, rollout.Name, rollout.Description, selectorJSON, string(rollout.Status), rollout.Config, rollout.Version, rollout.Strategy, rollout.CreatedBy, rollout.CreatedAt, rollout.StartedAt, rollout.CompletedAt, rollout.RolledBackAt, rollout.RollbackReason, rollout.GracePeriodSeconds, rollout.TargetCount, rollout.AckCount, rollout.FailedCount, rollout.Notes)
+	if err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if target == nil || target.AgentID == uuid.Nil {
+			continue
+		}
+		if target.RolloutID == uuid.Nil {
+			target.RolloutID = rollout.ID
+		}
+		if target.CreatedAt.IsZero() {
+			target.CreatedAt = now
+		}
+		if target.UpdatedAt.IsZero() {
+			target.UpdatedAt = now
+		}
+		if target.State == "" {
+			target.State = model.CollectorRolloutTargetStatePending
+		}
+		metadataJSON, _ := json.Marshal(target.Metadata)
+		_, err = tx.Exec(ctx, `INSERT INTO collector_rollout_targets (rollout_id, agent_id, agent_name, desired_version, previous_version, previous_config, state, acked_at, last_heartbeat, last_error, metadata, created_at, updated_at)
+		    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			target.RolloutID, target.AgentID, target.AgentName, target.DesiredVersion, target.PreviousVersion, target.PreviousConfig, string(target.State), target.AckedAt, target.LastHeartbeat, target.LastError, metadataJSON, target.CreatedAt, target.UpdatedAt)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (p *PostgresStore) UpdateCollectorRollout(ctx context.Context, rollout *model.CollectorRollout) error {
+	if rollout == nil || rollout.ID == uuid.Nil {
+		return errors.New("collector rollout: id required")
+	}
+	selectorJSON, _ := json.Marshal(rollout.Selector)
+	_, err := p.pool.Exec(ctx, `UPDATE collector_rollouts SET name=$2, description=$3, selector=$4, status=$5, config=$6, version=$7, strategy=$8, created_by=$9, created_at=$10, started_at=$11, completed_at=$12, rolled_back_at=$13, rollback_reason=$14, grace_period_seconds=$15, target_count=$16, ack_count=$17, failed_count=$18, notes=$19 WHERE id=$1`,
+		rollout.ID, rollout.Name, rollout.Description, selectorJSON, string(rollout.Status), rollout.Config, rollout.Version, rollout.Strategy, rollout.CreatedBy, rollout.CreatedAt, rollout.StartedAt, rollout.CompletedAt, rollout.RolledBackAt, rollout.RollbackReason, rollout.GracePeriodSeconds, rollout.TargetCount, rollout.AckCount, rollout.FailedCount, rollout.Notes)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *PostgresStore) GetCollectorRollout(ctx context.Context, rolloutID uuid.UUID) (*model.CollectorRollout, error) {
+	row := p.pool.QueryRow(ctx, `SELECT id, name, description, selector, status, config, version, strategy, created_by, created_at, started_at, completed_at, rolled_back_at, rollback_reason, grace_period_seconds, target_count, ack_count, failed_count, notes FROM collector_rollouts WHERE id=$1`, rolloutID)
+	return scanCollectorRollout(row)
+}
+
+func (p *PostgresStore) ListCollectorRollouts(ctx context.Context, filter store.CollectorRolloutFilter) ([]*model.CollectorRollout, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	var rows pgx.Rows
+	var err error
+	if len(filter.Statuses) > 0 {
+		values := make([]string, len(filter.Statuses))
+		for i, st := range filter.Statuses {
+			values[i] = string(st)
+		}
+		rows, err = p.pool.Query(ctx, `SELECT id, name, description, selector, status, config, version, strategy, created_by, created_at, started_at, completed_at, rolled_back_at, rollback_reason, grace_period_seconds, target_count, ack_count, failed_count, notes FROM collector_rollouts WHERE status = ANY($1::text[]) ORDER BY created_at DESC LIMIT $2`, values, limit)
+	} else {
+		rows, err = p.pool.Query(ctx, `SELECT id, name, description, selector, status, config, version, strategy, created_by, created_at, started_at, completed_at, rolled_back_at, rollback_reason, grace_period_seconds, target_count, ack_count, failed_count, notes FROM collector_rollouts ORDER BY created_at DESC LIMIT $1`, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var rollouts []*model.CollectorRollout
+	for rows.Next() {
+		rollout, err := scanCollectorRollout(rows)
+		if err != nil {
+			return nil, err
+		}
+		rollouts = append(rollouts, rollout)
+	}
+	return rollouts, rows.Err()
+}
+
+func (p *PostgresStore) ListCollectorRolloutTargets(ctx context.Context, rolloutID uuid.UUID) ([]*model.CollectorRolloutTarget, error) {
+	rows, err := p.pool.Query(ctx, `SELECT rollout_id, agent_id, agent_name, desired_version, previous_version, previous_config, state, acked_at, last_heartbeat, last_error, metadata, created_at, updated_at FROM collector_rollout_targets WHERE rollout_id=$1`, rolloutID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var targets []*model.CollectorRolloutTarget
+	for rows.Next() {
+		target, err := scanCollectorRolloutTarget(rows)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	if len(targets) == 0 {
+		return nil, store.ErrNotFound
+	}
+	return targets, rows.Err()
+}
+
+func (p *PostgresStore) FindCollectorRolloutTargetsByAgent(ctx context.Context, agentID uuid.UUID) ([]*model.CollectorRolloutTarget, error) {
+	rows, err := p.pool.Query(ctx, `SELECT rollout_id, agent_id, agent_name, desired_version, previous_version, previous_config, state, acked_at, last_heartbeat, last_error, metadata, created_at, updated_at FROM collector_rollout_targets WHERE agent_id=$1`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var targets []*model.CollectorRolloutTarget
+	for rows.Next() {
+		target, err := scanCollectorRolloutTarget(rows)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	return targets, rows.Err()
+}
+
+func (p *PostgresStore) UpdateCollectorRolloutTarget(ctx context.Context, target *model.CollectorRolloutTarget) error {
+	if target == nil || target.RolloutID == uuid.Nil || target.AgentID == uuid.Nil {
+		return errors.New("collector rollout target: invalid identifiers")
+	}
+	metadataJSON, _ := json.Marshal(target.Metadata)
+	_, err := p.pool.Exec(ctx, `UPDATE collector_rollout_targets SET agent_name=$3, desired_version=$4, previous_version=$5, previous_config=$6, state=$7, acked_at=$8, last_heartbeat=$9, last_error=$10, metadata=$11, created_at=$12, updated_at=$13 WHERE rollout_id=$1 AND agent_id=$2`,
+		target.RolloutID, target.AgentID, target.AgentName, target.DesiredVersion, target.PreviousVersion, target.PreviousConfig, string(target.State), target.AckedAt, target.LastHeartbeat, target.LastError, metadataJSON, target.CreatedAt, target.UpdatedAt)
+	return err
+}
+
 func (p *PostgresStore) Ping(ctx context.Context) error {
 	return p.pool.Ping(ctx)
+}
+
+func scanCollectorRollout(row pgx.Row) (*model.CollectorRollout, error) {
+	var rollout model.CollectorRollout
+	var selector []byte
+	var status string
+	if err := row.Scan(&rollout.ID, &rollout.Name, &rollout.Description, &selector, &status, &rollout.Config, &rollout.Version, &rollout.Strategy, &rollout.CreatedBy, &rollout.CreatedAt, &rollout.StartedAt, &rollout.CompletedAt, &rollout.RolledBackAt, &rollout.RollbackReason, &rollout.GracePeriodSeconds, &rollout.TargetCount, &rollout.AckCount, &rollout.FailedCount, &rollout.Notes); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, err
+	}
+	if len(selector) > 0 {
+		_ = json.Unmarshal(selector, &rollout.Selector)
+	}
+	rollout.Status = model.CollectorRolloutStatus(status)
+	return &rollout, nil
+}
+
+func scanCollectorRolloutTarget(row pgx.Row) (*model.CollectorRolloutTarget, error) {
+	var target model.CollectorRolloutTarget
+	var metadata []byte
+	var state string
+	if err := row.Scan(&target.RolloutID, &target.AgentID, &target.AgentName, &target.DesiredVersion, &target.PreviousVersion, &target.PreviousConfig, &state, &target.AckedAt, &target.LastHeartbeat, &target.LastError, &metadata, &target.CreatedAt, &target.UpdatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, err
+	}
+	if len(metadata) > 0 {
+		_ = json.Unmarshal(metadata, &target.Metadata)
+	}
+	target.State = model.CollectorRolloutTargetState(state)
+	return &target, nil
 }
 
 func scanAgent(row pgx.Row) (*model.Agent, error) {

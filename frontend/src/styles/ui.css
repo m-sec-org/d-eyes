@@ -136,7 +136,7 @@
 }
 
 .ui-control {
-  width: 100%;
+  width: 20%;
   border-radius: var(--radius-base);
   border: 1px solid var(--color-control-border, var(--color-border));
   background: var(--color-control-bg);

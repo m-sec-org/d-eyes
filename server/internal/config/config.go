@@ -111,15 +111,95 @@ type MetricsConfig struct {
 }
 
 type CollectorControlConfig struct {
-	AllowedProviders []string `yaml:"allowed_providers"`
-	AllowedProbes    []string `yaml:"allowed_probes"`
+	AllowedProviders      []string      `yaml:"allowed_providers"`
+	AllowedProbes         []string      `yaml:"allowed_probes"`
+	HeartbeatLagThreshold time.Duration `yaml:"heartbeat_lag_threshold"`
+	RolloutGracePeriod    time.Duration `yaml:"rollout_grace_period"`
 }
 type EventsConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	QueueCapacity  int           `yaml:"queue_capacity"`
-	MaxBatch       int           `yaml:"max_batch"`
-	FlushInterval  time.Duration `yaml:"flush_interval"`
-	MaxPayloadSize int64         `yaml:"max_payload_size"`
+	Enabled         bool                                `yaml:"enabled"`
+	QueueCapacity   int                                 `yaml:"queue_capacity"`
+	MaxBatch        int                                 `yaml:"max_batch"`
+	FlushInterval   time.Duration                       `yaml:"flush_interval"`
+	MaxPayloadSize  int64                               `yaml:"max_payload_size"`
+	DefaultPriority string                              `yaml:"default_priority"`
+	PriorityQueues  map[string]EventPriorityQueueConfig `yaml:"priority_queues"`
+	Retention       EventRetentionConfig                `yaml:"retention"`
+	Parsers         []EventParserConfig                 `yaml:"parsers"`
+	Detection       DetectionConfig                     `yaml:"detection"`
+}
+
+type EventPriorityQueueConfig struct {
+	QueueCapacity         int           `yaml:"queue_capacity"`
+	MaxBatch              int           `yaml:"max_batch"`
+	Spillover             string        `yaml:"spillover"`
+	DropPolicy            string        `yaml:"drop_policy"`
+	BackpressureThreshold float64       `yaml:"backpressure_threshold"`
+	AlertCooldown         time.Duration `yaml:"alert_cooldown"`
+}
+
+type EventRetentionConfig struct {
+	Hot  time.Duration `yaml:"hot"`
+	Warm time.Duration `yaml:"warm"`
+	Cold time.Duration `yaml:"cold"`
+}
+
+type EventParserConfig struct {
+	Name             string   `yaml:"name"`
+	Enabled          bool     `yaml:"enabled"`
+	EventTypes       []string `yaml:"event_types"`
+	Sources          []string `yaml:"sources"`
+	CollectorKinds   []string `yaml:"collector_kinds"`
+	RequiredPayload  []string `yaml:"required_payload"`
+	RequiredMetadata []string `yaml:"required_metadata"`
+	RequiredTags     []string `yaml:"required_tags"`
+	StrictPayload    bool     `yaml:"strict_payload"`
+}
+
+type DetectionConfig struct {
+	Enabled     bool                       `yaml:"enabled"`
+	MaxWorkers  int                        `yaml:"max_workers"`
+	QueueSize   int                        `yaml:"queue_size"`
+	Rules       []DetectionRuleConfig      `yaml:"rules"`
+	MLModels    []DetectionMLModelConfig   `yaml:"ml_models"`
+	AutoRespond DetectionAutoRespondConfig `yaml:"auto_respond"`
+	StreamEvent bool                       `yaml:"stream_events"`
+}
+
+type DetectionAutoRespondConfig struct {
+	Enabled         bool              `yaml:"enabled"`
+	DefaultProfile  string            `yaml:"default_profile"`
+	DefaultPriority int               `yaml:"default_priority"`
+	CreatedBy       string            `yaml:"created_by"`
+	Metadata        map[string]string `yaml:"metadata"`
+}
+
+type DetectionRuleConfig struct {
+	Name                string            `yaml:"name"`
+	Description         string            `yaml:"description"`
+	Enabled             bool              `yaml:"enabled"`
+	Severity            string            `yaml:"severity"`
+	EventTypes          []string          `yaml:"event_types"`
+	Sources             []string          `yaml:"sources"`
+	Metadata            map[string]string `yaml:"metadata"`
+	Tags                map[string]string `yaml:"tags"`
+	PayloadContains     []string          `yaml:"payload_contains"`
+	Indicators          []string          `yaml:"indicators"`
+	AutoRespondProfile  string            `yaml:"auto_respond_profile"`
+	AutoRespondPriority int               `yaml:"auto_respond_priority"`
+	SubmitToThreatIntel bool              `yaml:"submit_to_threat_intel"`
+	RespondMetadata     map[string]string `yaml:"respond_metadata"`
+}
+
+type DetectionMLModelConfig struct {
+	Name                string             `yaml:"name"`
+	Enabled             bool               `yaml:"enabled"`
+	Severity            string             `yaml:"severity"`
+	Threshold           float64            `yaml:"threshold"`
+	FeatureWeights      map[string]float64 `yaml:"feature_weights"`
+	AutoRespondProfile  string             `yaml:"auto_respond_profile"`
+	AutoRespondPriority int                `yaml:"auto_respond_priority"`
+	SubmitToThreatIntel bool               `yaml:"submit_to_threat_intel"`
 }
 
 type AuditConfig struct {
@@ -303,11 +383,22 @@ func Default() Config {
 			SelfHealBatch:        200,
 		},
 		Events: EventsConfig{
-			Enabled:        true,
-			QueueCapacity:  8192,
-			MaxBatch:       512,
-			FlushInterval:  50 * time.Millisecond,
-			MaxPayloadSize: 4 * 1024 * 1024, // 4 MiB
+			Enabled:         true,
+			QueueCapacity:   8192,
+			MaxBatch:        512,
+			FlushInterval:   50 * time.Millisecond,
+			MaxPayloadSize:  4 * 1024 * 1024, // 4 MiB
+			DefaultPriority: "normal",
+			PriorityQueues: map[string]EventPriorityQueueConfig{
+				"high":   {QueueCapacity: 2048, MaxBatch: 256},
+				"normal": {QueueCapacity: 4096, MaxBatch: 512},
+				"low":    {QueueCapacity: 2048, MaxBatch: 256},
+			},
+			Retention: EventRetentionConfig{
+				Hot:  7 * 24 * time.Hour,
+				Warm: 30 * 24 * time.Hour,
+				Cold: 180 * 24 * time.Hour,
+			},
 		},
 		Metrics: MetricsConfig{
 			Enabled: true,
@@ -358,15 +449,17 @@ func Default() Config {
 		},
 		RBAC: RBACConfig{
 			Policies: []RBACPolicy{
-				{Role: "operator", Permissions: []string{"tasks.read", "tasks.create", "tasks.retry", "tasks.cancel", "tasks.actions", "reports.view", "audit.view", "playbook.execute", "bas.view", "collector.status.read"}},
-				{Role: "sre", Permissions: []string{"collector.config.read", "collector.config.write", "collector.status.read", "collector.status.write"}},
-				{Role: "auditor", Permissions: []string{"audit.view", "reports.view", "playbook.execute", "collector.status.read"}},
+				{Role: "operator", Permissions: []string{"tasks.read", "tasks.create", "tasks.retry", "tasks.cancel", "tasks.actions", "reports.view", "audit.view", "playbook.execute", "bas.view", "collector.status.read", "events.read"}},
+				{Role: "sre", Permissions: []string{"collector.config.read", "collector.config.write", "collector.status.read", "collector.status.write", "events.read"}},
+				{Role: "auditor", Permissions: []string{"audit.view", "reports.view", "playbook.execute", "collector.status.read", "events.read"}},
 				{Role: "admin", Permissions: []string{"*"}},
 			},
 		},
 		Collectors: CollectorControlConfig{
-			AllowedProviders: []string{"Kernel", "Security"},
-			AllowedProbes:    []string{"diag-ebpf", "diag-sysmon"},
+			AllowedProviders:      []string{"Kernel", "Security"},
+			AllowedProbes:         []string{"diag-ebpf", "diag-sysmon"},
+			HeartbeatLagThreshold: 30 * time.Second,
+			RolloutGracePeriod:    2 * time.Minute,
 		},
 		Reports: ReportConfig{
 			TemplatePath: "",
@@ -694,6 +787,12 @@ func (c Config) Validate() error {
 	for i, probe := range c.Collectors.AllowedProbes {
 		c.Collectors.AllowedProbes[i] = strings.TrimSpace(probe)
 	}
+	if c.Collectors.HeartbeatLagThreshold <= 0 {
+		c.Collectors.HeartbeatLagThreshold = 30 * time.Second
+	}
+	if c.Collectors.RolloutGracePeriod <= 0 {
+		c.Collectors.RolloutGracePeriod = time.Minute
+	}
 	if c.Events.Enabled {
 		if c.Events.QueueCapacity <= 0 {
 			return errors.New("events.queue_capacity must be positive")
@@ -706,6 +805,92 @@ func (c Config) Validate() error {
 		}
 		if c.Events.MaxPayloadSize <= 0 {
 			return errors.New("events.max_payload_size must be positive")
+		}
+		if c.Events.DefaultPriority == "" {
+			c.Events.DefaultPriority = "normal"
+		}
+		if len(c.Events.PriorityQueues) == 0 {
+			c.Events.PriorityQueues = map[string]EventPriorityQueueConfig{
+				c.Events.DefaultPriority: {
+					QueueCapacity: c.Events.QueueCapacity,
+					MaxBatch:      c.Events.MaxBatch,
+				},
+			}
+		}
+		if _, ok := c.Events.PriorityQueues[c.Events.DefaultPriority]; !ok {
+			c.Events.PriorityQueues[c.Events.DefaultPriority] = EventPriorityQueueConfig{
+				QueueCapacity: c.Events.QueueCapacity,
+				MaxBatch:      c.Events.MaxBatch,
+			}
+		}
+		normalized := make(map[string]EventPriorityQueueConfig, len(c.Events.PriorityQueues))
+		for name, lane := range c.Events.PriorityQueues {
+			trimmed := strings.ToLower(strings.TrimSpace(name))
+			if trimmed == "" {
+				return fmt.Errorf("events.priority_queues contains empty name")
+			}
+			if lane.QueueCapacity <= 0 {
+				return fmt.Errorf("events.priority_queues[%s].queue_capacity must be positive", name)
+			}
+			if lane.MaxBatch <= 0 {
+				return fmt.Errorf("events.priority_queues[%s].max_batch must be positive", name)
+			}
+			normalized[trimmed] = lane
+		}
+		c.Events.PriorityQueues = normalized
+		c.Events.DefaultPriority = strings.ToLower(strings.TrimSpace(c.Events.DefaultPriority))
+		if _, ok := c.Events.PriorityQueues[c.Events.DefaultPriority]; !ok {
+			return fmt.Errorf("events.default_priority %q not defined in priority_queues", c.Events.DefaultPriority)
+		}
+		if c.Events.Retention.Hot <= 0 || c.Events.Retention.Warm <= 0 || c.Events.Retention.Cold <= 0 {
+			return errors.New("events.retention hot/warm/cold must be positive durations")
+		}
+		if c.Events.Retention.Hot > c.Events.Retention.Warm || c.Events.Retention.Warm > c.Events.Retention.Cold {
+			return errors.New("events.retention must satisfy hot <= warm <= cold")
+		}
+		if c.Events.Detection.Enabled {
+			if c.Events.Detection.MaxWorkers <= 0 {
+				c.Events.Detection.MaxWorkers = 4
+			}
+			if c.Events.Detection.QueueSize <= 0 {
+				c.Events.Detection.QueueSize = 1024
+			}
+			if c.Events.Detection.AutoRespond.Enabled {
+				if strings.TrimSpace(c.Events.Detection.AutoRespond.DefaultProfile) == "" {
+					c.Events.Detection.AutoRespond.DefaultProfile = "respond_profile_v1"
+				}
+				if c.Events.Detection.AutoRespond.DefaultPriority <= 0 {
+					c.Events.Detection.AutoRespond.DefaultPriority = 1
+				}
+				if strings.TrimSpace(c.Events.Detection.AutoRespond.CreatedBy) == "" {
+					c.Events.Detection.AutoRespond.CreatedBy = "detection-engine"
+				}
+			}
+			seenRules := make(map[string]struct{})
+			for _, rule := range c.Events.Detection.Rules {
+				name := strings.ToLower(strings.TrimSpace(rule.Name))
+				if name == "" {
+					return errors.New("events.detection.rules name must be set")
+				}
+				if _, exists := seenRules[name]; exists {
+					return fmt.Errorf("events.detection.rules contains duplicate name %q", rule.Name)
+				}
+				seenRules[name] = struct{}{}
+			}
+			seenModels := make(map[string]struct{})
+			for _, model := range c.Events.Detection.MLModels {
+				name := strings.ToLower(strings.TrimSpace(model.Name))
+				if name == "" {
+					return errors.New("events.detection.ml_models name must be set")
+				}
+				if model.Threshold <= 0 {
+					return fmt.Errorf("events.detection.ml_models[%s].threshold must be positive", model.Name)
+				}
+				if _, exists := seenModels[name]; exists {
+					return fmt.Errorf("events.detection.ml_models contains duplicate name %q", model.Name)
+				}
+				seenModels[name] = struct{}{}
+			}
 		}
 	}
 	return nil

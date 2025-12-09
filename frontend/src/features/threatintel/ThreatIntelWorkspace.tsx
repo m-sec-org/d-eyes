@@ -3,7 +3,21 @@ import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { Alert, Button, Checkbox, Input, Select, Space, Switch, Tag, message, Segmented } from 'antd';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Collapse,
+  Descriptions,
+  Form,
+  Input,
+  Select,
+  Space,
+  Switch,
+  Tag,
+  message,
+  Segmented,
+} from 'antd';
 import type { CheckboxValueType } from 'antd/es/checkbox/Group';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { lookupIndicator, fetchIndicator, fetchSample } from '@/services/api/threatIntel';
@@ -25,6 +39,15 @@ const SOURCE_OPTIONS = [
   { label: 'OpenTIP', value: 'opentip' },
   { label: 'MetaDefender', value: 'metadefender' },
 ];
+
+const CLASSIFICATION_COLORS: Record<string, string> = {
+  critical: 'red',
+  high: 'red',
+  medium: 'orange',
+  low: 'green',
+  benign: 'green',
+  unknown: 'default',
+};
 
 export function ThreatIntelWorkspace() {
   useThreatIntelStream();
@@ -63,8 +86,7 @@ export function ThreatIntelWorkspace() {
     mutate: refreshSample,
   } = useSWR(selectedSampleId ? ['threat-intel-sample', selectedSampleId] : null, () => fetchSample(selectedSampleId ?? ''));
 
-  const handleLookup = async (evt: React.FormEvent) => {
-    evt.preventDefault();
+  const handleLookup = async () => {
     const trimmed = indicatorInput.trim();
     if (!trimmed) {
       messageApi.warning('请输入要查询的 IOC');
@@ -169,37 +191,44 @@ export function ThreatIntelWorkspace() {
             <p className="muted">支持哈希 / IP / 域名 / URL，自动落库并推送 SSE</p>
           </div>
         </header>
-        <form className="ti-form" onSubmit={handleLookup}>
-          <div className="ti-field-row">
+        <Form layout="vertical" className="ti-form-grid" onFinish={handleLookup}>
+          <Form.Item label="IOC 值" required className="span-2">
             <Input
               placeholder="例如：d4c3b4... 或 8.8.8.8"
               value={indicatorInput}
               onChange={(e) => setIndicatorInput(e.target.value)}
               size="large"
             />
-            <Select
-              value={indicatorKind}
-              options={INDICATOR_OPTIONS}
-              onChange={(value) => setIndicatorKind(value)}
-              style={{ minWidth: 160 }}
-            />
+          </Form.Item>
+          <Form.Item label="类型">
+            <Select value={indicatorKind} options={INDICATOR_OPTIONS} onChange={(value) => setIndicatorKind(value)} />
+          </Form.Item>
+          <Form.Item label="数据来源" className="span-2">
             <Checkbox.Group
               options={SOURCE_OPTIONS}
               value={selectedSources}
               onChange={(values: CheckboxValueType[]) => setSelectedSources(values as string[])}
             />
-            <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Switch checked={forceServer} onChange={(checked) => setForceServer(checked)} size="small" />
-              强制 Server 扫描
-            </label>
-            <Button type="primary" htmlType="submit">
+          </Form.Item>
+          <Form.Item label="执行策略">
+            <Space align="center">
+              <Switch checked={forceServer} onChange={(checked) => setForceServer(checked)} />
+              <span className="muted">强制 Server 扫描</span>
+            </Space>
+          </Form.Item>
+          <Form.Item label=" ">
+            <Button type="primary" htmlType="submit" block size="large">
               查询
             </Button>
-          </div>
-        </form>
+          </Form.Item>
+        </Form>
         {lookupInfo && (
           <div className="ti-lookup-summary">
-            {lookupInfo.cached ? <Tag color="green">命中缓存</Tag> : <Tag color="blue">已提交 {lookupInfo.job_ids.length} 个任务</Tag>}
+            {lookupInfo.cached ? (
+              <Tag color="green">命中缓存</Tag>
+            ) : (
+              <Tag color="blue">已提交 {lookupInfo.job_ids.length} 个任务</Tag>
+            )}
             {lookupInfo.job_ids.length > 0 && (
               <span>
                 Job IDs: <code>{lookupInfo.job_ids.join(', ')}</code>
@@ -223,7 +252,7 @@ export function ThreatIntelWorkspace() {
               <div key={source} className="ti-verdict-item">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <strong>{source}</strong>
-                  <Tag color={list[0]?.classification ? 'red' : 'blue'}>
+                  <Tag color={classificationColor(list[0]?.classification)}>
                     {list[0]?.classification ?? '未知'}
                   </Tag>
                 </div>
@@ -253,11 +282,13 @@ export function ThreatIntelWorkspace() {
               <div key={sample.id} className="ti-sample-item">
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <strong>{sample.indicator ?? sample.id}</strong>
-                  <Tag>{sample.status ?? sample.lastEvent}</Tag>
+                  <Tag color={statusColor(sample.status ?? sample.lastEvent)}>{sample.status ?? sample.lastEvent}</Tag>
                 </div>
                 <div className="ti-meta-row">
                   <span>更新: {dayjs(sample.updatedAt).fromNow()}</span>
-                  {sample.classification && <span>Verdict: {sample.classification}</span>}
+                  {sample.classification && (
+                    <Tag color={classificationColor(sample.classification)}>{sample.classification}</Tag>
+                  )}
                 </div>
                 {Object.keys(sample.jobs).length > 0 && (
                   <div className="ti-meta-row">
@@ -293,98 +324,126 @@ export function ThreatIntelWorkspace() {
           {sampleLoading && <div>加载中…</div>}
           {sampleDetail && (
             <div className="ti-sample-detail">
-              <div className="ti-meta-row">
-                <span>ID: {sampleDetail.id}</span>
-                <span>Indicator: {sampleDetail.indicator ?? '—'}</span>
-                {sampleDetail.hash && <span>Hash: {sampleDetail.hash}</span>}
-              </div>
-              <div className="ti-meta-row">
-                <span>状态: {sampleDetail.status}</span>
-                <span>Verdict: {sampleDetail.classification ?? '未知'}</span>
-                <span>来源: {sampleDetail.source ?? '—'}</span>
-              </div>
-              <div className="ti-meta-row">
-                <span>文件名: {sampleDetail.filename ?? '-'}</span>
-                <span>大小: {sampleDetail.size ?? 0} bytes</span>
-              </div>
+              <Descriptions
+                bordered={false}
+                size="small"
+                column={{ xs: 1, sm: 2, lg: 3 }}
+                labelStyle={{ width: 120 }}
+                contentStyle={{ fontWeight: 500 }}
+              >
+                <Descriptions.Item label="ID">{sampleDetail.id}</Descriptions.Item>
+                <Descriptions.Item label="Indicator">{sampleDetail.indicator ?? '—'}</Descriptions.Item>
+                {sampleDetail.hash && <Descriptions.Item label="Hash">{sampleDetail.hash}</Descriptions.Item>}
+                <Descriptions.Item label="状态">
+                  <Tag color={statusColor(sampleDetail.status)}>{sampleDetail.status}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="Verdict">
+                  <Tag color={classificationColor(sampleDetail.classification)}>{sampleDetail.classification ?? '未知'}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="来源">{sampleDetail.source ?? '—'}</Descriptions.Item>
+                <Descriptions.Item label="文件名">{sampleDetail.filename ?? '-'}</Descriptions.Item>
+                <Descriptions.Item label="大小">{sampleDetail.size ?? 0} bytes</Descriptions.Item>
+                <Descriptions.Item label="收录时间">
+                  {sampleDetail.created_at ? dayjs(sampleDetail.created_at).format('MM-DD HH:mm') : '—'}
+                </Descriptions.Item>
+              </Descriptions>
               {sampleDetail.job_statuses && (
-                <div className="ti-meta-row">
+                <Descriptions className="ti-status-descriptions" size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
                   {Object.entries(sampleDetail.job_statuses).map(([src, status]) => (
-                    <Tag key={src} color={statusColor(status)}>
-                      {src}:{status}
-                    </Tag>
+                    <Descriptions.Item key={src} label={src}>
+                      <Tag color={statusColor(status)}>{status}</Tag>
+                    </Descriptions.Item>
                   ))}
-                </div>
+                </Descriptions>
               )}
-              {sampleDetail.artifact_details && sampleDetail.artifact_details.length > 0 ? (
-                <>
-                  <div className="ti-artifact-toolbar">
-                    <span>排序：</span>
-                    <Segmented
-                      size="small"
-                      options={[
-                        { label: '最近', value: 'time' },
-                        { label: '名称', value: 'name' },
-                      ]}
-                      value={artifactSort}
-                      onChange={(value) => setArtifactSort(value as 'time' | 'name')}
-                    />
-                  </div>
-                  <div className="ti-artifact-grid">
-                    {sortArtifacts(sampleDetail.artifact_details, artifactSort).map((artifact) => (
-                      <div key={artifact.id} className="ti-artifact-card">
-                        <strong>{artifact.mime_type ?? 'Artifact'}</strong>
-                        <div className="ti-meta-row">SHA256: {artifact.sha256 ?? '未知'}</div>
-                        {artifact.quarantine_path && <div className="ti-meta-row">路径: {artifact.quarantine_path}</div>}
-                      </div>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="ti-meta-row">
-                  附件: {sampleDetail.artifact_ids?.length ? sampleDetail.artifact_ids.join(', ') : '—'}
-                </div>
-              )}
-              <div className="ti-job-toolbar">
-                <Input
-                  allowClear
-                  size="small"
-                  placeholder="按来源过滤"
-                  value={jobFilter}
-                  onChange={(event) => setJobFilter(event.target.value)}
-                  style={{ width: 200 }}
-                />
-                <Segmented
-                  size="small"
-                  options={[
-                    { label: '按状态', value: 'status' },
-                    { label: '按时间', value: 'time' },
-                  ]}
-                  value={jobSort}
-                  onChange={(value) => setJobSort(value as 'status' | 'time')}
-                />
-              </div>
-              <div className="ti-job-grid">
-                {filterJobs(sampleDetail.jobs, jobFilter, jobSort).map((job) => (
-                  <div key={job.id} className="ti-job-card">
-                    <div className="ti-job-card__header">
-                      <strong>{job.source}</strong>
-                      <Tag color={statusColor(job.status)}>{job.status}</Tag>
-                    </div>
-                    <div className="ti-meta-row">尝试: {job.attempt ?? 0}</div>
-                    <div className="ti-meta-row">更新时间: {dayjs(job.updated_at).format('MM-DD HH:mm')}</div>
-                    {job.error_code && (
-                      <Tag color="red">
-                        <a href={getErrorDocLink(job.error_code)} target="_blank" rel="noreferrer">
-                          {job.error_code}
-                        </a>
-                      </Tag>
-                    )}
-                    {job.error && <div className="ti-meta-row">错误: {job.error}</div>}
-                  </div>
-                ))}
-                {sampleDetail.jobs.length === 0 && <div className="muted">尚无扫描任务</div>}
-              </div>
+              <Collapse
+                className="ti-detail-collapse"
+                defaultActiveKey={['artifacts', 'jobs']}
+                items={[
+                  {
+                    key: 'artifacts',
+                    label: `附件详情 (${sampleDetail.artifact_details?.length ?? sampleDetail.artifact_ids?.length ?? 0})`,
+                    children:
+                      sampleDetail.artifact_details && sampleDetail.artifact_details.length > 0 ? (
+                        <>
+                          <div className="ti-artifact-toolbar">
+                            <span>排序：</span>
+                            <Segmented
+                              size="small"
+                              options={[
+                                { label: '最近', value: 'time' },
+                                { label: '名称', value: 'name' },
+                              ]}
+                              value={artifactSort}
+                              onChange={(value) => setArtifactSort(value as 'time' | 'name')}
+                            />
+                          </div>
+                          <div className="ti-artifact-grid">
+                            {sortArtifacts(sampleDetail.artifact_details, artifactSort).map((artifact) => (
+                              <div key={artifact.id} className="ti-artifact-card">
+                                <strong>{artifact.mime_type ?? 'Artifact'}</strong>
+                                <div className="ti-meta-row">SHA256: {artifact.sha256 ?? '未知'}</div>
+                                {artifact.quarantine_path && <div className="ti-meta-row">路径: {artifact.quarantine_path}</div>}
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="ti-meta-row">
+                          附件: {sampleDetail.artifact_ids?.length ? sampleDetail.artifact_ids.join(', ') : '—'}
+                        </div>
+                      ),
+                  },
+                  {
+                    key: 'jobs',
+                    label: `任务执行 (${sampleDetail.jobs.length})`,
+                    children: (
+                      <>
+                        <div className="ti-job-toolbar">
+                          <Input
+                            allowClear
+                            size="small"
+                            placeholder="按来源过滤"
+                            value={jobFilter}
+                            onChange={(event) => setJobFilter(event.target.value)}
+                            style={{ width: 200 }}
+                          />
+                          <Segmented
+                            size="small"
+                            options={[
+                              { label: '按状态', value: 'status' },
+                              { label: '按时间', value: 'time' },
+                            ]}
+                            value={jobSort}
+                            onChange={(value) => setJobSort(value as 'status' | 'time')}
+                          />
+                        </div>
+                        <div className="ti-job-grid">
+                          {filterJobs(sampleDetail.jobs, jobFilter, jobSort).map((job) => (
+                            <div key={job.id} className="ti-job-card">
+                              <div className="ti-job-card__header">
+                                <strong>{job.source}</strong>
+                                <Tag color={statusColor(job.status)}>{job.status}</Tag>
+                              </div>
+                              <div className="ti-meta-row">尝试: {job.attempt ?? 0}</div>
+                              <div className="ti-meta-row">更新时间: {dayjs(job.updated_at).format('MM-DD HH:mm')}</div>
+                              {job.error_code && (
+                                <Tag color="red">
+                                  <a href={getErrorDocLink(job.error_code)} target="_blank" rel="noreferrer">
+                                    {job.error_code}
+                                  </a>
+                                </Tag>
+                              )}
+                              {job.error && <div className="ti-meta-row">错误: {job.error}</div>}
+                            </div>
+                          ))}
+                          {sampleDetail.jobs.length === 0 && <div className="muted">尚无扫描任务</div>}
+                        </div>
+                      </>
+                    ),
+                  },
+                ]}
+              />
             </div>
           )}
         </section>
@@ -487,6 +546,12 @@ export function statusColor(status?: string) {
   if (normalized === 'running' || normalized === 'scanning') return 'blue';
   if (normalized === 'pending') return 'default';
   return 'blue';
+}
+
+export function classificationColor(classification?: string) {
+  if (!classification) return 'default';
+  const normalized = classification.toLowerCase();
+  return CLASSIFICATION_COLORS[normalized] ?? 'blue';
 }
 
 export function sortArtifacts(

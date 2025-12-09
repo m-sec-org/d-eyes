@@ -36,6 +36,12 @@ import {
   ComplianceFindingSchema,
   TaskViewSchema,
   TaskListSummarySchema,
+  SystemEventRecordSchema,
+  SystemEventCursorSchema,
+  SystemEventListResponseSchema,
+  SystemEventAggregatesSchema,
+  DetectionStreamEventSchema,
+  CollectorConfigSchema,
 } from './api/schemas';
 
 export type Task = z.infer<typeof TaskSchema>;
@@ -74,3 +80,9 @@ export type PlaybookRun = z.infer<typeof PlaybookRunSchema>;
 export type ComplianceFramework = z.infer<typeof ComplianceFrameworkSchema>;
 export type ComplianceControl = z.infer<typeof ComplianceControlSchema>;
 export type ComplianceFinding = z.infer<typeof ComplianceFindingSchema>;
+export type SystemEventRecord = z.infer<typeof SystemEventRecordSchema>;
+export type SystemEventCursor = z.infer<typeof SystemEventCursorSchema>;
+export type SystemEventListResponse = z.infer<typeof SystemEventListResponseSchema>;
+export type SystemEventAggregates = z.infer<typeof SystemEventAggregatesSchema>;
+export type DetectionStreamEvent = z.infer<typeof DetectionStreamEventSchema>;
+export type CollectorConfig = z.infer<typeof CollectorConfigSchema>;

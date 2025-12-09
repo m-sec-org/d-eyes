@@ -5,6 +5,7 @@ export type Role = 'operator' | 'auditor' | 'admin';
 const routeRoles: Record<string, Role[]> = {
   '/': ['operator', 'admin'],
   '/tasks': ['operator', 'admin'],
+  '/events': ['operator', 'auditor', 'admin'],
   '/risks': ['operator', 'auditor', 'admin'],
   '/assets': ['operator', 'admin'],
   '/threat-intel': ['operator', 'admin'],

@@ -39,18 +39,19 @@
   gap: 1rem;
 }
 
-.playbook-detail-grid pre,
-.playbook-detail-pane pre {
-  background: var(--surface-subtle, rgba(0, 0, 0, 0.03));
-  padding: 0.75rem;
-  border-radius: 8px;
-  overflow-x: auto;
-}
-
 .playbook-card .selected {
   background: rgba(22, 119, 255, 0.08);
 }
 
 .muted {
+  color: var(--text-muted, #6b7280);
+}
+
+.playbook-detail-pane .code-block {
+  width: 100%;
+}
+
+.playbook-form-hint {
+  font-size: 12px;
   color: var(--text-muted, #6b7280);
 }

@@ -1,8 +1,31 @@
 import dayjs from 'dayjs';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Column } from '@ant-design/plots';
-import { Button, Card, Col, Empty, List, Row, Segmented, Skeleton, Space, Statistic, Tag, Typography } from 'antd';
-import { ReloadOutlined, DownloadOutlined } from '@ant-design/icons';
+import {
+  Button,
+  Card,
+  Col,
+  Empty,
+  List,
+  Row,
+  Segmented,
+  Skeleton,
+  Space,
+  Statistic,
+  Tag,
+  Typography,
+  theme,
+} from 'antd';
+import {
+  ReloadOutlined,
+  DownloadOutlined,
+  ArrowDownOutlined,
+  ArrowUpOutlined,
+  MinusOutlined,
+  AlertOutlined,
+  ThunderboltOutlined,
+  DashboardOutlined,
+} from '@ant-design/icons';
 import { useRiskSummary } from './hooks/useRiskSummary';
 import { PageHeader } from '@/components/layout/PageHeader';
 
@@ -23,11 +46,11 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 const CHART_COLOR_MAP: Record<string, string> = {
-  运行中: '#13c2c2',
-  失败: '#ff4d4f',
-  成功: '#52c41a',
+  运行中: '#177ddc',
+  失败: '#f5222d',
+  成功: '#13a8a8',
   待执行: '#faad14',
-  排队中: '#1677ff',
+  排队中: '#722ed1',
 };
 
 const REPORT_OPTIONS = [
@@ -40,6 +63,7 @@ const { Text } = Typography;
 export function RiskDashboard() {
   const [reportType, setReportType] = useState<'respond' | 'baseline'>('respond');
   const { summary, isLoading, refresh } = useRiskSummary(reportType);
+  const { token } = theme.useToken();
 
   const chartData = useMemo(() => {
     return Object.entries(summary.status ?? {}).map(([status, value]) => ({
@@ -55,22 +79,59 @@ export function RiskDashboard() {
       data: chartData,
       xField: 'status',
       yField: 'value',
+      seriesField: 'status',
       columnWidthRatio: 0.55,
-      colorField: 'status',
-      color: (datum: { status: string }) => CHART_COLOR_MAP[datum.status] ?? '#1677ff',
-      label: { position: 'inside', style: { fill: '#fff', fontSize: 12 } },
-      tooltip: { showMarkers: false },
+      color: (datum: { status: string }) => CHART_COLOR_MAP[datum.status] ?? '#177ddc',
+      label: { position: 'top', style: { fontSize: 12 } },
+      legend: {
+        position: 'top',
+      },
+      tooltip: {
+        showMarkers: false,
+        formatter: (datum: { status: string; value: number }) => ({
+          name: datum.status,
+          value: `${datum.value} 次`,
+        }),
+      },
       interactions: [{ type: 'active-region' }],
       xAxis: { label: { autoRotate: false } },
+      yAxis: {
+        label: {
+          formatter: (value: string) => `${value}`,
+        },
+      },
+      columnStyle: {
+        radius: [4, 4, 0, 0],
+      },
     }),
     [chartData]
   );
 
-  const statCards = [
-    { title: '总风险事件', value: summary.totals[reportType] ?? 0, color: undefined },
-    { title: '失败 / 高危', value: summary.status.failed ?? 0, color: '#ff4d4f' },
-    { title: '处理中', value: summary.status.running ?? 0, color: '#13c2c2' },
+  const statCards: StatCardConfig[] = [
+    {
+      title: '总风险事件',
+      value: summary.totals[reportType] ?? 0,
+      color: token.colorPrimary,
+      icon: <DashboardOutlined style={{ color: token.colorPrimary }} />,
+      trend: summary.trends?.totals?.[reportType],
+    },
+    {
+      title: '失败 / 高危',
+      value: summary.status.failed ?? 0,
+      color: token.colorError,
+      icon: <AlertOutlined style={{ color: token.colorError }} />,
+      trend: summary.trends?.status?.failed,
+    },
+    {
+      title: '处理中',
+      value: summary.status.running ?? 0,
+      color: token.colorWarning,
+      icon: <ThunderboltOutlined style={{ color: token.colorWarning }} />,
+      trend: summary.trends?.status?.running,
+    },
   ];
+
+  const trendPeriod = summary.trends?.period ?? '较昨日';
 
   return (
     <div className="risk-dashboard">
@@ -106,11 +167,17 @@ export function RiskDashboard() {
                 {isLoading ? (
                   <Skeleton active paragraph={false} title={{ width: '60%' }} />
                 ) : (
-                  <Statistic
-                    title={card.title}
-                    value={card.value}
-                    valueStyle={{ fontWeight: 600, color: card.color }}
-                  />
+                  <Space direction="vertical" size={4}>
+                    <Space align="center" size={8}>
+                      {card.icon}
+                      <Statistic
+                        title={card.title}
+                        value={card.value}
+                        valueStyle={{ fontWeight: 600, color: card.color }}
+                      />
+                    </Space>
+                    <TrendText trend={card.trend} period={trendPeriod} />
+                  </Space>
                 )}
               </Card>
             </Col>
@@ -152,5 +219,44 @@ export function RiskDashboard() {
         </Card>
       </Space>
     </div>
+  );
+}
+
+interface StatCardConfig {
+  title: string;
+  value: number;
+  color?: string;
+  icon?: ReactNode;
+  trend?: TrendMetric;
+}
+
+interface TrendMetric {
+  delta: number;
+  trend?: 'up' | 'down' | 'flat';
+}
+
+function TrendText({ trend, period }: { trend?: TrendMetric; period: string }) {
+  const direction = trend?.trend ?? (trend ? (trend.delta > 0 ? 'up' : trend.delta < 0 ? 'down' : 'flat') : 'flat');
+  const isFlat = direction === 'flat';
+
+  let color = 'var(--ant-color-text-secondary)';
+  if (direction === 'up') color = 'var(--ant-color-success)';
+  if (direction === 'down') color = 'var(--ant-color-error)';
+
+  const icon =
+    direction === 'up' ? (
+      <ArrowUpOutlined />
+    ) : direction === 'down' ? (
+      <ArrowDownOutlined />
+    ) : (
+      <MinusOutlined />
+    );
+
+  const deltaText = trend ? `${trend.delta > 0 ? '+' : ''}${trend.delta}%` : '0%';
+
+  return (
+    <Text style={{ color }}>
+      {icon} {period} {isFlat ? '—' : ''} {deltaText}
+    </Text>
   );
 }

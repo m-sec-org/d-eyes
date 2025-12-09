@@ -24,6 +24,7 @@ const NAV_GROUPS: NavGroup[] = [
     title: '洞察',
     items: [
       { label: '风险', route: '/risks', icon: '⚠️', roles: ['operator', 'auditor', 'admin'] },
+      { label: '事件工作台', route: '/events', icon: '🛰️', roles: ['operator', 'auditor', 'admin'] },
       { label: '资产', route: '/assets', icon: '🧱', roles: ['operator', 'admin'] },
       { label: '威胁情报', route: '/threat-intel', icon: '🕵️', roles: ['operator', 'admin'] },
       { label: '行为异常', route: '/anomalies', icon: '🧠', roles: ['operator', 'auditor', 'admin'] },

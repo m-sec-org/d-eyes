@@ -2,11 +2,19 @@
 
 package collector
 
-func registerDefaultFactories(m *Manager) {
-	_ = m.RegisterFactory(KindETW, func(cfg Config) (EventCollector, error) {
-		return newETWCollector(cfg)
+func registerDefaultFactories(s *Service) {
+	if s == nil || s.manager == nil {
+		return
+	}
+	_ = s.manager.RegisterFactory(KindETW, func(cfg Config) (EventCollector, error) {
+		instance, err := newETWCollector(cfg)
+		if err != nil {
+			return nil, err
+		}
+		s.applyDetectionSink(instance)
+		return instance, nil
 	})
-	_ = m.RegisterFactory(KindEBPF, func(cfg Config) (EventCollector, error) {
+	_ = s.manager.RegisterFactory(KindEBPF, func(cfg Config) (EventCollector, error) {
 		return newEBPFCollector(cfg)
 	})
 }

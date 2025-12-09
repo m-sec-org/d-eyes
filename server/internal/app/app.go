@@ -81,6 +81,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if eventService != nil {
 		defer eventService.Close()
 	}
+	parserRegistry, err := eventing.NewParserRegistry(cfg.Events, metricsCollector, log)
+	if err != nil {
+		return fmt.Errorf("init parser registry: %w", err)
+	}
 	collectorHub := collectorctrl.NewHub()
 	defer collectorHub.Close()
 
@@ -168,6 +172,19 @@ func Run(ctx context.Context, cfg config.Config) error {
 	queueStreamHandler := streams.SSEHandler(queueStream)
 	defer queueStream.Close()
 
+	detectionStream := streams.NewTaskHub()
+	detectionStreamHandler := streams.SSEHandler(detectionStream)
+	defer detectionStream.Close()
+
+	var detectionEngine *eventing.DetectionEngine
+	if eventService != nil {
+		detectionEngine = eventing.NewDetectionEngine(cfg.Events, st, sched, tiOrchestrator, log, metricsCollector, detectionStream)
+		if detectionEngine != nil {
+			eventService.RegisterConsumer(detectionEngine)
+			defer detectionEngine.Close()
+		}
+	}
+
 	taskCatalogManager, err := taskcatalog.NewManager(taskcatalog.Config{PersistPath: cfg.TaskCatalog.PersistPath}, log)
 	if err != nil {
 		return fmt.Errorf("init task catalog: %w", err)
@@ -249,8 +266,16 @@ func Run(ctx context.Context, cfg config.Config) error {
 		Metrics:          metricsCollector,
 		AllowedProviders: cfg.Collectors.AllowedProviders,
 		AllowedProbes:    cfg.Collectors.AllowedProbes,
+		Control:          cfg.Collectors,
 	}
-	eventsHandler := &v1.EventsHandler{Service: eventService, Store: st, Config: cfg.Events}
+	eventsHandler := &v1.EventsHandler{
+		Service: eventService,
+		Store:   st,
+		Config:  cfg.Events,
+		RBAC:    rbacEnforcer,
+		Parsers: parserRegistry,
+		Metrics: metricsCollector,
+	}
 
 	router := api.NewRouter(
 		cfg,
@@ -279,6 +304,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		metricsHandler,
 		taskStreamHandler,
 		queueStreamHandler,
+		detectionStreamHandler,
 		threatStreamHandler,
 		anomalyStreamHandler,
 	)

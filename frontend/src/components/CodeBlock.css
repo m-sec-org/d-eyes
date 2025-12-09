@@ -1,0 +1,37 @@
+.code-block {
+  background: var(--surface-subtle, rgba(0, 0, 0, 0.03));
+  border-radius: 12px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border: 1px solid rgba(5, 5, 5, 0.05);
+}
+
+.code-block__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.code-block__title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ant-color-text);
+}
+
+.code-block__pre {
+  margin: 0;
+  padding: 0;
+  font-family: 'JetBrains Mono', Consolas, 'SFMono-Regular', Menlo, monospace;
+  font-size: 0.85rem;
+  background: transparent;
+  color: var(--ant-color-text);
+  overflow: auto;
+  white-space: pre;
+}
+
+.code-block:focus-within {
+  box-shadow: 0 0 0 1px rgba(5, 5, 5, 0.1);
+}

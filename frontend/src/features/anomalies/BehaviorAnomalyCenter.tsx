@@ -1,5 +1,5 @@
 import './BehaviorAnomalyCenter.css';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import useSWR from 'swr';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -31,6 +31,14 @@ const severityThreshold: Record<string, number> = {
 const statusColors: Record<string, string> = {
   open: 'processing',
   closed: 'default',
+};
+
+const graphNodeColors: Record<string, string> = {
+  agent: '#1677ff',
+  connection_cluster: '#13c2c2',
+  process_summary: '#722ed1',
+  resource_usage: '#fa8c16',
+  session_cluster: '#eb2f96',
 };
 
 const severityOptions = [
@@ -91,6 +99,11 @@ export function BehaviorAnomalyCenter() {
   const [agentFilter, setAgentFilter] = useState('');
   const [limit, setLimit] = useState(50);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
+  const [splitRatio, setSplitRatio] = useState(0.58);
+  const [isResizing, setIsResizing] = useState(false);
+  const [isStacked, setIsStacked] = useState(false);
+  const [panelHeight, setPanelHeight] = useState(520);
 
   const filters = useMemo(() => {
     const payload: AnomalyFilters = { limit };
@@ -184,6 +197,77 @@ export function BehaviorAnomalyCenter() {
   const anomalyEvents = useAnomalyEventStore((state) => state.events);
   const streamStatus = useAnomalyEventStore((state) => state.status);
   const streamFeed = anomalyEvents.slice(0, 20);
+  const tableScrollY = Math.max(240, Math.round(panelHeight - 170));
+
+  useLayoutEffect(() => {
+    const element = splitContainerRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      setPanelHeight(entry.contentRect.height);
+      setIsStacked(entry.contentRect.width < 960);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    if (isStacked) {
+      setIsResizing(false);
+      return;
+    }
+    const handleMove = (event: MouseEvent) => {
+      if (!splitContainerRef.current) return;
+      event.preventDefault();
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      const ratio = (event.clientX - rect.left) / rect.width;
+      setSplitRatio((current) => {
+        if (!Number.isFinite(ratio)) return current;
+        return Math.min(0.75, Math.max(0.35, ratio));
+      });
+    };
+    const handleTouch = (event: TouchEvent) => {
+      if (!splitContainerRef.current) return;
+      const touch = event.touches[0];
+      if (!touch) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      const ratio = (touch.clientX - rect.left) / rect.width;
+      setSplitRatio((current) => {
+        if (!Number.isFinite(ratio)) return current;
+        return Math.min(0.75, Math.max(0.35, ratio));
+      });
+    };
+    const handleUp = () => setIsResizing(false);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    window.addEventListener('touchmove', handleTouch);
+    window.addEventListener('touchend', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+      window.removeEventListener('touchmove', handleTouch);
+      window.removeEventListener('touchend', handleUp);
+    };
+  }, [isResizing, isStacked]);
+
+  const startResize = useCallback(
+    (event: React.MouseEvent | React.TouchEvent) => {
+      if (isStacked) return;
+      event.preventDefault();
+      setIsResizing(true);
+    },
+    [isStacked]
+  );
+
+  const splitClassName = useMemo(() => {
+    const classes = ['anomaly-split'];
+    if (isResizing) classes.push('is-resizing');
+    if (isStacked) classes.push('is-stacked');
+    return classes.join(' ');
+  }, [isResizing, isStacked]);
 
   return (
     <div className="anomaly-center">
@@ -226,121 +310,148 @@ export function BehaviorAnomalyCenter() {
         </div>
       </Card>
 
-      <div className="anomaly-grid">
-        <Card className="anomaly-card" title={`异常列表 (${anomalies.length})`} styles={{ body: { padding: 0 } }}>
-          <Table
-            className="anomaly-list-table"
-            rowKey="id"
-            size="small"
-            loading={listLoading}
-            columns={columns}
-            dataSource={anomalies}
-            pagination={false}
-            rowClassName={(record) => (record.id === selectedId ? 'selected-row' : '')}
-            onRow={(record) => ({
-              onClick: () => setSelectedId(record.id),
-            })}
-          />
-          {anomalies.length === 0 && !listLoading && <Empty description="暂无异常" style={{ margin: '2rem 0' }} />}
-        </Card>
-
-        <Card className="anomaly-card" title="异常详情">
-          {activeAnomaly ? (
-            <div className="anomaly-detail">
-              <Space size="large" wrap>
-                <Statistic title="Score" value={activeAnomaly.score} precision={1} suffix="/100" />
-                <div>
-                  <div>严重级别</div>
-                  {severityTag(activeAnomaly.severity)}
-                </div>
-                <div>
-                  <div>状态</div>
-                  {statusTag(activeAnomaly.status)}
-                </div>
-              </Space>
-              <div className="anomaly-meta">
-                <div>
-                  <span className="muted">Agent</span>
-                  <code>{activeAnomaly.agent_id ?? '未知'}</code>
-                </div>
-                <div>
-                  <span className="muted">关联任务</span>
-                  <code>{activeAnomaly.task_id ?? '—'}</code>
-                </div>
-                <div>
-                  <span className="muted">IOC / 指标</span>
-                  <code>{activeAnomaly.ioc ?? '—'}</code>
-                </div>
-                <div>
-                  <span className="muted">最近更新</span>
-                  {dayjs(activeAnomaly.updated_at).format('YYYY-MM-DD HH:mm:ss')}
-                </div>
-              </div>
-              {activeAnomaly.entities && activeAnomaly.entities.length > 0 && (
-                <div>
-                  <span className="muted">涉及实体</span>
-                  <Space wrap>
-                    {activeAnomaly.entities.map((entity) => (
-                      <Tag key={entity}>{entity}</Tag>
-                    ))}
-                  </Space>
-                </div>
-              )}
-              <div>
-                <Title level={5}>摘要指标</Title>
-                {activeAnomaly.summary && Object.keys(activeAnomaly.summary).length > 0 ? (
-                  <div className="anomaly-summary-grid">
-                    {Object.entries(activeAnomaly.summary).map(([key, value]) => (
-                      <div key={key} className="anomaly-summary-item">
-                        <span className="muted">{key}</span>
-                        <span>{formatValue(value)}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <Empty description="暂无摘要" />
-                )}
-              </div>
-              <div>
-                <Title level={5}>关联图谱</Title>
-                {anomalyGraph && (anomalyGraph.nodes.length > 0 || anomalyGraph.edges.length > 0) ? (
-                  <div className="anomaly-graph">
-                    <div>
-                      <strong>节点</strong>
-                      <ul>
-                        {anomalyGraph.nodes.map((node) => (
-                          <li key={node.id}>
-                            <Tooltip title={JSON.stringify(node.properties ?? {}, null, 2)}>
-                              <span className="graph-node-type">[{node.type}]</span> {node.label ?? node.id}
-                            </Tooltip>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div>
-                      <strong>边</strong>
-                      {anomalyGraph.edges.length > 0 ? (
-                        <ul>
-                          {anomalyGraph.edges.map((edge) => (
-                            <li key={edge.id}>
-                              {edge.source_node} → {edge.target_node} ({edge.type})
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <span className="muted">暂无边</span>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <Empty description="暂无图谱数据" />
-                )}
-              </div>
+      <div className={splitClassName} ref={splitContainerRef}>
+        <div className="anomaly-panel" style={!isStacked ? { flexBasis: `${Math.round(splitRatio * 100)}%` } : undefined}>
+          <Card className="anomaly-card anomaly-panel-card anomaly-panel-card--list" title={`异常列表 (${anomalies.length})`} styles={{ body: { padding: 0 } }}>
+            <div className="anomaly-panel-scroll">
+              <Table
+                className="anomaly-list-table"
+                rowKey="id"
+                size="small"
+                loading={listLoading}
+                columns={columns}
+                dataSource={anomalies}
+                pagination={false}
+                rowClassName={(record) => (record.id === selectedId ? 'selected-row' : '')}
+                onRow={(record) => ({
+                  onClick: () => setSelectedId(record.id),
+                })}
+                scroll={{ y: tableScrollY }}
+                sticky
+              />
+              {anomalies.length === 0 && !listLoading && <Empty description="暂无异常" style={{ margin: '2rem 0' }} />}
             </div>
-          ) : (
-            <Empty description="请选择一个异常" />
-          )}
-        </Card>
+          </Card>
+        </div>
+
+        {!isStacked && (
+          <button
+            type="button"
+            className="anomaly-divider"
+            onMouseDown={startResize}
+            onTouchStart={startResize}
+            aria-label="调整异常列表与详情宽度"
+          />
+        )}
+
+        <div className="anomaly-panel" style={!isStacked ? { flexBasis: `${Math.round((1 - splitRatio) * 100)}%` } : undefined}>
+          <Card className="anomaly-card anomaly-panel-card anomaly-panel-card--detail" title="异常详情">
+            {activeAnomaly ? (
+              <div className="anomaly-panel-scroll">
+                <div className="anomaly-detail">
+                  <Space size="large" wrap>
+                    <Statistic title="Score" value={activeAnomaly.score} precision={1} suffix="/100" />
+                    <div>
+                      <div>严重级别</div>
+                      {severityTag(activeAnomaly.severity)}
+                    </div>
+                    <div>
+                      <div>状态</div>
+                      {statusTag(activeAnomaly.status)}
+                    </div>
+                  </Space>
+                  <div className="anomaly-meta">
+                    <div>
+                      <span className="muted">Agent</span>
+                      <code>{activeAnomaly.agent_id ?? '未知'}</code>
+                    </div>
+                    <div>
+                      <span className="muted">关联任务</span>
+                      <code>{activeAnomaly.task_id ?? '—'}</code>
+                    </div>
+                    <div>
+                      <span className="muted">IOC / 指标</span>
+                      <code>{activeAnomaly.ioc ?? '—'}</code>
+                    </div>
+                    <div>
+                      <span className="muted">最近更新</span>
+                      {dayjs(activeAnomaly.updated_at).format('YYYY-MM-DD HH:mm:ss')}
+                    </div>
+                  </div>
+                  {activeAnomaly.entities && activeAnomaly.entities.length > 0 && (
+                    <div>
+                      <span className="muted">涉及实体</span>
+                      <Space wrap>
+                        {activeAnomaly.entities.map((entity) => (
+                          <Tag key={entity}>{entity}</Tag>
+                        ))}
+                      </Space>
+                    </div>
+                  )}
+                  <div>
+                    <Title level={5}>摘要指标</Title>
+                    {activeAnomaly.summary && Object.keys(activeAnomaly.summary).length > 0 ? (
+                      <div className="anomaly-summary-grid">
+                        {Object.entries(activeAnomaly.summary).map(([key, value]) => (
+                          <div key={key} className="anomaly-summary-item">
+                            <span className="muted">{key}</span>
+                            <span>{formatValue(value)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <Empty description="暂无摘要" />
+                    )}
+                  </div>
+                  <div>
+                    <Title level={5}>关联图谱</Title>
+                    {anomalyGraph && (anomalyGraph.nodes.length > 0 || anomalyGraph.edges.length > 0) ? (
+                      <div className="anomaly-graph-layout">
+                        <div className="anomaly-graph-canvas-wrapper">
+                          <RelationGraph graph={anomalyGraph} />
+                        </div>
+                        <div className="anomaly-graph-meta">
+                          <div>
+                            <strong>节点</strong>
+                            <ul>
+                              {anomalyGraph.nodes.map((node) => (
+                                <li key={node.id}>
+                                  <Tooltip title={JSON.stringify(node.properties ?? {}, null, 2)}>
+                                    <span className="graph-node-type">[{node.type}]</span> {node.label ?? node.id}
+                                  </Tooltip>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                          <div>
+                            <strong>边</strong>
+                            {anomalyGraph.edges.length > 0 ? (
+                              <ul>
+                                {anomalyGraph.edges.map((edge) => (
+                                  <li key={edge.id}>
+                                    {edge.source_node.slice(0, 8)} → {edge.target_node.slice(0, 8)} ({edge.type})
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <span className="muted">暂无边</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <Empty description="暂无图谱数据" />
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="anomaly-panel-scroll">
+                <Empty description="请选择一个异常" />
+              </div>
+            )}
+          </Card>
+        </div>
       </div>
 
       <Card className="anomaly-card" title="实时事件">
@@ -371,5 +482,123 @@ export function BehaviorAnomalyCenter() {
         )}
       </Card>
     </div>
+  );
+}
+
+interface PositionedGraphNode {
+  node: AnomalyGraph['nodes'][number];
+  x: number;
+  y: number;
+  isPrimary: boolean;
+}
+
+interface RelationGraphProps {
+  graph: AnomalyGraph;
+  height?: number;
+}
+
+function RelationGraph({ graph, height = 320 }: RelationGraphProps) {
+  const layout = useMemo(() => {
+    if (!graph || graph.nodes.length === 0) return null;
+    const width = 600;
+    const agentNode = graph.nodes.find((node) => node.type === 'agent');
+    const others = agentNode ? graph.nodes.filter((node) => node.id !== agentNode.id) : graph.nodes;
+    const viewHeight = height;
+    const centerX = width / 2;
+    const centerY = viewHeight / 2;
+    const radius = Math.max(Math.min(centerX, centerY) - 48, 80);
+    const positioned: PositionedGraphNode[] = [];
+    if (agentNode) {
+      positioned.push({ node: agentNode, x: centerX, y: centerY, isPrimary: true });
+    }
+    const totalOthers = Math.max(others.length, 1);
+    others.forEach((node, index) => {
+      const angle = (2 * Math.PI * index) / totalOthers;
+      positioned.push({
+        node,
+        x: centerX + radius * Math.cos(angle),
+        y: centerY + radius * Math.sin(angle),
+        isPrimary: false,
+      });
+    });
+    const pointMap = new Map(positioned.map((item) => [item.node.id, item]));
+    const edges = graph.edges
+      .map((edge) => {
+        const source = pointMap.get(edge.source_node);
+        const target = pointMap.get(edge.target_node);
+        if (!source || !target) return null;
+        return { edge, source, target };
+      })
+      .filter(Boolean) as Array<{
+      edge: AnomalyGraph['edges'][number];
+      source: PositionedGraphNode;
+      target: PositionedGraphNode;
+    }>;
+    return { width, height: viewHeight, nodes: positioned, edges };
+  }, [graph, height]);
+
+  if (!layout) {
+    return <Empty description="暂无图谱数据" />;
+  }
+
+  return (
+    <svg
+      className="anomaly-graph-canvas"
+      viewBox={`0 0 ${layout.width} ${layout.height}`}
+      width="100%"
+      height={layout.height}
+      role="img"
+      aria-label="异常关联图谱"
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <defs>
+        <marker id="anomaly-graph-arrow" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L8,4 L0,8 z" fill="#bfbfbf" />
+        </marker>
+        <filter id="anomaly-node-shadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="4" floodColor="rgba(0,0,0,0.12)" />
+        </filter>
+      </defs>
+
+      {layout.edges.map(({ edge, source, target }) => (
+        <g key={edge.id} className="anomaly-graph-edge">
+          <line
+            x1={source.x}
+            y1={source.y}
+            x2={target.x}
+            y2={target.y}
+            stroke="#c4c4c4"
+            strokeWidth={2}
+            markerEnd="url(#anomaly-graph-arrow)"
+          />
+          <text
+            x={(source.x + target.x) / 2}
+            y={(source.y + target.y) / 2 - 6}
+            className="anomaly-graph-edge-label"
+            textAnchor="middle"
+          >
+            {edge.type}
+          </text>
+        </g>
+      ))}
+
+      {layout.nodes.map(({ node, x, y, isPrimary }) => {
+        const color = graphNodeColors[node.type] ?? '#94a3b8';
+        return (
+          <g key={node.id} className="anomaly-graph-node" transform={`translate(${x}, ${y})`}>
+            <circle
+              r={isPrimary ? 30 : 22}
+              fill={color}
+              stroke={isPrimary ? '#10239e' : '#e6f4ff'}
+              strokeWidth={isPrimary ? 2.5 : 1.5}
+              filter="url(#anomaly-node-shadow)"
+            />
+            <text textAnchor="middle" dominantBaseline="middle" className="anomaly-graph-node-label">
+              {node.label ?? node.type}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
   );
 }

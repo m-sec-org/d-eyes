@@ -17,6 +17,9 @@ scripts/coverage-report.sh
 log "插件兼容性"
 scripts/plugin-compat.sh
 
+log "eBPF 构建校验"
+scripts/verify-ebpf-build.sh
+
 if [[ -n "${PROM_URL:-}" ]]; then
   log "性能基线"
   scripts/perf-baseline.sh "$PROM_URL"

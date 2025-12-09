@@ -65,6 +65,7 @@ func TestQueueSummary(t *testing.T) {
 		nil, // metrics handler
 		nil, // task stream
 		nil, // queue stream
+		nil, // detection stream
 		nil, // threat stream
 		nil, // anomaly stream
 	)

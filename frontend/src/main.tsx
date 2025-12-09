@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import 'antd/dist/reset.css';
 import './index.css';
+import './lib/antdCompat';
 import App from './App';
 import { AppProviders } from './app/providers/AppProviders';
 
