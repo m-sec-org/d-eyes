@@ -18,11 +18,14 @@ import (
 
 	"github.com/m-sec-org/d-eyes/server/internal/api"
 	v1 "github.com/m-sec-org/d-eyes/server/internal/api/v1"
+	"github.com/m-sec-org/d-eyes/server/internal/auditlog"
 	"github.com/m-sec-org/d-eyes/server/internal/basscenarios"
 	"github.com/m-sec-org/d-eyes/server/internal/config"
 	"github.com/m-sec-org/d-eyes/server/internal/model"
 	"github.com/m-sec-org/d-eyes/server/internal/queue/memory"
+	"github.com/m-sec-org/d-eyes/server/internal/rbac"
 	"github.com/m-sec-org/d-eyes/server/internal/scheduler"
+	"github.com/m-sec-org/d-eyes/server/internal/security"
 	"github.com/m-sec-org/d-eyes/server/internal/store"
 	"github.com/m-sec-org/d-eyes/server/internal/taskcatalog"
 )
@@ -338,6 +341,172 @@ func TestTaskCreateValidatesProfilePayload(t *testing.T) {
 	})
 }
 
+func TestTaskCreateDefaultsRequiredCapabilitiesFromCatalog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+
+	st := store.NewInMemoryStore()
+	queue := memory.New()
+	cfg := config.Config{
+		Security: config.SecurityConfig{
+			APIKeys: []string{"changeme"},
+		},
+		Scheduler: config.SchedulerConfig{
+			LeaseTTL:          2 * time.Minute,
+			MaxRetries:        1,
+			HeartbeatTimeout:  30 * time.Second,
+			QueueCapacity:     64,
+			LeasePollInterval: time.Millisecond,
+		},
+	}
+	sched := scheduler.New(st, queue, cfg.Scheduler)
+
+	catalog := newTestCatalog(t)
+	_, err := catalog.CreateTaskType(ctx, taskcatalog.TaskType{
+		Name:         "foo",
+		DisplayName:  "Foo",
+		Capabilities: []string{"cap-a", "cap-b"},
+	})
+	require.NoError(t, err)
+	_, err = catalog.CreateTaskType(ctx, taskcatalog.TaskType{
+		Name:         "emptycaps",
+		DisplayName:  "EmptyCaps",
+		Capabilities: []string{},
+	})
+	require.NoError(t, err)
+
+	handler := &v1.TaskHandler{Store: st, Sched: sched, Catalog: catalog}
+	router := api.NewRouter(
+		cfg,
+		handler,
+		nil,
+		&v1.TemplateHandler{},
+		&v1.ReportHandler{Store: st},
+		nil, // catalog
+		nil, // plugin
+		nil, // bas
+		nil, // agent
+		nil, // audit
+		nil, // rbac
+		nil, // artifact
+		nil, // threat intel
+		nil, // behavior
+		nil, // compliance
+		nil, // playbook
+		nil, // cert
+		nil, // security
+		nil, // ops
+		nil, // queue handler
+		nil, // collector handler
+		nil, // events handler
+		nil, // mfa store
+		nil, // metrics handler
+		nil, // task stream
+		nil, // queue stream
+		nil, // detection stream
+		nil, // threat stream
+		nil, // anomaly stream
+	)
+
+	makeRequest := func(payload map[string]any) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "changeme")
+		return performRequest(router, req)
+	}
+
+	t.Run("injects defaults when absent", func(t *testing.T) {
+		resp := makeRequest(map[string]any{
+			"type":    "foo",
+			"payload": map[string]any{},
+		})
+		require.Equal(t, http.StatusCreated, resp.Code)
+
+		var created map[string]string
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+		taskID := uuid.MustParse(created["id"])
+
+		task, err := st.GetTask(ctx, taskID)
+		require.NoError(t, err)
+		require.Equal(t, "cap-a,cap-b", task.Metadata["required_capabilities"])
+	})
+
+	t.Run("unknown task type does not inject", func(t *testing.T) {
+		resp := makeRequest(map[string]any{
+			"type":    "unknown",
+			"payload": map[string]any{},
+		})
+		require.Equal(t, http.StatusCreated, resp.Code)
+
+		var created map[string]string
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+		taskID := uuid.MustParse(created["id"])
+
+		task, err := st.GetTask(ctx, taskID)
+		require.NoError(t, err)
+		_, ok := task.Metadata["required_capabilities"]
+		require.False(t, ok)
+	})
+
+	t.Run("explicit value preserved", func(t *testing.T) {
+		resp := makeRequest(map[string]any{
+			"type":    "foo",
+			"payload": map[string]any{},
+			"metadata": map[string]string{
+				"required_capabilities": "custom",
+			},
+		})
+		require.Equal(t, http.StatusCreated, resp.Code)
+
+		var created map[string]string
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+		taskID := uuid.MustParse(created["id"])
+
+		task, err := st.GetTask(ctx, taskID)
+		require.NoError(t, err)
+		require.Equal(t, "custom", task.Metadata["required_capabilities"])
+	})
+
+	t.Run("explicit empty preserved", func(t *testing.T) {
+		resp := makeRequest(map[string]any{
+			"type":    "foo",
+			"payload": map[string]any{},
+			"metadata": map[string]string{
+				"required_capabilities": "",
+			},
+		})
+		require.Equal(t, http.StatusCreated, resp.Code)
+
+		var created map[string]string
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+		taskID := uuid.MustParse(created["id"])
+
+		task, err := st.GetTask(ctx, taskID)
+		require.NoError(t, err)
+		val, ok := task.Metadata["required_capabilities"]
+		require.True(t, ok)
+		require.Empty(t, val)
+	})
+
+	t.Run("catalog type with empty caps does not inject", func(t *testing.T) {
+		resp := makeRequest(map[string]any{
+			"type":    "emptycaps",
+			"payload": map[string]any{},
+		})
+		require.Equal(t, http.StatusCreated, resp.Code)
+
+		var created map[string]string
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+		taskID := uuid.MustParse(created["id"])
+
+		task, err := st.GetTask(ctx, taskID)
+		require.NoError(t, err)
+		_, ok := task.Metadata["required_capabilities"]
+		require.False(t, ok)
+	})
+}
+
 func TestCreateBASTaskRequiresApprovedScenario(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
@@ -595,6 +764,474 @@ func TestGetRespondReport(t *testing.T) {
 	require.Len(t, report.Result.Summary.Outputs, 1)
 	require.Equal(t, "主机概要", report.Result.Summary.Outputs[0].Label)
 	require.NotNil(t, report.Completed)
+}
+
+func TestGetAuditReport(t *testing.T) {
+	router, st, sched := setupTestRouter(t)
+	ctx := context.Background()
+
+	body, _ := json.Marshal(map[string]any{
+		"type":       "audit",
+		"profile":    "audit",
+		"priority":   2,
+		"payload":    map[string]any{"scope": "system"},
+		"metadata":   map[string]string{"required_capabilities": "audit"},
+		"created_by": "audit-tester",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "changeme")
+	resp := performRequest(router, req)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	var created map[string]string
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+	taskID := uuid.MustParse(created["id"])
+
+	task, err := st.GetTask(ctx, taskID)
+	require.NoError(t, err)
+	require.Equal(t, model.TaskType("audit"), task.Type)
+
+	agent := &model.Agent{
+		ID:            uuid.New(),
+		Name:          "agent-audit",
+		Capabilities:  []string{"audit"},
+		Status:        model.AgentStatusOnline,
+		LastHeartbeat: time.Now(),
+	}
+	require.NoError(t, st.UpsertAgent(ctx, agent))
+	require.NoError(t, sched.PrimeFromStore(ctx))
+
+	leasedTask, run, err := sched.LeaseTask(ctx, agent)
+	require.NoError(t, err)
+	require.Equal(t, taskID, leasedTask.ID)
+	require.NoError(t, sched.MarkRunStarted(ctx, run.LeaseID))
+
+	execResult := model.ExecutionResult{
+		Status: "succeeded",
+		Summary: model.ExecutionSummary{
+			Command:         "audit",
+			Status:          "完成",
+			DurationSeconds: 1.2,
+			Notes:           []string{"audit ok"},
+		},
+		Metadata: map[string]string{"scope": "system"},
+	}
+	summaryBytes, err := json.Marshal(execResult)
+	require.NoError(t, err)
+
+	runStored, err := st.GetTaskRunByLease(ctx, run.LeaseID)
+	require.NoError(t, err)
+	require.NoError(t, sched.CompleteTask(ctx, runStored, model.TaskStatusSucceeded, summaryBytes, "", map[string]string{"scope": "system"}, 0, "", nil))
+
+	reportReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/audit/report", nil)
+	reportReq.Header.Set("X-API-Key", "changeme")
+	reportResp := performRequest(router, reportReq)
+	require.Equal(t, http.StatusOK, reportResp.Code)
+
+	var report struct {
+		TaskID     string                `json:"task_id"`
+		TaskType   string                `json:"task_type"`
+		Profile    string                `json:"profile"`
+		RunID      string                `json:"run_id"`
+		TaskStatus string                `json:"task_status"`
+		Result     model.ExecutionResult `json:"result"`
+		Completed  *time.Time            `json:"completed_at"`
+	}
+	require.NoError(t, json.Unmarshal(reportResp.Body.Bytes(), &report))
+	require.Equal(t, taskID.String(), report.TaskID)
+	require.Equal(t, "audit", report.TaskType)
+	require.Equal(t, "audit", report.Profile)
+	require.Equal(t, "succeeded", report.TaskStatus)
+	require.Equal(t, "audit", report.Result.Summary.Command)
+	require.NotNil(t, report.Completed)
+}
+
+func TestGetDetectReport(t *testing.T) {
+	tests := []struct {
+		name     string
+		taskType string
+	}{
+		{name: "diag", taskType: "detect.diag"},
+		{name: "memscan", taskType: "detect.memscan"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			router, st, sched := setupTestRouter(t)
+			ctx := context.Background()
+
+			body, _ := json.Marshal(map[string]any{
+				"type":       tc.taskType,
+				"profile":    "default",
+				"priority":   2,
+				"payload":    map[string]any{"backend": "auto"},
+				"metadata":   map[string]string{"required_capabilities": tc.taskType},
+				"created_by": "detect-tester",
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-API-Key", "changeme")
+			resp := performRequest(router, req)
+			require.Equal(t, http.StatusCreated, resp.Code)
+
+			var created map[string]string
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &created))
+			taskID := uuid.MustParse(created["id"])
+
+			task, err := st.GetTask(ctx, taskID)
+			require.NoError(t, err)
+			require.Equal(t, model.TaskType(tc.taskType), task.Type)
+
+			agent := &model.Agent{
+				ID:            uuid.New(),
+				Name:          "agent-detect-" + tc.name,
+				Capabilities:  []string{tc.taskType},
+				Status:        model.AgentStatusOnline,
+				LastHeartbeat: time.Now(),
+			}
+			require.NoError(t, st.UpsertAgent(ctx, agent))
+			require.NoError(t, sched.PrimeFromStore(ctx))
+
+			leasedTask, run, err := sched.LeaseTask(ctx, agent)
+			require.NoError(t, err)
+			require.Equal(t, taskID, leasedTask.ID)
+			require.NoError(t, sched.MarkRunStarted(ctx, run.LeaseID))
+
+			execResult := model.ExecutionResult{
+				Status: "succeeded",
+				Summary: model.ExecutionSummary{
+					Command:         tc.taskType,
+					Status:          "完成",
+					DurationSeconds: 1.0,
+					Notes:           []string{"detect ok"},
+				},
+				Metadata: map[string]string{"task_type": tc.taskType},
+			}
+			summaryBytes, err := json.Marshal(execResult)
+			require.NoError(t, err)
+
+			runStored, err := st.GetTaskRunByLease(ctx, run.LeaseID)
+			require.NoError(t, err)
+			require.NoError(t, sched.CompleteTask(ctx, runStored, model.TaskStatusSucceeded, summaryBytes, "", map[string]string{"task_type": tc.taskType}, 0, "", nil))
+
+			reportReq := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/detect/report", nil)
+			reportReq.Header.Set("X-API-Key", "changeme")
+			reportResp := performRequest(router, reportReq)
+			require.Equal(t, http.StatusOK, reportResp.Code)
+
+			var report struct {
+				TaskID     string                `json:"task_id"`
+				TaskType   string                `json:"task_type"`
+				Profile    string                `json:"profile"`
+				RunID      string                `json:"run_id"`
+				AgentID    string                `json:"agent_id"`
+				TaskStatus string                `json:"task_status"`
+				Result     model.ExecutionResult `json:"result"`
+				Completed  *time.Time            `json:"completed_at"`
+			}
+			require.NoError(t, json.Unmarshal(reportResp.Body.Bytes(), &report))
+			require.Equal(t, taskID.String(), report.TaskID)
+			require.Equal(t, tc.taskType, report.TaskType)
+			require.Equal(t, "default", report.Profile)
+			require.Equal(t, "succeeded", report.TaskStatus)
+			require.Equal(t, tc.taskType, report.Result.Summary.Command)
+			require.NotEmpty(t, report.AgentID)
+			require.NotEmpty(t, report.RunID)
+			require.NotNil(t, report.Completed)
+		})
+	}
+}
+
+func TestGetDetectReportRequiresReportsViewPermission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	st := store.NewInMemoryStore()
+	auditMgr, err := auditlog.New("", 2000)
+	require.NoError(t, err)
+	handler := &v1.TaskHandler{
+		Store: st,
+		RBAC: rbac.New([]rbac.Policy{
+			{Role: "operator", Permissions: []string{"tasks.read", "tasks.create"}},
+		}),
+		Audit: auditMgr,
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		security.WithPrincipal(c, security.Principal{User: "unauthorized", Role: "operator"})
+		c.Next()
+	})
+	group := router.Group("/api/v1")
+	handler.RegisterRoutes(group)
+
+	ctx := context.Background()
+	taskID := uuid.New()
+	require.NoError(t, st.CreateTask(ctx, &model.Task{
+		ID:        taskID,
+		Type:      model.TaskType("detect.diag"),
+		Profile:   "default",
+		Priority:  1,
+		Payload:   []byte(`{}`),
+		Status:    model.TaskStatusSucceeded,
+		Metadata:  map[string]string{"required_capabilities": "detect.diag"},
+		CreatedBy: "tester",
+	}))
+	summaryBytes, err := json.Marshal(model.ExecutionResult{Status: "succeeded"})
+	require.NoError(t, err)
+	require.NoError(t, st.CreateTaskRun(ctx, &model.TaskRun{
+		TaskID:   taskID,
+		TaskType: model.TaskType("detect.diag"),
+		AgentID:  uuid.New(),
+		LeaseID:  uuid.New(),
+		Status:   model.TaskStatusSucceeded,
+		Summary:  summaryBytes,
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/detect/report", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Empty(t, auditMgr.List(auditlog.Filter{Limit: 10}))
+}
+
+func TestGetDetectReportRecordsAuditEvent(t *testing.T) {
+	tests := []struct {
+		name     string
+		taskType string
+	}{
+		{name: "diag", taskType: "detect.diag"},
+		{name: "memscan", taskType: "detect.memscan"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			ctx := context.Background()
+
+			st := store.NewInMemoryStore()
+			auditMgr, err := auditlog.New("", 2000)
+			require.NoError(t, err)
+
+			handler := &v1.TaskHandler{
+				Store: st,
+				RBAC: rbac.New([]rbac.Policy{
+					{Role: "operator", Permissions: []string{"reports.view"}},
+				}),
+				Audit: auditMgr,
+			}
+
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				security.WithPrincipal(c, security.Principal{User: "detect-auditor", Role: "operator"})
+				c.Next()
+			})
+			group := router.Group("/api/v1")
+			handler.RegisterRoutes(group)
+
+			taskID := uuid.New()
+			require.NoError(t, st.CreateTask(ctx, &model.Task{
+				ID:        taskID,
+				Type:      model.TaskType(tc.taskType),
+				Profile:   "default",
+				Priority:  1,
+				Payload:   []byte(`{}`),
+				Status:    model.TaskStatusSucceeded,
+				Metadata:  map[string]string{"required_capabilities": tc.taskType},
+				CreatedBy: "tester",
+			}))
+
+			now := time.Now().UTC()
+			summaryBytes, err := json.Marshal(model.ExecutionResult{Status: "succeeded"})
+			require.NoError(t, err)
+			require.NoError(t, st.CreateTaskRun(ctx, &model.TaskRun{
+				TaskID:     taskID,
+				TaskType:   model.TaskType(tc.taskType),
+				AgentID:    uuid.New(),
+				LeaseID:    uuid.New(),
+				Status:     model.TaskStatusSucceeded,
+				Summary:    summaryBytes,
+				FinishedAt: &now,
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/detect/report", nil)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code)
+
+			events := auditMgr.List(auditlog.Filter{Limit: 10})
+			require.Len(t, events, 1)
+			require.Equal(t, "detect-auditor", events[0].Actor)
+			require.Equal(t, "operator", events[0].Role)
+			require.Equal(t, "report.read", events[0].Action)
+			require.Equal(t, "task:"+taskID.String()+"/detect", events[0].Resource)
+			require.Equal(t, "success", events[0].Result)
+			require.Equal(t, tc.taskType, events[0].Metadata["task_type"])
+		})
+	}
+}
+
+func TestGetAuditReportResponseEnvelopeStable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+
+	st := store.NewInMemoryStore()
+	handler := &v1.TaskHandler{
+		Store: st,
+		RBAC: rbac.New([]rbac.Policy{
+			{Role: "operator", Permissions: []string{"reports.view"}},
+		}),
+	}
+	router := gin.New()
+	group := router.Group("/api/v1")
+	handler.RegisterRoutes(group)
+
+	taskID := uuid.New()
+	require.NoError(t, st.CreateTask(ctx, &model.Task{
+		ID:        taskID,
+		Type:      model.TaskType("audit"),
+		Profile:   "audit",
+		Priority:  1,
+		Payload:   []byte(`{}`),
+		Status:    model.TaskStatusSucceeded,
+		Metadata:  map[string]string{"required_capabilities": "audit"},
+		CreatedBy: "tester",
+	}))
+	finishedAt := time.Now().UTC()
+	expiresAt := finishedAt.Add(time.Hour)
+	summaryBytes, err := json.Marshal(model.ExecutionResult{Status: "succeeded"})
+	require.NoError(t, err)
+	require.NoError(t, st.CreateTaskRun(ctx, &model.TaskRun{
+		TaskID:     taskID,
+		TaskType:   model.TaskType("audit"),
+		AgentID:    uuid.New(),
+		LeaseID:    uuid.New(),
+		Status:     model.TaskStatusSucceeded,
+		Summary:    summaryBytes,
+		Metadata:   map[string]string{"scope": "system"},
+		ExitCode:   42,
+		ErrorCode:  "E_TEST",
+		FinishedAt: &finishedAt,
+		ExpiresAt:  expiresAt,
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/audit/report", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+
+	for _, key := range []string{
+		"task_id",
+		"task_type",
+		"profile",
+		"run_id",
+		"agent_id",
+		"task_status",
+		"result",
+		"run_metadata",
+		"exit_code",
+		"error_code",
+		"completed_at",
+		"expires_at",
+	} {
+		require.Contains(t, payload, key)
+	}
+	require.Equal(t, taskID.String(), payload["task_id"])
+	require.Equal(t, "audit", payload["task_type"])
+	require.Equal(t, "audit", payload["profile"])
+	require.Equal(t, "succeeded", payload["task_status"])
+	require.Equal(t, float64(42), payload["exit_code"])
+	require.Equal(t, "E_TEST", payload["error_code"])
+}
+
+func TestGetDetectReportResponseEnvelopeStable(t *testing.T) {
+	tests := []struct {
+		name     string
+		taskType string
+	}{
+		{name: "diag", taskType: "detect.diag"},
+		{name: "memscan", taskType: "detect.memscan"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			ctx := context.Background()
+
+			st := store.NewInMemoryStore()
+			handler := &v1.TaskHandler{
+				Store: st,
+				RBAC: rbac.New([]rbac.Policy{
+					{Role: "operator", Permissions: []string{"reports.view"}},
+				}),
+			}
+			router := gin.New()
+			group := router.Group("/api/v1")
+			handler.RegisterRoutes(group)
+
+			taskID := uuid.New()
+			require.NoError(t, st.CreateTask(ctx, &model.Task{
+				ID:        taskID,
+				Type:      model.TaskType(tc.taskType),
+				Profile:   "default",
+				Priority:  1,
+				Payload:   []byte(`{}`),
+				Status:    model.TaskStatusSucceeded,
+				Metadata:  map[string]string{"required_capabilities": tc.taskType},
+				CreatedBy: "tester",
+			}))
+
+			finishedAt := time.Now().UTC()
+			expiresAt := finishedAt.Add(time.Hour)
+			summaryBytes, err := json.Marshal(model.ExecutionResult{Status: "succeeded"})
+			require.NoError(t, err)
+			require.NoError(t, st.CreateTaskRun(ctx, &model.TaskRun{
+				TaskID:     taskID,
+				TaskType:   model.TaskType(tc.taskType),
+				AgentID:    uuid.New(),
+				LeaseID:    uuid.New(),
+				Status:     model.TaskStatusSucceeded,
+				Summary:    summaryBytes,
+				Metadata:   map[string]string{"task_type": tc.taskType},
+				ExitCode:   42,
+				ErrorCode:  "E_TEST",
+				FinishedAt: &finishedAt,
+				ExpiresAt:  expiresAt,
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+taskID.String()+"/detect/report", nil)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code)
+
+			var payload map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+
+			for _, key := range []string{
+				"task_id",
+				"task_type",
+				"profile",
+				"run_id",
+				"agent_id",
+				"task_status",
+				"result",
+				"run_metadata",
+				"exit_code",
+				"error_code",
+				"completed_at",
+				"expires_at",
+			} {
+				require.Contains(t, payload, key)
+			}
+			require.Equal(t, taskID.String(), payload["task_id"])
+			require.Equal(t, tc.taskType, payload["task_type"])
+			require.Equal(t, "default", payload["profile"])
+			require.Equal(t, "succeeded", payload["task_status"])
+			require.Equal(t, float64(42), payload["exit_code"])
+			require.Equal(t, "E_TEST", payload["error_code"])
+		})
+	}
 }
 
 func TestGetBASReport(t *testing.T) {

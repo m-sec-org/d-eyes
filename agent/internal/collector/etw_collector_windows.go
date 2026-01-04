@@ -296,7 +296,7 @@ func startTraceSession(name string) (windows.Handle, error) {
 		uintptr(unsafe.Pointer(namePtr)),
 		uintptr(unsafe.Pointer(props)),
 	)
-	if r1 != windows.ERROR_SUCCESS {
+	if windows.Errno(r1) != windows.ERROR_SUCCESS {
 		if e1 != windows.ERROR_SUCCESS {
 			return 0, e1
 		}
@@ -320,7 +320,7 @@ func stopTraceSession(handle windows.Handle, name string) error {
 		uintptr(unsafe.Pointer(props)),
 		uintptr(eventTraceControlStop),
 	)
-	if r1 != windows.ERROR_SUCCESS {
+	if windows.Errno(r1) != windows.ERROR_SUCCESS {
 		if e1 != windows.ERROR_SUCCESS {
 			return e1
 		}
@@ -343,7 +343,7 @@ func enableTraceProvider(handle windows.Handle, provider *windows.GUID) error {
 		uintptr(0),
 		uintptr(unsafe.Pointer(&params)),
 	)
-	if r1 != windows.ERROR_SUCCESS {
+	if windows.Errno(r1) != windows.ERROR_SUCCESS {
 		if e1 != windows.ERROR_SUCCESS {
 			return e1
 		}
@@ -602,9 +602,14 @@ func (c *etwCollector) processTraceLoop(ctx context.Context) {
 		c.stateMu.Unlock()
 	}()
 	r1, _, e1 := procProcessTrace.Call(uintptr(unsafe.Pointer(&traceHandle)), 1, 0, 0)
-	if r1 != windows.ERROR_SUCCESS && e1 != windows.ERROR_CANCELLED && e1 != 0 {
+	errno := windows.Errno(r1)
+	if errno != windows.ERROR_SUCCESS && errno != windows.ERROR_CANCELLED {
 		c.stateMu.Lock()
-		c.lastError = e1.Error()
+		if e1 != nil && e1 != windows.ERROR_SUCCESS {
+			c.lastError = e1.Error()
+		} else {
+			c.lastError = errno.Error()
+		}
 		c.stateMu.Unlock()
 	}
 }
@@ -751,7 +756,7 @@ func closeTrace(handle windows.Handle) error {
 		return nil
 	}
 	r1, _, e1 := procCloseTrace.Call(uintptr(handle))
-	if r1 != windows.ERROR_SUCCESS {
+	if windows.Errno(r1) != windows.ERROR_SUCCESS {
 		if e1 != windows.ERROR_SUCCESS {
 			return e1
 		}

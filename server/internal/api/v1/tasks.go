@@ -159,6 +159,8 @@ func (h *TaskHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/tasks/:id", h.getTask)
 	r.GET("/tasks/:id/visuals", h.getTaskVisuals)
 	r.GET("/tasks/:id/respond/report", h.getRespondReport)
+	r.GET("/tasks/:id/audit/report", h.getAuditReport)
+	r.GET("/tasks/:id/detect/report", h.getDetectReport)
 	r.GET("/tasks/:id/baseline/report", h.getBaselineReport)
 	r.GET("/tasks/:id/bas/report", h.getBASReport)
 	r.GET("/tasks/:id/inventory/report", h.getInventoryReport)
@@ -204,6 +206,22 @@ func (h *TaskHandler) createTask(c *gin.Context) {
 	metadata := make(map[string]string, len(req.Metadata))
 	for k, v := range req.Metadata {
 		metadata[k] = v
+	}
+	if h.Catalog != nil {
+		if _, ok := metadata["required_capabilities"]; !ok {
+			if typ, err := h.Catalog.GetTaskType(ctx, req.Type); err == nil {
+				caps := make([]string, 0, len(typ.Capabilities))
+				for _, capName := range typ.Capabilities {
+					capName = strings.TrimSpace(capName)
+					if capName != "" {
+						caps = append(caps, capName)
+					}
+				}
+				if len(caps) > 0 {
+					metadata["required_capabilities"] = strings.Join(caps, ",")
+				}
+			}
+		}
 	}
 	if h.BASScenarios != nil && isBASTaskType(req.Type) {
 		scenarioID := strings.TrimSpace(metadata["scenario_id"])
@@ -961,6 +979,192 @@ func (h *TaskHandler) getRespondReport(c *gin.Context) {
 		resp.ExpiresAt = &run.ExpiresAt
 	}
 
+	c.JSON(http.StatusOK, resp)
+}
+
+type auditReportResponse struct {
+	TaskID      string                `json:"task_id"`
+	TaskType    string                `json:"task_type"`
+	Profile     string                `json:"profile,omitempty"`
+	RunID       string                `json:"run_id"`
+	AgentID     string                `json:"agent_id"`
+	TaskStatus  string                `json:"task_status"`
+	Result      model.ExecutionResult `json:"result"`
+	RunMetadata map[string]string     `json:"run_metadata,omitempty"`
+	ExitCode    int32                 `json:"exit_code,omitempty"`
+	ErrorCode   string                `json:"error_code,omitempty"`
+	CompletedAt *time.Time            `json:"completed_at,omitempty"`
+	ExpiresAt   *time.Time            `json:"expires_at,omitempty"`
+}
+
+func (h *TaskHandler) getAuditReport(c *gin.Context) {
+	if !h.requirePermission(c, "reports.view") {
+		return
+	}
+	ctx := c.Request.Context()
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task id"})
+		return
+	}
+	task, err := h.Store.GetTask(ctx, id)
+	if err != nil {
+		if err == store.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if task.Type != model.TaskType("audit") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "task is not audit type"})
+		return
+	}
+
+	run, err := h.Store.GetLatestTaskRun(ctx, task.ID)
+	if err != nil {
+		if err == store.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "task run not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if len(run.Summary) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "audit summary not available"})
+		return
+	}
+
+	var exec model.ExecutionResult
+	if err := json.Unmarshal(run.Summary, &exec); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode audit summary"})
+		return
+	}
+
+	resp := auditReportResponse{
+		TaskID:     task.ID.String(),
+		TaskType:   string(task.Type),
+		Profile:    task.Profile,
+		RunID:      run.ID.String(),
+		AgentID:    run.AgentID.String(),
+		TaskStatus: string(run.Status),
+		Result:     exec,
+		RunMetadata: func() map[string]string {
+			if len(run.Metadata) == 0 {
+				return nil
+			}
+			meta := make(map[string]string, len(run.Metadata))
+			for k, v := range run.Metadata {
+				meta[k] = v
+			}
+			return meta
+		}(),
+		ExitCode:  run.ExitCode,
+		ErrorCode: run.ErrorCode,
+	}
+	if run.FinishedAt != nil && !run.FinishedAt.IsZero() {
+		resp.CompletedAt = run.FinishedAt
+	}
+	if !run.ExpiresAt.IsZero() {
+		resp.ExpiresAt = &run.ExpiresAt
+	}
+
+	h.recordAudit(c, "report.read", "task:"+task.ID.String()+"/audit", "success", map[string]string{
+		"task_type": string(task.Type),
+	})
+	c.JSON(http.StatusOK, resp)
+}
+
+type detectReportResponse struct {
+	TaskID      string                `json:"task_id"`
+	TaskType    string                `json:"task_type"`
+	Profile     string                `json:"profile,omitempty"`
+	RunID       string                `json:"run_id"`
+	AgentID     string                `json:"agent_id"`
+	TaskStatus  string                `json:"task_status"`
+	Result      model.ExecutionResult `json:"result"`
+	RunMetadata map[string]string     `json:"run_metadata,omitempty"`
+	ExitCode    int32                 `json:"exit_code,omitempty"`
+	ErrorCode   string                `json:"error_code,omitempty"`
+	CompletedAt *time.Time            `json:"completed_at,omitempty"`
+	ExpiresAt   *time.Time            `json:"expires_at,omitempty"`
+}
+
+func (h *TaskHandler) getDetectReport(c *gin.Context) {
+	if !h.requirePermission(c, "reports.view") {
+		return
+	}
+	ctx := c.Request.Context()
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task id"})
+		return
+	}
+	task, err := h.Store.GetTask(ctx, id)
+	if err != nil {
+		if err == store.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if task.Type != model.TaskType("detect.diag") && task.Type != model.TaskType("detect.memscan") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "task is not detect type"})
+		return
+	}
+
+	run, err := h.Store.GetLatestTaskRun(ctx, task.ID)
+	if err != nil {
+		if err == store.ErrNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "task run not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if len(run.Summary) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "detect summary not available"})
+		return
+	}
+
+	var exec model.ExecutionResult
+	if err := json.Unmarshal(run.Summary, &exec); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode detect summary"})
+		return
+	}
+
+	resp := detectReportResponse{
+		TaskID:     task.ID.String(),
+		TaskType:   string(task.Type),
+		Profile:    task.Profile,
+		RunID:      run.ID.String(),
+		AgentID:    run.AgentID.String(),
+		TaskStatus: string(run.Status),
+		Result:     exec,
+		RunMetadata: func() map[string]string {
+			if len(run.Metadata) == 0 {
+				return nil
+			}
+			meta := make(map[string]string, len(run.Metadata))
+			for k, v := range run.Metadata {
+				meta[k] = v
+			}
+			return meta
+		}(),
+		ExitCode:  run.ExitCode,
+		ErrorCode: run.ErrorCode,
+	}
+	if run.FinishedAt != nil && !run.FinishedAt.IsZero() {
+		resp.CompletedAt = run.FinishedAt
+	}
+	if !run.ExpiresAt.IsZero() {
+		resp.ExpiresAt = &run.ExpiresAt
+	}
+
+	h.recordAudit(c, "report.read", "task:"+task.ID.String()+"/detect", "success", map[string]string{
+		"task_type": string(task.Type),
+	})
 	c.JSON(http.StatusOK, resp)
 }
 

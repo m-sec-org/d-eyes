@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -96,6 +97,8 @@ func TestRemoteRunnerRunOnceProcessesLease(t *testing.T) {
 	defer restoreMetadata()
 
 	internal.SetGlobalConfig(config.Default())
+	restoreExtra := internal.OverrideTaskRunnerForTesting("experimental.task", &fakeTaskRunner{})
+	defer restoreExtra()
 
 	client := newFakeRemoteClient()
 	payload := map[string]any{
@@ -149,6 +152,10 @@ func TestRemoteRunnerRunOnceProcessesLease(t *testing.T) {
 				SharedPaths:     []string{"/tmp"},
 				RequireApproval: true,
 			},
+			Labels: map[string]string{
+				internal.LabelBuildCommit: "ABCDEF123",
+				internal.LabelBuildTags:   "tag_one, tag-two",
+			},
 		},
 		client:       client,
 		store:        store,
@@ -176,6 +183,16 @@ func TestRemoteRunnerRunOnceProcessesLease(t *testing.T) {
 
 	err = <-errCh
 	require.EqualError(t, err, "hb gone")
+
+	require.Equal(t, internal.CLIVersion(), client.lastRegisterMeta.Version)
+	require.Equal(t, internal.LabelValueRemote, client.lastRegisterMeta.Labels[internal.LabelMode])
+	require.Equal(t, "abcdef123", client.lastRegisterMeta.Labels[internal.LabelBuildCommit])
+	require.Equal(t, "tag_one,tag-two", client.lastRegisterMeta.Labels[internal.LabelBuildTags])
+	require.True(t, sort.StringsAreSorted(client.lastRegisterMeta.Capabilities))
+	require.NotContains(t, client.lastRegisterMeta.Capabilities, "experimental.task")
+	for _, expected := range []string{"respond", "audit", "inventory", "supplychain", "baseline", "bas", "action"} {
+		require.Contains(t, client.lastRegisterMeta.Capabilities, expected)
+	}
 
 	require.Len(t, client.reportReqs, 2)
 	require.Equal(t, "stale-task", client.reportReqs[0].GetTaskId())
@@ -355,6 +372,7 @@ type fakeRemoteClient struct {
 	reportReqs        []*serverpb.ReportResultRequest
 	hbErrCh           chan error
 	agentID           string
+	lastRegisterMeta  remote.Metadata
 }
 
 func newFakeRemoteClient() *fakeRemoteClient {
@@ -370,6 +388,17 @@ func (f *fakeRemoteClient) Close() error { return nil }
 func (f *fakeRemoteClient) Register(_ context.Context, meta remote.Metadata) (*serverpb.RegisterResponse, error) {
 	if f.registerErr != nil {
 		return nil, f.registerErr
+	}
+	labels := make(map[string]string, len(meta.Labels))
+	for k, v := range meta.Labels {
+		labels[k] = v
+	}
+	f.lastRegisterMeta = remote.Metadata{
+		Name:         meta.Name,
+		Platform:     meta.Platform,
+		Version:      meta.Version,
+		Capabilities: append([]string(nil), meta.Capabilities...),
+		Labels:       labels,
 	}
 	if f.agentID == "" {
 		if meta.Name != "" {

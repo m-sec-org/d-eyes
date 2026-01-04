@@ -350,6 +350,52 @@ export const BASRunReportSchema = z.object({
   expires_at: z.string().datetime().optional().nullable(),
 });
 
+export const OutputRecordSchema = z.object({
+  path: z.string(),
+  type: z.string().optional().nullable(),
+  content_type: z.string().optional().nullable(),
+  label: z.string().optional().nullable(),
+});
+
+export const ExecutionSummarySchema = z.object({
+  command: z.string(),
+  status: z.string(),
+  duration_seconds: z.number(),
+  risks: z.record(z.number()).optional(),
+  notes: z.array(z.string()).optional(),
+  outputs: z.array(OutputRecordSchema).optional(),
+  error_message: z.string().optional(),
+});
+
+export const ExecutionResultSchema = z.object({
+  status: z.string(),
+  summary: ExecutionSummarySchema,
+  artifacts: z.array(OutputRecordSchema).optional(),
+  error: z.string().optional(),
+  metadata: z.record(z.string()).optional(),
+  exit_code: z.number().optional(),
+  error_code: z.string().optional(),
+  reported_at: z.string().datetime().optional().nullable(),
+});
+
+const TaskExecutionReportSchema = z.object({
+  task_id: z.string().uuid(),
+  task_type: z.string(),
+  profile: z.string().optional().nullable(),
+  run_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  task_status: z.string(),
+  result: ExecutionResultSchema,
+  run_metadata: z.record(z.string()).optional(),
+  exit_code: z.number().optional(),
+  error_code: z.string().optional(),
+  completed_at: z.string().datetime().optional().nullable(),
+  expires_at: z.string().datetime().optional().nullable(),
+});
+
+export const TaskAuditReportSchema = TaskExecutionReportSchema;
+export const TaskDetectReportSchema = TaskExecutionReportSchema;
+
 export const AuditEventSchema = z.object({
   id: z.string(),
   timestamp: z.string().datetime(),

@@ -27,6 +27,17 @@
 
 `AuthProvider` 的 Auto Login 默认使用 admin 账号，调试其他角色可在 `src/app/providers/AuthProvider.tsx` 中修改。
 
+## 3.1 Detect 远程调度（Ops Console）
+
+前端任务创建/报告展示已对齐 Server 的 task catalog 与 audit/detect report/read 面，发布时请确认以下依赖满足：
+
+- **依赖 API**：
+  - task catalog：`GET /api/v1/task-types`、`GET /api/v1/task-profiles`
+  - 创建任务：`POST /api/v1/tasks`
+  - 报告读取：`GET /api/v1/tasks/{id}/audit/report`、`GET /api/v1/tasks/{id}/detect/report`
+- **权限要求**：读取报告需要 `reports.view`；缺失时前端会提示 403（permission denied）。
+- **memscan gating**：`detect.memscan` 为 Windows-only，且要求 Agent 显式 opt-in（`remote.labels.allow_memscan="true"`）；审批字段与 `error_code` 口径见 `docs/detect-remote-dispatch.md`。
+
 ## 4. 部署建议
 1. 将 `dist/` 作为静态资源部署（Nginx、K8s Ingress 或静态容器）。
 2. 与 Server 共享域名/反向代理，确保 Cookie/token 可用。

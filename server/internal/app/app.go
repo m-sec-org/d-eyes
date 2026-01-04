@@ -189,6 +189,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("init task catalog: %w", err)
 	}
+	if seeded, err := taskCatalogManager.ImportSeedIfEmpty(ctx, taskcatalog.BuiltInSeed()); err != nil {
+		return fmt.Errorf("seed task catalog: %w", err)
+	} else if seeded {
+		log.Info("task catalog seeded", "persist_path", cfg.TaskCatalog.PersistPath)
+	}
 
 	rbacPolicies := make([]rbac.Policy, 0, len(cfg.RBAC.Policies))
 	for _, p := range cfg.RBAC.Policies {
@@ -206,7 +211,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	templateHandler := &v1.TemplateHandler{Manager: templateManager}
 	taskViewHandler := &v1.TaskViewHandler{Store: st, RBAC: rbacEnforcer}
-	reportHandler := &v1.ReportHandler{Store: st, Templates: reportTemplateManager, Audit: auditLogManager}
+	reportHandler := &v1.ReportHandler{Store: st, Templates: reportTemplateManager, Audit: auditLogManager, RBAC: rbacEnforcer}
 	catalogHandler := &v1.TaskCatalogHandler{Catalog: taskCatalogManager}
 	pluginManager := plugins.NewManager()
 	pluginStream := streams.NewTaskHub()

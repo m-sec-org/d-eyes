@@ -101,7 +101,13 @@ Agent 可与 D-Eyes Server 协同工作，支持分布式任务执行与管理�
 
 ## 全局配置
 
-默认配置文件位于 `~/.d-eyes/config.yaml`（亦可通过 `--config` 或环境变量 `D_EYES_CONFIG` 指定）。示例：
+默认配置文件默认位于 `~/.d-eyes/config.yaml`。
+
+- 首次运行（未显式指定 `--config`/`D_EYES_CONFIG` 且默认配置文件不存在）会自动创建 `~/.d-eyes/config.yaml`，并写入一份可编辑的默认配置模板。
+- 如需使用自定义路径，可通过 `--config` 或环境变量 `D_EYES_CONFIG` 指定；显式指定时不会自动生成配置文件（若文件不存在则回落到内置默认值）。
+- **提示**：执行 `d-eyes --help` / `d-eyes version` 也会触发上述默认配置自动生成（仅在使用默认配置路径且文件缺失时）。
+
+示例：
 
 ```yaml
 output:
@@ -163,7 +169,13 @@ remote:
 远程模式会将待回传结果写入本地缓存目录（默认 `~/.d-eyes/cache`），断线后自动重试。执行链路与 CLI 完全复用同一套 `TaskRunner`/`TaskRequest` 规范，区别在于：
 
 - 默认启用静默模式（`--quiet`）并强制输出 JSON 摘要，方便 Server 解析。
-- 任务参数映射与 CLI Flag 一致，Server 只需在 `payload.flags.*` 中填入对应的命令行参数即可。
+- 任务参数映射与 CLI Flag 一致：**推荐把参数放在 `payload` 顶层**（例如 `payload.targets: "/tmp,/var/log"`）；若同时提供 `payload.flags`，Agent 会优先使用该 map 作为参数来源（此时需把参数放进 `payload.flags.*`，不要依赖 `payload` 顶层字段）。
+
+与 Server Task Catalog（profile/schema）对齐的运维建议：
+
+- Server 端建议创建任务时显式提供顶层 `profile`（触发 task catalog 校验），并按 `GET /api/v1/task-profiles/:id` 返回的 schema 组织 `payload`；避免出现“Server 接受但 Agent 解析失败”的口径漂移。
+- 例如 `respond` 的 `targets` 在当前 seed schema 中为 **string（逗号分隔）**，建议使用 `payload.targets: "/tmp,/var/log"`。
+- detect 远程调度（`detect.diag`/`detect.memscan`）的下发方式、报告读取与 memscan 审批/Windows-only gating 见：`docs/detect-remote-dispatch.md`。
 
 所有任务命令共享以下 Flags：
 

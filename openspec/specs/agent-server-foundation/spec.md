@@ -4,18 +4,21 @@
 TBD - created by archiving change plan-agent-server-foundation. Update Purpose after archive.
 ## Requirements
 ### Requirement: Agent Registration and Heartbeat
-Server MUST expose a secure gRPC 接口供 Agent 注册并维持带遥测与 metadata 的心跳，写入 `store.UpdateAgentStatus`、行为分析与指标模块，同时在 15 秒无心跳时判定离线。
+Server MUST expose a secure gRPC 接口供 Agent 注册并维持带遥测与 metadata 的心跳，并确保 Agent 在 Register/Heartbeat 中上报的基础元数据可被 Server 用于展示与排障。
 
-#### Scenario: TLS Enrolled Agent
-- **GIVEN** Agent 将 `RemoteConfig` 中的 token、TLS 证书以及 `Metadata{Name,Platform,Version,Capabilities,Labels}` 注入 `RegisterRequest`（默认标签含 `mode=remote`，缺失名称时退回 hostname），并在 `agent/internal/agent/daemon.go` 里缓存 Server 颁发的 `agent_id`
-- **WHEN** gRPC `AgentService.Register` 收到请求且 `cfg.Security.AgentToken` 校验通过
-- **THEN** Server 以 `metadata.name` 去幂等 upsert Agent，回写最新平台/版本/能力与标签，标记在线并在 3 秒内返回 `RegisterResponse{agent_id, heartbeat_interval_seconds = scheduler.HeartbeatTimeout/2}`
-- **AND** Agent 复用返回的 `agent_id` 进行后续心跳、任务拉取与结果上报
+#### Scenario: Agent reports semantic version (not runtime)
+- **GIVEN** Agent 在同一版本发布包中同时提供 CLI `d-eyes version` 与 remote 模式
+- **WHEN** Agent 进行 gRPC Register 并在 `metadata.version` 中上报版本信息
+- **THEN** `metadata.version` MUST match the CLI version string (for example: `v1.3.1`)
+- **AND** it MAY additionally report build information via `metadata.labels` using the reserved keys `build.commit` (git SHA) and `build.tags` (comma-separated build tags) for display/troubleshooting
+- **AND** `metadata.labels["build.commit"]` and `metadata.labels["build.tags"]` MUST NOT include secrets
 
-#### Scenario: Heartbeat telemetry fan-out
-- **GIVEN** 远程循环在每次任务轮询前调用 `enqueueHeartbeatPayload`，填充 `load`（当前运行任务数）、`running_tasks`（租约 ID 列表）以及从 `telemetry.Latest*` 与 `cache.*` 统计生成的 metadata（含 `telemetry.cpu_percent/memory_percent/io_util_percent`、`telemetry.blocked_actions`、最近一次结果里携带的 `cache.<namespace>` 指标）
-- **WHEN** `remote.Client.StartHeartbeat` 以 `cfg.HeartbeatInterval` 频率发送 `HeartbeatRequest{agent_id, timestamp, load, running_tasks, telemetry, metadata}` 并等待 `HeartbeatResponse`
-- **THEN** Server 立即调用 `store.UpdateAgentStatus` 与 `behavior.RecordHeartbeat`/`Analyzer.ProcessHeartbeat`/`Graph.HandleHeartbeat`，把 `telemetry.*` 指标写入 Metrics，若 15 秒未收到消息则按 `scheduler.HeartbeatTimeout` 标记 offline，并可通过 `HeartbeatResponse.should_shutdown` 通知 Agent 退出
+#### Scenario: Server-edited labels are overwritten on re-registration
+- **GIVEN** the Server stores agent labels from `RegisterRequest.metadata.labels`
+- **AND** an operator edits the stored labels via a Server-side API (for example: `PATCH /api/v1/agents/{id}/labels`)
+- **WHEN** the Agent re-registers and supplies its configured labels in `RegisterRequest.metadata.labels` (including defaults like `mode=remote`)
+- **THEN** the Server MUST treat the Register-provided label set as authoritative and overwrite the stored labels
+- **AND** operators SHOULD NOT rely on Server-side label edits as durable agent control signals unless the Agent configuration is also updated
 
 ### Requirement: Remote Task Execution Loop
 Agent MUST 按租约机制循环调用 `PullTasks`、执行 `TaskRunner` 并通过 `ReportResult` 回传 `model.ExecutionResult` JSON、metadata、artifact/token，Server 则追踪租约与任务生命周期。
@@ -188,4 +191,80 @@ Agent MUST ensure `ti-mode=hybrid` still produces local heuristic findings when 
 - **GIVEN** `ti-mode=hybrid` and a remote source responds with quota exhaustion / rate limit
 - **WHEN** the Agent attempts to enrich an indicator during `respond` or `bas`
 - **THEN** it skips further remote lookups for that source, records the fallback reason, and continues to return local heuristic findings without failing the task.
+
+### Requirement: Default Config File Bootstrap
+When the agent is launched without an explicit config path, it MUST ensure a default config file exists at the default location so operators can discover and customize settings.
+
+#### Scenario: Create default config on first run
+- **GIVEN** no `--config` flag is set and `D_EYES_CONFIG` is unset
+- **AND** the resolved default config path does not exist (`$HOME/.d-eyes/config.yaml`, or `os.TempDir()/d-eyes/config.yaml` when home is unavailable)
+- **WHEN** the agent initializes its global configuration
+- **THEN** it MUST create the parent directory if missing
+- **AND** it MUST write a `config.yaml` containing the built-in defaults (loading it produces the same effective config as in-memory defaults)
+- **AND** it MUST create the file with restrictive permissions (POSIX: dir `0700`, file `0600`) and avoid partial files (atomic write or equivalent)
+
+#### Scenario: Existing config is preserved
+- **GIVEN** a config file already exists at the resolved path
+- **WHEN** the agent starts
+- **THEN** it MUST NOT overwrite the file and MUST load the existing content
+
+#### Scenario: Help/version still bootstraps the default config
+- **GIVEN** no `--config` flag is set and `D_EYES_CONFIG` is unset
+- **AND** the resolved default config path does not exist
+- **WHEN** an operator runs `d-eyes --help` or `d-eyes version`
+- **THEN** the agent MUST create the default config file at the resolved path before exiting
+
+#### Scenario: Unwritable default path does not block execution
+- **GIVEN** the resolved default config path is not writable
+- **WHEN** the agent starts
+- **THEN** it MUST continue using in-memory defaults
+- **AND** it MUST emit a warning unless running in quiet mode
+
+### Requirement: Remote Dispatch Supports Detect Tasks
+When operating in remote mode, Agent MUST accept Server-dispatched detect tasks so operators can centrally run diagnostics and high-value scans via the standard task lease/report flow.
+
+#### Scenario: Remote dispatch runs detect.diag
+- **GIVEN** Server enqueues a task of type `detect.diag` and the Agent is running in remote mode
+- **WHEN** the Agent receives the lease and executes the task
+- **THEN** it MUST produce the same effective diagnostics as the CLI command `d-eyes detect diag`
+- **AND** it MUST report results via `ReportResult` so Server APIs can retrieve the execution summary and metadata
+
+#### Scenario: memscan capability is Windows-only and opt-in
+- **GIVEN** the Agent registers with the Server in remote mode
+- **WHEN** the Agent is not running on Windows
+- **THEN** it MUST NOT advertise `detect.memscan` in its capabilities
+- **AND** `metadata.labels` MUST reserve the key `allow_memscan` for memscan opt-in semantics
+- **AND** the only value that enables memscan capability is the exact string `true` (lowercase, case-sensitive)
+- **AND** **WHEN** the Agent runs on Windows but is not explicitly opted in via `allow_memscan=true` (config: `remote.labels.allow_memscan=true`)
+- **THEN** it MUST NOT advertise `detect.memscan` in its capabilities
+- **AND** **WHEN** the Agent runs on Windows and is explicitly opted in via `allow_memscan=true` (config: `remote.labels.allow_memscan=true`)
+- **THEN** it MUST advertise `detect.memscan` in its capabilities
+
+#### Scenario: allow_memscan default and invalid values do not enable memscan
+- **GIVEN** the Agent runs on Windows and registers with the Server in remote mode
+- **WHEN** `metadata.labels["allow_memscan"]` is missing, empty, or any value other than `true` (examples: `TRUE`, `1`, `yes`)
+- **THEN** it MUST NOT advertise `detect.memscan` in its capabilities
+
+#### Scenario: allow_memscan is controlled by the Agent configuration (server-side label edits are non-authoritative)
+- **GIVEN** the Agent runs on Windows and registers with the Server in remote mode
+- **WHEN** the Agent decides whether to advertise `detect.memscan`
+- **THEN** it MUST use its local configuration value (config: `remote.labels.allow_memscan`) as the source of truth for opt-in
+- **AND** Server-side updates to stored agent labels (for example via `PATCH /api/v1/agents/{id}/labels`) MUST NOT be assumed to enable or disable `detect.memscan` execution on the Agent
+
+#### Scenario: Remote dispatch runs detect.memscan on Windows
+- **GIVEN** the Agent runs on Windows and advertises `detect.memscan` capability
+- **WHEN** Server dispatches a `detect.memscan` task
+- **THEN** the Agent executes the scan and reports results via `ReportResult`
+- **AND** it MUST require explicit approval metadata before execution (for example: `memscan_approval_required=true` AND `memscan_approved=true`), otherwise it MUST reject the task (recommended: `exit_code=65`)
+- **AND** when rejecting due to missing approval, it SHOULD set `error_code=detect.memscan.approval_required`
+- **AND** it MUST keep `evidence=false` and `minidump=false` by default unless explicitly requested
+- **AND** if `evidence=true` or `minidump=true` is requested, it MUST additionally require explicit evidence approval metadata (for example: `memscan_evidence_approved=true`), otherwise it MUST reject the task with a clear error (recommended: `exit_code=65`)
+- **AND** when rejecting due to missing evidence approval, it SHOULD set `error_code=detect.memscan.evidence_approval_required`
+- **AND** any evidence/minidump artifacts MUST be written to the Agent's local output directory and referenced in the reported `ExecutionResult` (outputs/artifacts records), and MUST NOT be uploaded by default
+
+#### Scenario: Remote dispatch rejects detect.memscan on non-Windows
+- **GIVEN** the Agent runs on a non-Windows host
+- **WHEN** it receives a lease for a `detect.memscan` task
+- **THEN** it MUST fail the task immediately with a clear `unsupported platform` error
+- **AND** it MUST NOT perform any scan actions
 

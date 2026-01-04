@@ -1,6 +1,7 @@
 package taskcatalog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -225,6 +226,7 @@ func (m *Manager) GetTaskProfile(_ context.Context, id string) (*TaskProfile, er
 
 // CreateTaskProfile registers a profile schema against a type.
 func (m *Manager) CreateTaskProfile(_ context.Context, profile TaskProfile) (*TaskProfile, error) {
+	normalizeTaskProfileNumericDefaults(&profile)
 	if err := validateTaskProfileInput(profile); err != nil {
 		return nil, err
 	}
@@ -253,6 +255,7 @@ func (m *Manager) CreateTaskProfile(_ context.Context, profile TaskProfile) (*Ta
 
 // UpdateTaskProfile replaces schema metadata.
 func (m *Manager) UpdateTaskProfile(_ context.Context, id string, profile TaskProfile) (*TaskProfile, error) {
+	normalizeTaskProfileNumericDefaults(&profile)
 	if err := validateTaskProfileInput(profile); err != nil {
 		return nil, err
 	}
@@ -618,7 +621,9 @@ func (m *Manager) load() error {
 		return err
 	}
 	var payload persistPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
 		return fmt.Errorf("task catalog: invalid persist file: %w", err)
 	}
 	for _, tt := range payload.TaskTypes {
@@ -626,6 +631,7 @@ func (m *Manager) load() error {
 		m.taskTypes[key] = cloneTaskType(tt)
 	}
 	for _, prof := range payload.TaskProfiles {
+		normalizeTaskProfileNumericDefaults(prof)
 		m.taskProfiles[prof.ID] = cloneTaskProfile(prof)
 	}
 	return nil

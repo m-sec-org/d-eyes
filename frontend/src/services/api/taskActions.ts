@@ -12,7 +12,15 @@ export interface CreateTaskPayload {
 }
 
 export async function createTask(payload: CreateTaskPayload): Promise<{ id: string }> {
-  const res = await httpClient.post('/tasks', payload);
+  const nextPayload: CreateTaskPayload = { ...payload };
+  const metadata = payload.metadata ? { ...payload.metadata } : undefined;
+  if (!metadata || !('required_capabilities' in metadata)) {
+    nextPayload.metadata = {
+      ...(metadata ?? {}),
+      required_capabilities: payload.type,
+    };
+  }
+  const res = await httpClient.post('/tasks', nextPayload);
   return res.data;
 }
 

@@ -1,10 +1,13 @@
 package internal
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 
@@ -139,7 +142,7 @@ GLOBAL OPTIONS:
 			Usage:    "Show the version of d-eyes",
 			Category: "Integration",
 			Action: func(c *cli.Context) error {
-				fmt.Printf("D-Eyes %s\n", version)
+				fmt.Printf("D-Eyes %s\n", CLIVersion())
 				fmt.Printf("操作系统: %s\n", runtime.GOOS)
 				fmt.Printf("架构: %s\n", runtime.GOARCH)
 				return nil
@@ -199,13 +202,26 @@ GLOBAL OPTIONS:
 	}
 	app.Before = func(c *cli.Context) error {
 		SetQuietMode(false)
-		path := configPath
+		explicitConfigPath := c.IsSet("config")
+		path := c.String("config")
 		if path == "" {
 			path = defaultConfigPath()
 		}
+		if !explicitConfigPath {
+			if err := config.EnsureDefaultConfig(path); err != nil && !c.Bool("quiet") {
+				fmt.Fprintf(os.Stderr, "警告：初始化默认配置文件失败 (%s)：%v\n", path, err)
+			}
+		}
 		cfg, err := config.Load(path)
 		if err != nil {
-			return err
+			if !explicitConfigPath && errors.Is(err, fs.ErrPermission) {
+				if !c.Bool("quiet") {
+					fmt.Fprintf(os.Stderr, "警告：读取默认配置文件失败 (%s)：%v\n", path, err)
+				}
+				cfg = config.Default()
+			} else {
+				return err
+			}
 		}
 		SetGlobalConfig(cfg)
 		setLoadedConfigPath(path)
@@ -364,6 +380,30 @@ func registerTaskDefinition(def taskCommandDefinition) {
 	applyTaskDefinitions([]taskCommandDefinition{def})
 }
 
+// RegisterTaskRunner registers a task runner in the global task registry without attaching a CLI command.
+//
+// This is intended for remote-only task types (for example: dot-named tasks) that should be dispatchable
+// via the remote runner but must not appear as top-level CLI commands.
+func RegisterTaskRunner(name string, runner tasks.TaskRunner) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("register task runner: name is empty")
+	}
+	if runner == nil {
+		return errors.New("register task runner: runner is nil")
+	}
+	taskRegistryMu.Lock()
+	defer taskRegistryMu.Unlock()
+	if _, exists := taskRegistry[name]; exists {
+		return fmt.Errorf("register task runner: %s already registered", name)
+	}
+	taskRegistry[name] = taskCommandDefinition{
+		Name:   name,
+		Runner: runner,
+	}
+	return nil
+}
+
 // OverrideRunnerFactoryForTesting 允许测试场景批量替换内置 Runner，返回恢复函数。
 func OverrideRunnerFactoryForTesting(factory RunnerFactory) func() {
 	if factory == nil {
@@ -453,8 +493,12 @@ func TaskNames() []string {
 	defer taskRegistryMu.RUnlock()
 	names := make([]string, 0, len(taskRegistry))
 	for name := range taskRegistry {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -528,6 +572,11 @@ func defaultConfigPath() string {
 		return filepath.Join(os.TempDir(), "d-eyes", "config.yaml")
 	}
 	return filepath.Join(home, ".d-eyes", "config.yaml")
+}
+
+// DefaultConfigPath returns the default config file path used when --config/D_EYES_CONFIG is not provided.
+func DefaultConfigPath() string {
+	return defaultConfigPath()
 }
 
 func setLoadedConfigPath(path string) {

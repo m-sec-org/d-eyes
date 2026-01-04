@@ -18,6 +18,7 @@ import (
 
 	"github.com/m-sec-org/d-eyes/server/internal/auditlog"
 	"github.com/m-sec-org/d-eyes/server/internal/model"
+	"github.com/m-sec-org/d-eyes/server/internal/rbac"
 	"github.com/m-sec-org/d-eyes/server/internal/reporttemplates"
 	"github.com/m-sec-org/d-eyes/server/internal/security"
 	"github.com/m-sec-org/d-eyes/server/internal/store"
@@ -28,6 +29,19 @@ type ReportHandler struct {
 	Store     store.Store
 	Templates *reporttemplates.Manager
 	Audit     *auditlog.Manager
+	RBAC      *rbac.Enforcer
+}
+
+func (h *ReportHandler) requirePermission(c *gin.Context, permission string) bool {
+	if h == nil || h.RBAC == nil {
+		return true
+	}
+	principal := security.PrincipalFrom(c)
+	if h.RBAC.Enforce(principal.Role, permission) {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "insufficient permissions"})
+	return false
 }
 
 func (h *ReportHandler) recordAudit(c *gin.Context, action, resource, result string) {
@@ -96,6 +110,9 @@ type summaryTrends struct {
 }
 
 func (h *ReportHandler) summary(c *gin.Context) {
+	if !h.requirePermission(c, "reports.view") {
+		return
+	}
 	taskType := model.TaskType(strings.TrimSpace(c.Query("type")))
 	limit := parseLimit(c.Query("limit"), 50)
 	windowHours := parseWindowHours(c.Query("window_hours"), 24)
@@ -136,9 +153,13 @@ func (h *ReportHandler) summary(c *gin.Context) {
 		Status: statusTotals,
 		Trends: buildSummaryTrends(windowHours, currentTotals, previousTotals, currentStatus, previousStatus),
 	})
+	h.recordAudit(c, "report.summary.read", "reports:summary", "success")
 }
 
 func (h *ReportHandler) export(c *gin.Context) {
+	if !h.requirePermission(c, "reports.view") {
+		return
+	}
 	taskType := model.TaskType(strings.TrimSpace(c.Query("type")))
 	limit := parseLimit(c.Query("limit"), 200)
 	format := strings.ToLower(strings.TrimSpace(c.Query("format")))
@@ -159,11 +180,13 @@ func (h *ReportHandler) export(c *gin.Context) {
 		}
 		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="reports-%d.json"`, time.Now().Unix()))
 		c.JSON(http.StatusOK, payload)
+		h.recordAudit(c, "report.export.read.json", "reports:export", "success")
 	case "html":
 		html := buildHTMLReport(results)
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="reports-%d.html"`, time.Now().Unix()))
 		_, _ = c.Writer.WriteString(html)
+		h.recordAudit(c, "report.export.read.html", "reports:export", "success")
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported format"})
 	}
@@ -232,6 +255,9 @@ func (h *ReportHandler) deleteTemplate(c *gin.Context) {
 }
 
 func (h *ReportHandler) generateReport(c *gin.Context) {
+	if !h.requirePermission(c, "reports.view") {
+		return
+	}
 	var req struct {
 		TaskID     string `json:"task_id" binding:"required"`
 		TemplateID string `json:"template_id" binding:"required"`

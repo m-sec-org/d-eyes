@@ -32,3 +32,8 @@ alerts:
   notify_sandbox_fallback: true
 templates:
   persist_path: /var/lib/d-eyes/templates.json
+task_catalog:
+  # Task Catalog 持久化路径（可选）：
+  # - 留空：catalog 仅存在于内存，进程重启后会回到空状态并再次导入内置 seed
+  # - 非空：Server 会在首次导入 seed / 通过 API 变更后写入该 JSON 文件（原子写入）
+  persist_path: /var/lib/d-eyes/task_catalog.json

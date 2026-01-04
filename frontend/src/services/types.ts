@@ -20,6 +20,8 @@ import {
   BASApprovalRuleSchema,
   BASRunReportSchema,
   BASRunStepSchema,
+  TaskAuditReportSchema,
+  TaskDetectReportSchema,
   ThreatIntelVerdictSchema,
   ThreatIntelIndicatorSchema,
   ThreatIntelLookupResponseSchema,
@@ -66,6 +68,8 @@ export type BASExecutionPlan = z.infer<typeof BASExecutionPlanSchema>;
 export type BASApprovalRule = z.infer<typeof BASApprovalRuleSchema>;
 export type BASRunReport = z.infer<typeof BASRunReportSchema>;
 export type BASRunStep = z.infer<typeof BASRunStepSchema>;
+export type TaskAuditReport = z.infer<typeof TaskAuditReportSchema>;
+export type TaskDetectReport = z.infer<typeof TaskDetectReportSchema>;
 export type ThreatIntelVerdict = z.infer<typeof ThreatIntelVerdictSchema>;
 export type ThreatIntelIndicator = z.infer<typeof ThreatIntelIndicatorSchema>;
 export type ThreatIntelLookupResponse = z.infer<typeof ThreatIntelLookupResponseSchema>;

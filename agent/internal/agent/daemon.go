@@ -667,20 +667,42 @@ func (r *remoteRunner) runOnce(ctx context.Context) error {
 	}
 	defer r.client.Close()
 
-	labels := map[string]string{"mode": "remote"}
+	labels := map[string]string{internal.LabelMode: internal.LabelValueRemote}
 	for k, v := range r.cfg.Labels {
 		key := strings.TrimSpace(k)
 		val := strings.TrimSpace(v)
 		if key == "" || val == "" {
 			continue
 		}
+		switch key {
+		case internal.LabelBuildCommit:
+			if commit, ok := normalizeBuildCommit(val); ok {
+				labels[key] = commit
+			}
+			continue
+		case internal.LabelBuildTags:
+			if tags, ok := normalizeBuildTags(val); ok {
+				labels[key] = tags
+			}
+			continue
+		}
 		labels[key] = val
+	}
+	if _, ok := labels[internal.LabelBuildCommit]; !ok {
+		if commit, ok := normalizeBuildCommit(internal.BuildCommit()); ok {
+			labels[internal.LabelBuildCommit] = commit
+		}
+	}
+	if _, ok := labels[internal.LabelBuildTags]; !ok {
+		if tags, ok := normalizeBuildTags(internal.BuildTags()); ok {
+			labels[internal.LabelBuildTags] = tags
+		}
 	}
 	meta := remote.Metadata{
 		Name:         r.remoteCfg.AgentName,
 		Platform:     runtime.GOOS,
-		Version:      runtime.Version(),
-		Capabilities: internal.TaskNames(),
+		Version:      internal.CLIVersion(),
+		Capabilities: internal.AdvertisedCapabilities(internal.CapabilityContext{Platform: runtime.GOOS, Labels: labels}),
 		Labels:       labels,
 	}
 	if meta.Name == "" {
@@ -738,6 +760,50 @@ func (r *remoteRunner) runOnce(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func normalizeBuildCommit(value string) (string, bool) {
+	commit := strings.TrimSpace(value)
+	if commit == "" || len(commit) < 7 || len(commit) > 40 {
+		return "", false
+	}
+	commit = strings.ToLower(commit)
+	for _, c := range commit {
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') {
+			continue
+		}
+		return "", false
+	}
+	return commit, true
+}
+
+func normalizeBuildTags(value string) (string, bool) {
+	raw := strings.TrimSpace(value)
+	if raw == "" || len(raw) > 256 {
+		return "", false
+	}
+	parts := strings.Split(raw, ",")
+	tags := make([]string, 0, len(parts))
+	for _, part := range parts {
+		tag := strings.TrimSpace(part)
+		if tag == "" {
+			continue
+		}
+		if len(tag) > 64 {
+			return "", false
+		}
+		for _, c := range tag {
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' {
+				continue
+			}
+			return "", false
+		}
+		tags = append(tags, tag)
+	}
+	if len(tags) == 0 {
+		return "", false
+	}
+	return strings.Join(tags, ","), true
 }
 
 func (r *remoteRunner) pollOnce(ctx context.Context, hbCh chan<- remote.HeartbeatPayload) error {

@@ -82,16 +82,21 @@ Compose 配置 `deploy/docker-compose.yaml` 会在 `postgres`、`redis` 健康�
 核心配置选项（位于 `config/server.yaml`）：
 
 ```yaml
-# 服务器配置
+# Server 监听地址
 server:
-  http_port: 8080        # HTTP API 服务端口
-  grpc_port: 9090        # gRPC 服务端口
-  api_key: changeme      # API 访问密钥
+  http_addr: ":8080"     # HTTP API 服务地址
+  grpc_addr: ":9090"     # gRPC 服务地址
+
+# 鉴权配置
+security:
+  agent_token: "changeme"  # Agent gRPC 注册/心跳/租约鉴权
+  api_keys:
+    - "changeme"           # REST API Key（HTTP Header: X-API-Key）
 
 # 数据库配置
 database:
   in_memory: true        # 是否使用内存存储
-  dsn: postgres://user:password@localhost:5432/d-eyes?sslmode=disable  # PostgreSQL 连接串
+  dsn: postgres://user:password@localhost:5432/d-eyes?sslmode=disable  # PostgreSQL 连接串（in_memory=false 时启用）
 
 # Redis 配置
 redis:
@@ -100,17 +105,32 @@ redis:
   password: ""           # Redis 密码
   db: 0                  # Redis 数据库编号
 
-# 任务配置
-tasks:
+# 调度器配置
+scheduler:
+  lease_ttl: 120s        # 任务租约 TTL
   max_retries: 3         # 任务最大重试次数
-  lease_timeout: 30m     # 任务租约超时时间
-  cleanup_interval: 24h  # 历史数据清理间隔
+  heartbeat_timeout: 15s # Agent 心跳超时阈值
+
+# Task Catalog（Profile + payload 校验）的持久化路径（可选）
+# - 留空：catalog 仅存在于内存，进程重启后会回到空状态并再次导入内置 seed
+# - 非空：Server 会在首次导入 seed / 通过 API 变更后写入该 JSON 文件（原子写入）
+task_catalog:
+  persist_path: "/var/lib/d-eyes/task_catalog.json"
 
 # Collector 控制面配置
 collectors:
   allowed_providers: ["Kernel", "Security"]
   allowed_probes: ["diag-ebpf", "diag-sysmon"]  # 未列出的 provider/probe 会被 REST API 拒绝
 ```
+
+### Task Catalog：TaskType / Profile / Seed（运维要点）
+
+Server 使用 **Task Catalog** 统一管理 “task type + profile schema”，用于在 `POST /api/v1/tasks` 阶段对 `payload` 做结构校验，避免联动时出现“Server 接受但 Agent 无法按预期解析”的口径漂移。
+
+- **Profile 与校验触发条件**：仅当请求同时提供顶层 `type` 与顶层 `profile` 时，Server 才会按 catalog schema 校验 `payload`；运维与控制台侧 **建议始终带上 `profile`**，以获得稳定的合同与错误提示。
+- **内置 seed**：Server 启动时若 catalog 为空（task types 与 task profiles 都为空），会自动导入内置 seed（默认覆盖 `respond/audit/inventory/supplychain/baseline/bas/action` 以及 `detect.diag`/`detect.memscan`）；若 catalog 非空则不会覆盖/迁移用户数据。
+- **持久化**：设置 `task_catalog.persist_path` 后，导入 seed 与后续 API 修改会写入该 JSON 文件；留空则 catalog 仅在内存中，重启后会重新导入 seed（适合开发/演示，不建议生产）。
+- **扩展/覆盖方式**：通过 catalog API 管理（见下文），推荐以“新增 profile（例如 respond.ransomware）”的方式演进；如需覆盖内置 profile，可用 `PUT /api/v1/task-profiles/:id` 更新 schema（生产场景建议先备份 persist 文件）。
 
 ## API 使用指南
 
@@ -119,17 +139,29 @@ collectors:
 Server 提供完整的 RESTful API，支持任务管理、Agent 查询等功能：
 
 ```bash
-# 创建任务
+# 创建任务（推荐：使用 profile 触发 task catalog 校验）
 curl -X POST http://127.0.0.1:8080/api/v1/tasks \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: changeme' \
-  -d '{"type":"respond","priority":1,"payload":{"targets":["/tmp"]}}'
+  -d '{
+        "type":"respond",
+        "profile":"default",
+        "priority":1,
+        "payload":{"targets":"/tmp,/var/log"},
+        "metadata":{"required_capabilities":"respond"}
+      }'
 
-# 创建 BAS 入侵和攻击模拟任务
+# 创建任务（audit 示例）
 curl -X POST http://127.0.0.1:8080/api/v1/tasks \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: changeme' \
-  -d '{"type":"bas","priority":1,"payload":{"profile":"auto","target":"192.168.1.0/24","report-format":"html"}}'
+  -d '{
+        "type":"audit",
+        "profile":"audit",
+        "priority":1,
+        "payload":{"scope":"system"},
+        "metadata":{"required_capabilities":"audit"}
+      }'
 
 # 列出最近任务（状态过滤可选）
 curl -H 'X-API-Key: changeme' "http://127.0.0.1:8080/api/v1/tasks?status=pending,failed&limit=10"
@@ -143,6 +175,29 @@ curl -X POST -H 'X-API-Key: changeme' http://127.0.0.1:8080/api/v1/tasks/<TASK_I
 # 查询在线 Agent
 curl -H 'X-API-Key: changeme' http://127.0.0.1:8080/api/v1/agents?status=online
 ```
+
+### Task Catalog API（扩展/覆盖默认 catalog）
+
+以下接口用于查询与管理 task catalog（task types / profiles / schema）：
+
+```bash
+# 列出可用 task types（含内置 seed）
+curl -H 'X-API-Key: changeme' http://127.0.0.1:8080/api/v1/task-types
+
+# 列出某个 task type 的 profiles
+curl -H 'X-API-Key: changeme' "http://127.0.0.1:8080/api/v1/task-profiles?task_type=respond"
+
+# 查看某个 profile 的 schema（用于控制台/运维校对 payload 形态）
+curl -H 'X-API-Key: changeme' http://127.0.0.1:8080/api/v1/task-profiles/default
+```
+
+> 说明：
+> - 对 catalog 的修改是否跨重启生效取决于 `task_catalog.persist_path`（见上文）。
+> - 若希望回到“内置 seed 基线”，可清空 persist 文件（或切换到新的 persist_path）后重启 Server；seed 仅在 catalog 为空时导入。
+
+### Detect 远程调度指南（`detect.diag` / `detect.memscan`）
+
+detect 任务已纳入 Server↔Agent 的远程调度面（task type：`detect.diag`、`detect.memscan`），其下发/查看报告/审批建议见：`docs/detect-remote-dispatch.md`。
 
 ### Collector 控制面示例
 

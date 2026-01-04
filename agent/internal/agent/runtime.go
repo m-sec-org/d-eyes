@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/urfave/cli/v2"
 
 	internal "github.com/m-sec-org/d-eyes/agent/internal"
 	"github.com/m-sec-org/d-eyes/agent/pkg/color"
+	"github.com/m-sec-org/d-eyes/agent/pkg/config"
 	"github.com/m-sec-org/d-eyes/agent/pkg/logo"
 	"github.com/m-sec-org/d-eyes/agent/pkg/logs"
 )
@@ -59,6 +61,8 @@ func (r *Runtime) Run(args []string) (int, error) {
 		defer r.restoreRunnerFactory()
 	}
 
+	ensureDefaultConfigForRuntime(args)
+
 	logo.ShowLogo()
 	logs.InitLog()
 
@@ -79,6 +83,54 @@ func (r *Runtime) Run(args []string) (int, error) {
 		fmt.Println(color.Green.Sprintf("Thank you for using d-eyes, this run took %f seconds.", time.Since(start).Seconds()))
 	}
 	return 0, nil
+}
+
+func ensureDefaultConfigForRuntime(args []string) {
+	if len(args) == 0 {
+		return
+	}
+	if _, ok := os.LookupEnv("D_EYES_CONFIG"); ok {
+		return
+	}
+	if hasArgFlag(args, "config") {
+		return
+	}
+	path := internal.DefaultConfigPath()
+	if err := config.EnsureDefaultConfig(path); err != nil && !hasBoolArgFlagTrue(args, "quiet") {
+		fmt.Fprintf(os.Stderr, "警告：初始化默认配置文件失败 (%s)：%v\n", path, err)
+	}
+}
+
+func hasArgFlag(args []string, name string) bool {
+	prefix := "--" + name
+	prefixEq := prefix + "="
+	for _, arg := range args {
+		if arg == prefix || strings.HasPrefix(arg, prefixEq) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasBoolArgFlagTrue(args []string, name string) bool {
+	prefix := "--" + name
+	prefixEq := prefix + "="
+	for _, arg := range args {
+		if arg == prefix {
+			return true
+		}
+		if strings.HasPrefix(arg, prefixEq) {
+			val := strings.TrimPrefix(arg, prefixEq)
+			val = strings.TrimSpace(strings.ToLower(val))
+			switch val {
+			case "1", "true", "t", "yes", "y", "on":
+				return true
+			default:
+				return false
+			}
+		}
+	}
+	return false
 }
 
 func (r *Runtime) applyRunnerFactory() {

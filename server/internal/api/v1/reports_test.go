@@ -14,6 +14,7 @@ import (
 
 	v1 "github.com/m-sec-org/d-eyes/server/internal/api/v1"
 	"github.com/m-sec-org/d-eyes/server/internal/model"
+	"github.com/m-sec-org/d-eyes/server/internal/rbac"
 	"github.com/m-sec-org/d-eyes/server/internal/store"
 )
 
@@ -56,6 +57,38 @@ func TestReportSummary(t *testing.T) {
 	require.Len(t, resp.Items, 2)
 	require.Equal(t, 1, resp.Status["succeeded"])
 	require.Equal(t, 1, resp.Status["failed"])
+}
+
+func TestReportsRequireReportsViewPermission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	st := store.NewInMemoryStore()
+
+	router := gin.New()
+	handler := &v1.ReportHandler{
+		Store: st,
+		RBAC: rbac.New([]rbac.Policy{
+			{Role: "operator", Permissions: []string{"tasks.read"}},
+		}),
+	}
+	group := router.Group("/")
+	handler.RegisterRoutes(group)
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "summary", path: "/reports/summary"},
+		{name: "export", path: "/reports/export"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusForbidden, w.Code)
+		})
+	}
 }
 
 func TestReportSummaryTrends(t *testing.T) {
