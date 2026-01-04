@@ -1,3 +1,4 @@
+import './BASScenarioConsole.css';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { Modal } from 'antd';
@@ -327,7 +328,7 @@ export function BASScenarioConsole() {
 
   return (
     <>
-      <div className="stack bas-workbench">
+      <div className="stack bas-workbench bas-scenario-console">
       <AppCard
         title="BAS 场景管理"
         description="创建、审批并控制 BAS 场景执行边界，并直接调度演练。"

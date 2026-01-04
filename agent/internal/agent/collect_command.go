@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 
 	internal "github.com/m-sec-org/d-eyes/agent/internal"
 	"github.com/m-sec-org/d-eyes/agent/internal/collector"
+	"github.com/m-sec-org/d-eyes/agent/internal/debugger"
 )
 
 func ensureCollectCommand(app *cli.App) {
@@ -29,7 +31,7 @@ func ensureCollectCommand(app *cli.App) {
 func collectCommand() *cli.Command {
 	return &cli.Command{
 		Name:     "collect",
-		Usage:    "运行配置文件中的系统事件采集器（ETW/eBPF）",
+		Usage:    "运行配置文件中的系统事件采集器（ETW/eBPF），支持 --debug 时实时输出并写入调试时间线（默认保存于 <output-dir>/collect/debug-timeline-*.json）",
 		Category: "Integration",
 		Flags: []cli.Flag{
 			&cli.DurationFlag{
@@ -90,6 +92,7 @@ func collectCommand() *cli.Command {
 }
 
 func runCollectCommand(c *cli.Context) error {
+	emitter := debugger.NewEmitter(os.Stderr, c.Bool("debug"))
 	cfg := internal.GetGlobalConfig()
 	defs := collector.FromAppConfig(cfg)
 	selected := normalizeCollectorFilters(c.StringSlice("collector"))
@@ -112,11 +115,25 @@ func runCollectCommand(c *cli.Context) error {
 	if len(defs) == 0 {
 		return cli.Exit("未找到任何可运行的采集器，请在配置文件中定义 collectors 或使用 --backend/--probes/--providers 参数", 1)
 	}
-	service := collector.NewService(defs)
+	opts := []collector.ServiceOption{}
+	if hook := collectorServiceOptionsHook; hook != nil {
+		opts = append(opts, hook()...)
+	}
+	if emitter.Enabled() {
+		opts = append(opts, collector.WithDebugEmitter(emitter))
+	}
+	service := collector.NewService(defs, opts...)
 	ctx, cancel := context.WithCancel(c.Context)
 	defer cancel()
 
 	handler := newConsoleEventHandler()
+	if emitter.Enabled() {
+		backendLabel := strings.Join(normalizeCollectorFilters(c.StringSlice("backend")), "+")
+		handler = &statsHandler{base: handler, emitter: emitter, backend: backendLabel}
+	}
+	if emitter.Enabled() {
+		emitter.PhaseStart("collect", "start", fmt.Sprintf("expected=%d", expectedActive))
+	}
 	if err := service.Start(ctx, handler); err != nil {
 		return cli.Exit(fmt.Sprintf("采集器启动失败: %v", err), 1)
 	}
@@ -130,7 +147,7 @@ func runCollectCommand(c *cli.Context) error {
 
 	statusSnapshot := waitForCollectorStartup(func() []collector.CollectorStatus {
 		return service.Status()
-	}, expectedActive, 5*time.Second)
+	}, expectedActive, 5*time.Second, emitter)
 	printCollectorStatus(statusSnapshot)
 	if running := countRunningCollectors(statusSnapshot); expectedActive > 0 && running < expectedActive {
 		fmt.Fprintf(os.Stderr, "警告：仅有 %d/%d 个采集器处于运行状态，请检查 LastError 或日志输出。\n", running, expectedActive)
@@ -140,8 +157,19 @@ func runCollectCommand(c *cli.Context) error {
 		return cli.Exit(err.Error(), 1)
 	}
 	fmt.Println("采集器已停止。")
+	if emitter.Enabled() {
+		emitter.PhaseEnd("collect", "stopped")
+		if path, err := persistCollectDebugTimeline(emitter, cfg.Output.Dir); err != nil {
+			fmt.Fprintf(os.Stderr, "[debug] 调试时间线写入失败: %v\n", err)
+		} else if path != "" {
+			fmt.Fprintf(os.Stderr, "[debug] 调试时间线已写入 %s\n", path)
+		}
+	}
 	return nil
 }
+
+// collectorServiceOptionsHook allows tests to inject custom ServiceOptions.
+var collectorServiceOptionsHook func() []collector.ServiceOption
 
 func newConsoleEventHandler() collector.EventHandler {
 	var mu sync.Mutex
@@ -213,6 +241,49 @@ func normalizeCollectorFilters(values []string) []string {
 	return result
 }
 
+func persistCollectDebugTimeline(emitter *debugger.Emitter, baseDir string) (string, error) {
+	if emitter == nil {
+		return "", nil
+	}
+	events := emitter.Events()
+	if len(events) == 0 {
+		return "", nil
+	}
+	dir := strings.TrimSpace(baseDir)
+	if dir == "" {
+		dir = filepath.Join(os.TempDir(), "d-eyes", "collect")
+	} else {
+		dir = filepath.Join(dir, "collect")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	timestamp := time.Now().Format("20060102-150405")
+	path := filepath.Join(dir, fmt.Sprintf("debug-timeline-%s.json", timestamp))
+	file, err := os.Create(path)
+	if err != nil {
+		return "", err
+	}
+	enc := json.NewEncoder(file)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(events); err != nil {
+		file.Close()
+		return "", err
+	}
+	file.Close()
+	if meta := emitter.Metadata(); len(meta) > 0 {
+		metaPath := filepath.Join(dir, fmt.Sprintf("debug-summary-%s.json", timestamp))
+		metaFile, err := os.Create(metaPath)
+		if err == nil {
+			menc := json.NewEncoder(metaFile)
+			menc.SetIndent("", "  ")
+			_ = menc.Encode(meta)
+			metaFile.Close()
+		}
+	}
+	return path, nil
+}
+
 func filterCollectorsByKind(configs []collector.Config, kinds []string) []collector.Config {
 	if len(kinds) == 0 {
 		return configs
@@ -239,6 +310,44 @@ type collectCLIOverrides struct {
 	providers []string
 	probes    []string
 	output    collector.Output
+}
+
+type statsHandler struct {
+	base    collector.EventHandler
+	mu      sync.Mutex
+	count   int
+	last    time.Time
+	backend string
+	emitter *debugger.Emitter
+}
+
+func (s *statsHandler) HandleEvent(ctx context.Context, event *collector.SystemEvent) error {
+	if s == nil {
+		return nil
+	}
+	if s.emitter != nil {
+		s.mu.Lock()
+		s.count++
+		now := time.Now()
+		if s.last.IsZero() {
+			s.last = now
+		}
+		elapsed := now.Sub(s.last)
+		if s.count%100 == 0 || elapsed >= time.Second {
+			rate := float64(s.count) / elapsed.Seconds()
+			label := "collect.stats"
+			if s.backend != "" {
+				label = label + "." + s.backend
+			}
+			s.emitter.Notice(label, fmt.Sprintf("events=%d rate=%.1f/s", s.count, rate))
+			s.last = now
+		}
+		s.mu.Unlock()
+	}
+	if s.base == nil {
+		return nil
+	}
+	return s.base.HandleEvent(ctx, event)
 }
 
 func collectCLIOverridesFromContext(c *cli.Context) collectCLIOverrides {
@@ -314,15 +423,19 @@ func countEnabledCollectors(configs []collector.Config) int {
 	return count
 }
 
-func waitForCollectorStartup(statusFn func() []collector.CollectorStatus, expected int, timeout time.Duration) []collector.CollectorStatus {
+func waitForCollectorStartup(statusFn func() []collector.CollectorStatus, expected int, timeout time.Duration, emitter *debugger.Emitter) []collector.CollectorStatus {
 	if expected <= 0 {
-		return statusFn()
+		snapshot := statusFn()
+		emitCollectorStartupProgress(emitter, countRunningCollectors(snapshot), expected)
+		return snapshot
 	}
 	deadline := time.Now().Add(timeout)
 	var snapshot []collector.CollectorStatus
 	for {
 		snapshot = statusFn()
-		if countRunningCollectors(snapshot) >= expected {
+		running := countRunningCollectors(snapshot)
+		emitCollectorStartupProgress(emitter, running, expected)
+		if running >= expected {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -330,7 +443,18 @@ func waitForCollectorStartup(statusFn func() []collector.CollectorStatus, expect
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	emitCollectorStartupProgress(emitter, countRunningCollectors(snapshot), expected)
 	return snapshot
+}
+
+func emitCollectorStartupProgress(emitter *debugger.Emitter, running, expected int) {
+	if emitter == nil || expected <= 0 {
+		return
+	}
+	if running > expected {
+		running = expected
+	}
+	emitter.Progress("collect.startup", running, expected, fmt.Sprintf("collectors running: %d/%d", running, expected))
 }
 
 func countRunningCollectors(status []collector.CollectorStatus) int {

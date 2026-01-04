@@ -1,7 +1,7 @@
 .events-workspace {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 24px;
 }
 
 .events-filters-form .ant-select,
@@ -176,4 +176,18 @@
 
 .respond-panel .respond-shortcut {
   padding: 8px 0;
+}
+
+/* 增大事件页面卡片的上下间距 */
+.events-workspace .ant-card {
+  margin-bottom: 16px;
+}
+
+.events-workspace .ant-card:last-child {
+  margin-bottom: 0;
+}
+
+/* 特殊处理热图卡片间距 */
+.events-heatmap {
+  margin-top: 16px;
 }

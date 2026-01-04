@@ -3,6 +3,7 @@ package internal
 import (
 	"sync"
 
+	"github.com/m-sec-org/d-eyes/agent/internal/cmdexec"
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 )
@@ -29,6 +30,7 @@ func SetGlobalConfig(cfg config.Config) {
 	defer globalConfigLock.Unlock()
 	globalConfig = cfg
 	SetReportManager(reporting.NewManager(cfg))
+	cmdexec.Configure(cfg)
 	notifyConfigWatchers(cfg)
 }
 

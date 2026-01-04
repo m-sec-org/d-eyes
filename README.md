@@ -16,12 +16,13 @@ D-Eyes是一款由M-SEC社区驱动的综合性安全检测与响应工具，提
 
 ### 1.2 核心能力
 
-- **多场景任务支持**：提供`respond`、`baseline`、`audit`、`inventory`、`supplychain`、`bas`六大任务入口，覆盖主流安全检测场景
+- **多场景任务支持**：提供 `respond`、`detect`、`baseline`、`audit`、`inventory`、`supplychain`、`bas` 等任务入口，覆盖主流安全检测场景
 - **统一的执行框架**：所有任务复用全局配置、报告管理器与风险策略，提供一致的使用体验
 - **强大的插件系统**：支持通过插件机制扩展功能，如检测插件、SBOM语言支持等
 - **多平台兼容**：核心能力覆盖Linux、Windows、macOS等主流操作系统
 - **分布式架构**：支持Agent-Server模式，可实现大规模环境的集中管理与分布式执行
-- **丰富的YARA规则**：内置大量恶意软件检测规则，支持勒索软件、挖矿程序等多种威胁检测
+- **丰富的YARA规则**：内置大量恶意软件检测规则，支持 `portable/native` 双后端（`auto` 优先 native、不可用显式回退），覆盖勒索软件、挖矿程序等多种威胁检测
+- **文件less/注入类补充**：Windows 下支持进程内存扫描（`d-eyes detect memscan`，默认 RWX 聚焦与限额保护；证据保全默认关闭）
 - **自动化攻击模拟**：提供可控的攻击链模拟能力，主动验证安全防护有效性
 
 ### 1.3 产品优势
@@ -37,6 +38,8 @@ D-Eyes是一款由M-SEC社区驱动的综合性安全检测与响应工具，提
 ## 2. Agent 核心能力
 
 D-Eyes Agent 以 `agent/internal/app.go` 中的 CLI 框架为中心，所有任务共享统一的配置加载、报告管理、威胁情报和沙箱控制逻辑。CLI 与 `remote` 守护进程共用 Runner、Collector、缓存和遥测能力，可在本地一次性执行与 Server 下发模式间自由切换。
+
+威胁情报支持 `--ti-mode auto/local/hybrid/server`：`hybrid` 可在配置 API Key 后直连 OpenTIP/MetaDefender，遇到无 Key、限额（429）或 Provider 异常时会自动退化为 local，并输出稳定的 `threatintel.*` 元数据用于 CI/排障；`server` 模式下仅上传 artifacts/token 交由 Server orchestrator 统一编排。
 
 ### 2.1 应急响应 (respond)
 
@@ -109,6 +112,7 @@ D-Eyes Agent 以 `agent/internal/app.go` 中的 CLI 框架为中心，所有任�
 - **插件接口标准化**：提供统一的插件接口，便于开发自定义检测插件
 - **子命令注册机制**：支持向detect命令注册子命令
 - **多样检测能力**：可扩展支持各种检测场景，如恶意代码检测、异常行为分析等
+- **内置能力示例**：`detect diag`（YARA 后端/覆盖率诊断）、`detect filescan/processcan`（文件/进程扫描）、`detect memscan`（Windows 进程内存扫描，默认 RWX 聚焦与限额保护；`--evidence/--minidump` 默认关闭）
 
 ### 2.7 入侵和攻击模拟 (bas)
 
@@ -158,6 +162,7 @@ D-Eyes 提供 Agent-Server 分布式架构，`agent/internal/agent/daemon.go` �
 - **系统遥测**：`agent/internal/telemetry` 周期性采集 CPU、内存、IO 与任务资源，打入每次心跳及执行结果，Server 可直接复现现场。
 - **Artifact 上传**：远程模式根据 `remote.ServerAPIBase` 自动创建 `artifacts.Client`，将报告/样本通过 `/api/v1/artifacts` 安全上传，再由 Server 统一入库或提交情报。
 - **事件与情报桥接**：`event_uploader` 将 Collector 事件批量推送到 `/api/v1/events/ingest`，Server 的检测引擎、Playbook、威胁情报编排都以此为触发源。
+- **调试时间线**：开启 `--debug`（或 `DEYES_DEBUG=1`）后，Runner、Collector 会把阶段/进度事件实时输出到 `stderr`，同时写入 `TaskResult.Metadata` 的 `telemetry.debug_*` 字段。远程 `ExecutionResult.metadata` 会携带同样的数据，便于 Server 端复盘；`collect` 命令还会在 `<output-dir>/collect/debug-timeline-*.json` 额外持久化时间线。
 
 ## 3. Server 核心能力
 

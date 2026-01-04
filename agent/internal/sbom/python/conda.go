@@ -1,16 +1,16 @@
 package python
 
 import (
-	"bytes"
-	"errors"
+	"context"
 	"fmt"
+
 	"github.com/m-sec-org/d-eyes/agent/internal"
+	"github.com/m-sec-org/d-eyes/agent/internal/cmdexec"
 	"github.com/m-sec-org/d-eyes/agent/internal/constant"
 	"github.com/m-sec-org/d-eyes/agent/internal/sbom"
 	"github.com/m-sec-org/d-eyes/agent/pkg/color"
 	"github.com/urfave/cli/v2"
 	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -34,34 +34,35 @@ func (conda *Conda) InitCommand() *cli.Command {
 		Action: conda.Action,
 	}
 }
+
+func runCondaList(ctx context.Context) (cmdexec.Result, error) {
+	return cmdexec.Run(ctx, cmdexec.Request{
+		Command:    "conda",
+		Args:       []string{"list"},
+		Identifier: "sbom.python conda list",
+	})
+}
+
 func (conda *Conda) Action(c *cli.Context) error {
 
-	cmd := exec.Command("conda", "list")
-
-	var out bytes.Buffer
-	cmd.Stdout = &out
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	res, err := runCondaList(c.Context)
 	if err != nil {
 
-		var exitErr *exec.Error
-		var exitError *exec.ExitError
-		if errors.As(err, &exitError) {
-			fmt.Println(color.Magenta.Sprint("请检查pip命令是否存在"))
-			os.Exit(1)
-		} else if errors.As(err, &exitErr) {
-			fmt.Println(color.Magenta.Sprintf("执行错误,%s", err.Error()))
-			os.Exit(1)
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "command denied") {
+			fmt.Println(color.Magenta.Sprint("conda 命令被策略禁止，请在配置中允许执行"))
+		} else if strings.Contains(lower, "executable file not found") || strings.Contains(lower, "not found") {
+			fmt.Println(color.Magenta.Sprint("请检查conda命令是否存在"))
 		} else {
-			fmt.Printf("未知错误")
-			os.Exit(1)
+			fmt.Println(color.Magenta.Sprintf("执行错误,%s", err.Error()))
 		}
+		if stderr := strings.TrimSpace(res.Stderr); stderr != "" {
+			fmt.Println(color.Magenta.Sprintf("%s", stderr))
+		}
+		os.Exit(1)
 		return nil
 	}
-	conda.Parse(out.String())
+	conda.Parse(res.Stdout)
 	return nil
 }
 func (conda *Conda) Parse(input string) {

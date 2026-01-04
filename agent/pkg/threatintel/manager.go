@@ -39,6 +39,7 @@ type Finding struct {
 	Classification string            `json:"classification"`
 	Confidence     string            `json:"confidence"`
 	Source         string            `json:"source"`
+	Notice         string            `json:"notice,omitempty"`
 	Details        map[string]string `json:"details,omitempty"`
 	Context        map[string]string `json:"context,omitempty"`
 	ObservedAt     time.Time         `json:"observed_at"`
@@ -51,27 +52,34 @@ type cacheEntry struct {
 
 // Manager 负责协调情报查询、缓存与启发式。
 type Manager struct {
-	cfg   Config
-	cache map[string]cacheEntry
-	mu    sync.RWMutex
-	clock func() time.Time
+	cfg            Config
+	requestedMode  Mode
+	noticeFallback string
+	noticeCodes    []string
+	notices        []string
+	cache          map[string]cacheEntry
+	remote         map[string]remoteProvider
+	remoteSem      map[string]chan struct{}
+	remotePaused   map[string]time.Time
+	mu             sync.RWMutex
+	clock          func() time.Time
 }
 
 // NewManager 根据配置创建情报管理器。
 func NewManager(cfg Config) (*Manager, error) {
-	mode := cfg.Mode
-	if mode == "" {
-		mode = ModeHybrid
+	requestedMode := cfg.Mode
+	if requestedMode == "" {
+		requestedMode = ModeHybrid
 	}
-	cfg.Mode = mode
+	cfg.Mode = requestedMode
 
 	// server 模式下直接交由服务端处理，此处不初始化。
-	if mode == ModeServer {
+	if requestedMode == ModeServer {
 		return nil, ErrNoActiveConnector
 	}
 
 	if cfg.CacheTTL <= 0 {
-		cfg.CacheTTL = 6 * time.Hour
+		cfg.CacheTTL = 24 * time.Hour
 	}
 	if cfg.CacheSize <= 0 {
 		cfg.CacheSize = 512
@@ -90,15 +98,221 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 
 	hasRemoteSource := strings.TrimSpace(cfg.OpenTIPAPIKey) != "" || strings.TrimSpace(cfg.MetaDefenderAPIKey) != ""
-	if mode != ModeLocal && !hasRemoteSource {
-		return nil, ErrNoActiveConnector
+
+	effectiveMode := requestedMode
+	var noticeCodes []string
+	var notices []string
+	noticeFallback := ""
+	switch requestedMode {
+	case ModeLocal:
+		effectiveMode = ModeLocal
+	case ModeHybrid:
+		if !hasRemoteSource {
+			effectiveMode = ModeLocal
+			noticeCodes = append(noticeCodes, NoticeCodeFallbackLocalNoAPIKey)
+			noticeFallback = "hybrid 未配置 API Key，已降级为 local（仅启发式）"
+			notices = append(notices, noticeFallback)
+		}
+	case ModeAuto:
+		if hasRemoteSource {
+			effectiveMode = ModeHybrid
+		} else {
+			effectiveMode = ModeLocal
+		}
+	default:
+		if !hasRemoteSource {
+			effectiveMode = ModeLocal
+			noticeCodes = append(noticeCodes, NoticeCodeFallbackLocalNoAPIKey)
+			noticeFallback = "hybrid 未配置 API Key，已降级为 local（仅启发式）"
+			notices = append(notices, noticeFallback)
+		} else {
+			effectiveMode = ModeHybrid
+		}
+	}
+	cfg.Mode = effectiveMode
+
+	remoteProviders := make(map[string]remoteProvider)
+	remoteSem := make(map[string]chan struct{})
+	if effectiveMode == ModeHybrid {
+		if strings.TrimSpace(cfg.OpenTIPAPIKey) != "" {
+			remoteProviders["opentip"] = newOpenTIPRemote(cfg)
+			remoteSem["opentip"] = make(chan struct{}, cfg.MaxParallelPerSource)
+		}
+		if strings.TrimSpace(cfg.MetaDefenderAPIKey) != "" {
+			remoteProviders["metadefender"] = newMetaDefenderRemote(cfg)
+			remoteSem["metadefender"] = make(chan struct{}, cfg.MaxParallelPerSource)
+		}
 	}
 
 	return &Manager{
-		cfg:   cfg,
-		cache: make(map[string]cacheEntry),
-		clock: time.Now,
+		cfg:            cfg,
+		requestedMode:  requestedMode,
+		noticeFallback: noticeFallback,
+		noticeCodes:    noticeCodes,
+		notices:        notices,
+		cache:          make(map[string]cacheEntry),
+		remote:         remoteProviders,
+		remoteSem:      remoteSem,
+		remotePaused:   make(map[string]time.Time),
+		clock:          time.Now,
 	}, nil
+}
+
+func (m *Manager) RequestedMode() Mode {
+	if m == nil {
+		return ""
+	}
+	return m.requestedMode
+}
+
+func (m *Manager) Mode() Mode {
+	if m == nil {
+		return ""
+	}
+	if m.cfg.Mode == ModeHybrid && m.RemoteConfigured() {
+		now := m.clock()
+		m.mu.RLock()
+		active := m.hasActiveRemoteLocked(now)
+		m.mu.RUnlock()
+		if !active {
+			return ModeLocal
+		}
+	}
+	return m.cfg.Mode
+}
+
+func (m *Manager) RemoteConfigured() bool {
+	if m == nil {
+		return false
+	}
+	return strings.TrimSpace(m.cfg.OpenTIPAPIKey) != "" || strings.TrimSpace(m.cfg.MetaDefenderAPIKey) != ""
+}
+
+func (m *Manager) RemoteEnabled() bool {
+	if m == nil {
+		return false
+	}
+	if m.cfg.Mode != ModeHybrid || !m.RemoteConfigured() {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.hasActiveRemoteLocked(m.clock())
+}
+
+func (m *Manager) RemoteSources() []string {
+	if m == nil {
+		return nil
+	}
+	sources := make([]string, 0, 2)
+	if strings.TrimSpace(m.cfg.OpenTIPAPIKey) != "" {
+		sources = append(sources, "opentip")
+	}
+	if strings.TrimSpace(m.cfg.MetaDefenderAPIKey) != "" {
+		sources = append(sources, "metadefender")
+	}
+	sort.Strings(sources)
+	return sources
+}
+
+func (m *Manager) Notices() []string {
+	if m == nil || len(m.notices) == 0 {
+		return nil
+	}
+	return append([]string(nil), m.notices...)
+}
+
+func (m *Manager) NoticeCodes() []string {
+	if m == nil || len(m.noticeCodes) == 0 {
+		return nil
+	}
+	return append([]string(nil), m.noticeCodes...)
+}
+
+func (m *Manager) hasActiveRemoteLocked(now time.Time) bool {
+	if len(m.remote) == 0 {
+		return false
+	}
+	for name := range m.remote {
+		until, ok := m.remotePaused[name]
+		if ok && now.Before(until) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (m *Manager) sortedRemoteNames() []string {
+	names := make([]string, 0, len(m.remote))
+	for name := range m.remote {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (m *Manager) pauseRemote(provider string, duration time.Duration) time.Duration {
+	if duration <= 0 {
+		duration = 30 * time.Second
+	}
+	now := m.clock()
+	until := now.Add(duration)
+	m.mu.Lock()
+	if existing, ok := m.remotePaused[provider]; !ok || until.After(existing) {
+		m.remotePaused[provider] = until
+	}
+	m.mu.Unlock()
+	return duration
+}
+
+func (m *Manager) minPauseRemaining(now time.Time) time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	min := time.Duration(0)
+	for _, until := range m.remotePaused {
+		if now.Before(until) {
+			remain := until.Sub(now)
+			if min == 0 || remain < min {
+				min = remain
+			}
+		}
+	}
+	return min
+}
+
+func (m *Manager) addNotice(code string, detail string) {
+	if m == nil {
+		return
+	}
+	code = strings.TrimSpace(code)
+	detail = strings.TrimSpace(detail)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if code != "" {
+		seen := false
+		for _, existing := range m.noticeCodes {
+			if existing == code {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			m.noticeCodes = append(m.noticeCodes, code)
+		}
+	}
+	if detail != "" {
+		seen := false
+		for _, existing := range m.notices {
+			if existing == detail {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			m.notices = append(m.notices, detail)
+		}
+	}
 }
 
 // LookupFile 对文件执行情报查询（启发式 + 缓存）。
@@ -145,8 +359,20 @@ func (m *Manager) LookupFile(ctx context.Context, path string, metadata map[stri
 		Context:        cloneMap(metadata),
 		ObservedAt:     m.clock(),
 	}
-	m.storeCache(key, []Finding{finding})
-	return []Finding{finding}, nil
+	findings := []Finding{finding}
+	ttl := m.cfg.CacheTTL
+	if m.cfg.Mode == ModeHybrid && m.RemoteConfigured() && len(hash) == 64 {
+		remoteFindings, remoteTTL := m.lookupRemoteFile(ctx, path, hash, metadata)
+		findings = append(findings, remoteFindings...)
+		if remoteTTL > 0 && remoteTTL < ttl {
+			ttl = remoteTTL
+		}
+		if pause := m.minPauseRemaining(m.clock()); pause > 0 && pause < ttl {
+			ttl = pause
+		}
+	}
+	m.storeCacheWithTTL(key, findings, ttl)
+	return findings, nil
 }
 
 // LookupIndicator 对 IP/Domain/URL/Hash 等指标执行本地判定。
@@ -178,13 +404,32 @@ func (m *Manager) LookupIndicator(ctx context.Context, kind IndicatorKind, value
 		Context:        cloneMap(metadata),
 		ObservedAt:     m.clock(),
 	}
-	m.storeCache(key, []Finding{finding})
-	return []Finding{finding}, nil
+	findings := []Finding{finding}
+	ttl := m.cfg.CacheTTL
+	if kind == IndicatorHash && m.cfg.Mode == ModeHybrid && m.RemoteConfigured() && len(value) == 64 {
+		remoteFindings, remoteTTL := m.lookupRemoteHash(ctx, value, metadata)
+		findings = append(findings, remoteFindings...)
+		if remoteTTL > 0 && remoteTTL < ttl {
+			ttl = remoteTTL
+		}
+		if pause := m.minPauseRemaining(m.clock()); pause > 0 && pause < ttl {
+			ttl = pause
+		}
+	}
+	m.storeCacheWithTTL(key, findings, ttl)
+	return findings, nil
 }
 
 func (m *Manager) storeCache(key string, findings []Finding) {
+	m.storeCacheWithTTL(key, findings, m.cfg.CacheTTL)
+}
+
+func (m *Manager) storeCacheWithTTL(key string, findings []Finding, ttl time.Duration) {
 	if m.cfg.CacheSize <= 0 {
 		return
+	}
+	if ttl <= 0 || ttl > m.cfg.CacheTTL {
+		ttl = m.cfg.CacheTTL
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -193,7 +438,7 @@ func (m *Manager) storeCache(key string, findings []Finding) {
 	}
 	m.cache[key] = cacheEntry{
 		findings: cloneFindings(findings),
-		expires:  m.clock().Add(m.cfg.CacheTTL),
+		expires:  m.clock().Add(ttl),
 	}
 }
 
@@ -348,6 +593,7 @@ func cloneFindings(src []Finding) []Finding {
 			Classification: item.Classification,
 			Confidence:     item.Confidence,
 			Source:         item.Source,
+			Notice:         item.Notice,
 			Details:        cloneMap(item.Details),
 			Context:        cloneMap(item.Context),
 			ObservedAt:     item.ObservedAt,

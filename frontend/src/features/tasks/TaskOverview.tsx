@@ -40,7 +40,7 @@ export function TaskOverview() {
 
   return (
     <div className="task-overview">
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Space direction="vertical" size={32} style={{ width: '100%' }}>
         <PageHeader
           title="任务指挥中心"
           description="查看队列、筛选任务、保存视图并执行快捷操作"

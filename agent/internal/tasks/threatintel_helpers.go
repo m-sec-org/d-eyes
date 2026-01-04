@@ -148,8 +148,10 @@ func (c *tiCollector) Flush(command, name, label string) ([]reporting.OutputReco
 		Findings:  c.findings,
 		Errors:    c.errors,
 	}
-	if len(c.req.Metadata) > 0 {
-		payload.Metadata = c.req.Metadata
+
+	meta := appendThreatIntelMetadata(cloneStringMap(c.req.Metadata), c.req)
+	if len(meta) > 0 {
+		payload.Metadata = meta
 	}
 
 	encoder := json.NewEncoder(file)

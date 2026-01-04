@@ -164,6 +164,9 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 	if len(scenario.Steps) == 0 {
 		return TaskResult{}, errors.New("bas scenario has no steps")
 	}
+	if req.Debugger != nil {
+		req.Debugger.PhaseStart("bas", scenario.ID, scenario.Name)
+	}
 
 	sandboxCfg := sandbox.Config{
 		Enabled:        req.Config.Sandbox.Enabled,
@@ -186,7 +189,7 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 
 	failureEncountered := false
 
-	for _, step := range scenario.Steps {
+	for idx, step := range scenario.Steps {
 		select {
 		case <-ctx.Done():
 			return TaskResult{
@@ -203,12 +206,20 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 		default:
 		}
 
+		if req.Debugger != nil {
+			req.Debugger.PhaseStart("bas.step", step.ID, fmt.Sprintf("%d/%d", idx+1, len(scenario.Steps)))
+		}
 		if failureEncountered {
 			outcome := skippedOutcome(step, req.Config.Sandbox.Enabled, "skipped due to previous failure")
 			outcomes = append(outcomes, outcome)
 			riskTotals["low"]++
 			if outcome.Message != "" {
 				notes = append(notes, fmt.Sprintf("%s: %s", outcome.Name, outcome.Message))
+			}
+			if req.Debugger != nil {
+				req.Debugger.Notice("bas.step", fmt.Sprintf("%s skipped", step.ID))
+				req.Debugger.Progress("bas", idx+1, len(scenario.Steps), "skipped")
+				req.Debugger.PhaseEnd("bas.step", "skipped")
 			}
 			continue
 		}
@@ -240,6 +251,16 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 		}
 		if outcome.Fallback {
 			notes = append(notes, fmt.Sprintf("%s: 沙箱运行时不可用，已回退至宿主执行", outcome.Name))
+		}
+		if req.Debugger != nil {
+			if outcome.Status == "failed" {
+				req.Debugger.Error("bas.step", fmt.Sprintf("%s failed", outcome.ID))
+			}
+			if outcome.Status == "succeeded" {
+				req.Debugger.Notice("bas.step", fmt.Sprintf("%s succeeded", outcome.ID))
+			}
+			req.Debugger.Progress("bas", idx+1, len(scenario.Steps), outcome.Status)
+			req.Debugger.PhaseEnd("bas.step", outcome.Status)
 		}
 	}
 
@@ -354,6 +375,10 @@ func (b *basRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error
 	var execErr error
 	if len(failedSteps) > 0 {
 		execErr = fmt.Errorf("BAS 场景 %s 执行失败，失败步骤: %s", scenario.ID, strings.Join(failedSteps, ","))
+	}
+	if req.Debugger != nil {
+		req.Debugger.Artifact("bas", summaryPath)
+		req.Debugger.PhaseEnd("bas", "complete")
 	}
 
 	result := TaskResult{

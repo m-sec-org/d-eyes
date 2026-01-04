@@ -3,20 +3,24 @@
 package check
 
 import (
+	"context"
 	"fmt"
-	"os/exec"
 	"strings"
+
+	"github.com/m-sec-org/d-eyes/agent/internal/cmdexec"
 )
 
 func SuccessLoginDetail() {
-	c := exec.Command("bash", "-c", "who /var/log/wtmp | awk '{print $1,$3\"-\"$4\"\",$5}'")
-	out, err := c.CombinedOutput()
+	res, err := cmdexec.Run(context.Background(), cmdexec.Request{
+		Command:    "who",
+		Args:       []string{"/var/log/wtmp"},
+		Identifier: "detect.check SuccessLoginDetail",
+	})
 	if err != nil {
 		fmt.Println("读取记录失败!")
 		return
 	}
-	infos := strings.Split(string(out), "\n")
-	infos = infos[:len(infos)-1]
+	infos := strings.Split(strings.TrimSpace(res.Stdout), "\n")
 
 	if len(infos) == 1 && infos[0] == "" {
 		fmt.Println("未找到成功的登录信息.")
@@ -24,9 +28,17 @@ func SuccessLoginDetail() {
 	}
 	sum := 0
 	for i := len(infos) - 1; i >= 0; i-- {
+		success := strings.Fields(infos[i])
+		if len(success) < 4 {
+			continue
+		}
 		sum++
-		success := strings.Split(infos[i], " ")
-		fmt.Printf("User : %s    time : %s  IP : %s\n", success[0], success[1], success[2])
+		timeValue := success[2] + "-" + success[3]
+		ipValue := ""
+		if len(success) >= 5 {
+			ipValue = success[4]
+		}
+		fmt.Printf("User : %s    time : %s  IP : %s\n", success[0], timeValue, ipValue)
 		if sum == 5 {
 			return
 		}

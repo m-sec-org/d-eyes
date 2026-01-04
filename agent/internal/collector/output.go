@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/m-sec-org/d-eyes/agent/internal/debugger"
 )
 
-func buildOutputHandler(cfg Config, base EventHandler) (EventHandler, func(), error) {
+func buildOutputHandler(cfg Config, base EventHandler, emitter *debugger.Emitter) (EventHandler, func(), error) {
 	mode := strings.TrimSpace(strings.ToLower(cfg.Output.Mode))
 	streamCfg := cfg.Output.Stream
 	streamEnabled := mode == "stream" || strings.TrimSpace(streamCfg.URL) != ""
@@ -25,7 +27,7 @@ func buildOutputHandler(cfg Config, base EventHandler) (EventHandler, func(), er
 	var err error
 	switch {
 	case streamEnabled:
-		writer, cleanup, err = newStreamWriter(streamCfg)
+		writer, cleanup, err = newStreamWriter(streamCfg, emitter)
 	case mode == "stdout":
 		writer = newStdoutWriter()
 	case mode == "file":

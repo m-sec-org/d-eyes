@@ -11,6 +11,7 @@ import (
 	fatihColor "github.com/fatih/color"
 	"github.com/urfave/cli/v2"
 
+	"github.com/m-sec-org/d-eyes/agent/internal/debugger"
 	"github.com/m-sec-org/d-eyes/agent/internal/tasks"
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
@@ -184,6 +185,11 @@ GLOBAL OPTIONS:
 		&cli.BoolFlag{
 			Name:  "quiet",
 			Usage: "启用静默模式，仅生成报告文件，不在终端输出摘要",
+		},
+		&cli.BoolFlag{
+			Name:    "debug",
+			Usage:   "启用调试事件输出（亦可通过 DEYES_DEBUG 指定）",
+			EnvVars: []string{"DEYES_DEBUG"},
 		},
 		&cli.StringFlag{
 			Name:    "ti-mode",
@@ -470,6 +476,12 @@ func newTaskCommand(def taskCommandDefinition) *cli.Command {
 		Flags:       def.Flags,
 		Action: func(c *cli.Context) error {
 			cfg := GetGlobalConfig()
+			debugEnabled := c.Bool("debug")
+			quiet := c.Bool("quiet")
+			var emitter *debugger.Emitter
+			if debugEnabled {
+				emitter = debugger.NewEmitter(os.Stderr, !quiet)
+			}
 			req := tasks.TaskRequest{
 				Profile:    c.String("profile"),
 				OutputDir:  c.String("output-dir"),
@@ -478,13 +490,18 @@ func newTaskCommand(def taskCommandDefinition) *cli.Command {
 				Timeout:    c.Duration("timeout"),
 				Flags:      tasks.ExtractFlags(c),
 				Config:     cfg,
-				Quiet:      c.Bool("quiet"),
+				Quiet:      quiet,
 				JSONOutput: c.Bool("json"),
+				Debug:      debugEnabled,
+				Debugger:   emitter,
 			}
 			if mode := strings.TrimSpace(c.String("ti-mode")); mode != "" {
 				req.Config.ThreatIntel.Mode = threatintel.ParseMode(mode)
 			}
 			req.ApplyDefaults(def.Name)
+			if debugEnabled {
+				req.Metadata["debug"] = "true"
+			}
 			if err := tasks.ValidateRequest(def.Name, &req); err != nil {
 				return err
 			}

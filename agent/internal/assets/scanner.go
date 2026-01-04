@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/m-sec-org/d-eyes/agent/internal/assets/fingerprints"
 	"github.com/m-sec-org/d-eyes/agent/internal/assets/utils"
+	"github.com/m-sec-org/d-eyes/agent/internal/cmdexec"
 	"github.com/m-sec-org/d-eyes/agent/internal/progress"
 )
 
@@ -280,6 +280,11 @@ func (s *AssetScanner) ScanSingleHost(ctx context.Context, ip string) (HostInfo,
 			if s.options.EnableServiceDetect {
 				serviceFingerprints, _ = fingerprints.LoadServiceFingerprints()
 			}
+			serviceStage := false
+			if s.progress != nil && s.options.EnableServiceDetect && len(ports) > 0 {
+				serviceStage = true
+				s.progress.StartStage(progress.StageServiceDetect, len(ports), fmt.Sprintf("主机 %s", host.IP.String()))
+			}
 			s.enrichPortData(host.IP, ports, serviceFingerprints)
 			if s.progress != nil {
 				processed := len(ports)
@@ -289,9 +294,15 @@ func (s *AssetScanner) ScanSingleHost(ctx context.Context, ip string) (HostInfo,
 						detail = fmt.Sprintf("%s:%d %s", host.IP.String(), pr.Port, pr.State)
 					}
 					s.progress.Add(progress.StagePortScan, 1, detail)
+					if serviceStage {
+						s.progress.Add(progress.StageServiceDetect, 1, fmt.Sprintf("%s:%d %s", host.IP.String(), pr.Port, pr.Service))
+					}
 				}
 				if missing := len(portList) - processed; missing > 0 {
 					s.progress.Add(progress.StagePortScan, missing, fmt.Sprintf("%s 有 %d 个端口未返回结果", host.IP.String(), missing))
+				}
+				if serviceStage {
+					s.progress.Debugf("主机 %s 服务识别完成，共 %d 条记录", host.IP.String(), len(ports))
 				}
 			}
 		}
@@ -425,6 +436,9 @@ func (s *AssetScanner) annotateOS(ctx context.Context, result *ScanResult) {
 	if err != nil || len(fps) == 0 {
 		return
 	}
+	if s.progress != nil {
+		s.progress.StartStage(progress.StageOSDetect, len(result.Hosts), "系统识别")
+	}
 
 	portServices := make(map[string]map[int]string)
 	serviceBanners := make(map[string]map[string]string)
@@ -456,7 +470,7 @@ func (s *AssetScanner) annotateOS(ctx context.Context, result *ScanResult) {
 
 	for i := range result.Hosts {
 		ipStr := result.Hosts[i].IP.String()
-		ttl, _ := probeTTL(ipStr, timeout)
+		ttl, _ := probeTTL(ctx, ipStr, timeout)
 		ctxData := fingerprints.OSContext{
 			TTL:      ttl,
 			Services: portServices[ipStr],
@@ -467,30 +481,43 @@ func (s *AssetScanner) annotateOS(ctx context.Context, result *ScanResult) {
 			result.Hosts[i].OSType = name
 			result.Hosts[i].OSConfidence = score
 		}
+		if s.progress != nil {
+			s.progress.Add(progress.StageOSDetect, 1, ipStr)
+		}
+	}
+	if s.progress != nil {
+		s.progress.Debugf("系统识别完成，共处理 %d 台主机", len(result.Hosts))
 	}
 }
 
 var ttlRegex = regexp.MustCompile(`(?i)ttl[=:\s](\d+)`)
 
-func probeTTL(target string, timeout time.Duration) (int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	var cmd *exec.Cmd
+func probeTTL(ctx context.Context, target string, timeout time.Duration) (int, error) {
+	var command string
+	var args []string
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.CommandContext(ctx, "ping", "-n", "1", "-w", fmt.Sprintf("%d", int(timeout.Milliseconds())), target)
+		command = "ping"
+		args = []string{"-n", "1", "-w", fmt.Sprintf("%d", int(timeout.Milliseconds())), target}
 	case "darwin":
-		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-t", "1", target)
+		command = "ping"
+		args = []string{"-c", "1", "-t", "1", target}
 	default:
-		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-W", fmt.Sprintf("%d", int(timeout.Seconds())), target)
+		command = "ping"
+		args = []string{"-c", "1", "-W", fmt.Sprintf("%d", int(timeout.Seconds())), target}
 	}
 
-	output, err := cmd.CombinedOutput()
+	res, err := cmdexec.Run(ctx, cmdexec.Request{
+		Command:    command,
+		Args:       args,
+		Timeout:    timeout,
+		Identifier: fmt.Sprintf("inventory osdetect ttl target=%s", target),
+	})
+	output := res.Stdout + res.Stderr
 	if err != nil {
 		return 0, err
 	}
-	matches := ttlRegex.FindStringSubmatch(string(output))
+	matches := ttlRegex.FindStringSubmatch(output)
 	if len(matches) < 2 {
 		return 0, fmt.Errorf("ttl not found")
 	}

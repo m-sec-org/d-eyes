@@ -1,3 +1,4 @@
+import './TaskBoard.css';
 import { useMemo, useState } from 'react';
 import dayjs from 'dayjs';
 import type { Task, TaskListSummary } from '@/services/types';
@@ -102,10 +103,10 @@ export function TaskBoard({ tasks, loading = false, summary }: TaskBoardProps) {
           </>
         }
       />
-      <Row gutter={16} className="task-board-grid">
+      <Row gutter={24} className="task-board-grid">
         {dataSource.map((item) => (
           <Col xs={24} md={6} key={item.key}>
-            <Card variant="borderless" className={`task-board-card tone-${item.tone}`}>
+            <Card variant="borderless" className="task-board-card tone-neutral">
               <Statistic
                 title={item.title}
                 value={

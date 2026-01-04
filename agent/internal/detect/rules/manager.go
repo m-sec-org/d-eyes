@@ -22,6 +22,7 @@ type Config struct {
 	EmbeddedFS fs.FS
 	CustomDir  string
 	Version    string
+	Factory    RuleEngineFactory
 }
 
 // Manager orchestrates rule loading and hot updates.
@@ -47,10 +48,14 @@ type Snapshot struct {
 
 // NewManager returns a ready to use rule manager.
 func NewManager(cfg Config) *Manager {
+	factory := cfg.Factory
+	if factory == nil {
+		factory = getRuleEngineFactory()
+	}
 	return &Manager{
 		cfg:      cfg,
 		provider: &engine.ThreadSafeProvider{},
-		factory:  getRuleEngineFactory(),
+		factory:  factory,
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/perf"
+	"github.com/m-sec-org/d-eyes/agent/internal/cmdexec"
 	"golang.org/x/sys/unix"
 )
 
@@ -1179,18 +1180,22 @@ func compileEmbeddedProgram(ctx context.Context, env ebpfEnvironment, settings m
 	}
 	args = append(args, extraClangFlags(settings)...)
 
-	cmd := exec.CommandContext(ctx, env.ClangPath, args...)
-	var stderr bytes.Buffer
-	cmd.Stdout = io.Discard
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, compileMetadata{}, fmt.Errorf("clang compile failed: %w\n%s", err, stderr.String())
+	res, err := cmdexec.Run(ctx, cmdexec.Request{
+		Command:    env.ClangPath,
+		Args:       args,
+		Identifier: "collector.ebpf clang compile",
+	})
+	if err != nil {
+		if stderr := strings.TrimSpace(res.Stderr); stderr != "" {
+			return nil, compileMetadata{}, fmt.Errorf("clang compile failed: %w\n%s", err, stderr)
+		}
+		return nil, compileMetadata{}, fmt.Errorf("clang compile failed: %w", err)
 	}
 	data, err := os.ReadFile(objPath)
 	if err != nil {
 		return nil, compileMetadata{}, fmt.Errorf("read ebpf object: %w", err)
 	}
-	buildLog := strings.TrimSpace(stderr.String())
+	buildLog := strings.TrimSpace(res.Stderr)
 	sourceHash := hashSource(source)
 	meta := compileMetadata{
 		Clang:         env.ClangPath,

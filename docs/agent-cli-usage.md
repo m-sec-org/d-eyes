@@ -14,6 +14,13 @@ D-Eyes Agent CLI（`d-eyes`）是平台在终端环境中的统一入口：所�
   d-eyes version
   ```
 
+- 诊断 YARA 后端与规则覆盖率（CI/排障优先执行）：
+
+  ```bash
+  d-eyes detect diag --backend auto
+  d-eyes detect diag --backend auto --json | jq .
+  ```
+
 - 查看命令矩阵及全局 Flag：
 
   ```bash
@@ -38,6 +45,7 @@ D-Eyes Agent CLI（`d-eyes`）是平台在终端环境中的统一入口：所�
 | 命令 | 场景 | 关键参数 |
 |------|------|----------|
 | `respond` | 主机应急响应（文件扫描、网络分析、用户会话） | `--targets`, `--profile` |
+| `detect` | 入侵分析检测（YARA 扫描/导出/诊断等，子命令随平台变化） | `detect diag --backend/--json`, `detect memscan --pid/--all` |
 | `audit` | 合规审计（串联基线 + 主机信息 + 用户会话） | `--profile`, `--scope`（自动补默认值） |
 | `inventory` | 资产梳理（主机/端口发现） | `--targets`, `--profile`, `--ports`, `--service-detect`, `--os-detect` |
 | `supplychain` | SBOM 生成 / 依赖捕获 | `--mode`, `--path`, `--file`, `--type`, `--offline`（预留） |
@@ -63,7 +71,14 @@ D-Eyes Agent CLI（`d-eyes`）是平台在终端环境中的统一入口：所�
 | `--timeout` | 任务超时时长 | `config.performance.timeout`（10m） | 支持 `30s`、`5m` 等语法 |
 | `--json` | 将执行摘要输出为 JSON | 关闭 | 仍会在终端打印报告路径（除非 `--quiet`） |
 | `--quiet` | 静默模式，仅生成报告 | 关闭 | Remote 任务会自动启用 |
+| `--debug` | 启用调试时间线与进度事件 | 关闭 (`DEYES_DEBUG=1` 亦可启用) | 事件以结构化行写入 `stderr`，同时压缩到 `telemetry.debug_*` 元数据；若同时启用 `--quiet`，终端不再打印但仍会写入 metadata |
 | `--ti-mode` | 威胁情报模式：`auto` / `local` / `hybrid` / `server` | `hybrid` | 也可通过 `D_EYES_TI_MODE` 控制 |
+
+调试模式补充说明：
+
+- `--debug` 会实时在 `stderr` 输出 `[phase] progress/notice` 行，并在任务结束后将压缩后的时间线 (`telemetry.debug_timeline`, `telemetry.debug.summary`, `telemetry.debug.error_phase`) 写入 `TaskResult.Metadata` 以及远程 `ExecutionResult.metadata`，便于 Server/自动化排障。
+- 与 `--json` 并用时，JSON 摘要仍写入 `stdout`，调试行写在 `stderr`，互不干扰。
+- 与 `--quiet` 并用时，CLI 不再打印调试行，但元数据仍会保留完整事件以供远程分析。
 
 > CLI 会在首次执行时显示 ASCII Logo、初始化 `d-eyes.logs`（位于二进制同目录），随后按上述 Flag 配置 Runner。
 
@@ -138,7 +153,7 @@ sandbox:
 关键行为：
 
 - **缺省值回落**：若命令未提供 `--targets` / `--profile`，CLI 会尝试读取 `tasks.<command>` 或 `discovery.targets`，并在终端打印 `[NOTICE] 未指定 --targets，使用配置项默认值...`。
-- **威胁情报**：`threat_intel.mode` 支持 `auto/local/hybrid/server`。本地模式会启用缓存目录（`D_EYES_CACHE` 可覆盖默认 `~/.d-eyes/cache/threatintel`）。当未配置 API Key 且模式不是 `local`，会降级并输出 Notice。
+- **威胁情报**：`--ti-mode`（或 `D_EYES_TI_MODE`）支持 `auto/local/hybrid/server`。当未配置 API Key、触发限额（`429`）或 Provider 暂不可用时，Agent 会**降级为 local** 并在 metadata 中输出稳定口径字段：`threatintel.mode_effective`、`threatintel.remote_enabled`、`threatintel.notice`（稳定 code）与 `threatintel.notice_detail`（短摘要，已脱敏/截断）。
 - **沙箱**：`sandbox.enabled` + `tasks.bas.sandbox_enabled` 控制 BAS 步骤是否默认运行在 gVisor（`runsc`）。若 `require_approval=true`，CLI 必须附带 `--sandbox-approve` 或在 `metadata.sandbox_approved` 中显式允许。
 
 ---
@@ -159,6 +174,48 @@ Remote 模式同样尊重策略评估、沙箱限制与威胁情报配置。
 ---
 
 ## 子命令详解
+
+### `detect`
+
+- **用途**：入侵分析检测入口（插件化子命令集合），覆盖 YARA 扫描、系统取证汇总与诊断等能力；不同平台可用的子命令可能不同。
+- **常用子命令**：
+  - `d-eyes detect diag`：诊断 YARA 后端、规则版本、覆盖率与回退原因（CI/排障优先）。
+  - `d-eyes detect filescan`：对文件/目录执行 YARA 扫描（跨平台）。
+  - `d-eyes detect processcan`：扫描进程可执行文件内容（Linux/Windows）。
+  - `d-eyes detect memscan`：扫描进程内存（**Windows only**；默认只扫 RWX 段；显式触发能力）。
+
+#### `detect diag`
+
+- **场景**：确认当前实际使用的 YARA backend（`auto/native/portable`）、覆盖率、规则家族缺失与 `fallback_reason`。
+- **提示**：`native` 后端依赖 `-tags yara_native`（CGO + libyara）。若构建环境不满足，`auto/native` 会显式回退到 `portable` 并输出回退原因。
+- **示例**：
+
+  ```bash
+  d-eyes detect diag --backend auto
+  d-eyes detect diag --backend auto --json
+  ```
+
+#### `detect memscan`（Windows）
+
+- **用途**：对进程内存做 YARA 扫描，默认聚焦 **RWX** 区域并启用 guardrails（`--max-bytes/--max-regions/--timeout`）。
+- **必填**：必须二选一：
+  - `--pid <pid>`：扫描指定 PID
+  - `--all`：扫描所有进程（建议搭配更严格的限额）
+- **安全默认值**：
+  - `--rwx-only=true`（只扫 RWX commit 区域）
+  - `--evidence=false`、`--minidump=false`（证据保全默认关闭；需显式启用）
+- **示例**：
+
+  ```bash
+  # 扫描指定进程（建议管理员权限）
+  d-eyes detect memscan --pid 1234 --backend auto
+
+  # 扫描所有进程（限制成本，避免卡顿）
+  d-eyes detect memscan --all --max-bytes 16777216 --max-regions 64 --timeout 60s
+
+  # 显式启用证据保全（敏感；建议在受控环境使用）
+  d-eyes detect memscan --pid 1234 --evidence --evidence-max-bytes 2048
+  ```
 
 ### `respond`
 
@@ -265,6 +322,8 @@ Remote 模式同样尊重策略评估、沙箱限制与威胁情报配置。
 | 症状 | 原因 | 处理方法 |
 |------|------|----------|
 | `flag provided but not defined: -profile` | 使用单短横线传递多字符 Flag | 将命令改为 `d-eyes --profile quick respond ...` |
+| `memscan: either --pid <pid> or --all is required` | `detect memscan` 未指定目标范围 | 显式添加 `--pid` 或 `--all`（二选一） |
+| `memscan: specify exactly one of --pid or --all` | 同时传了 `--pid` 与 `--all` | 移除其一，保持互斥 |
 | `respond 命令需要提供 --targets` | CLI 未提供 `--targets` 且配置中也无默认值 | 在命令或 `config.tasks.respond.targets` / `config.discovery.targets` 中填充目标 |
 | `inventory 命令需要 --targets 或配置` | 同上 | 同上 |
 | `supplychain generate 需要 --path 或 --file` | 未传任何输入位置 | 添加 `--path`/`--file` 或在配置中设置默认值 |
@@ -277,7 +336,7 @@ Remote 模式同样尊重策略评估、沙箱限制与威胁情报配置。
 1. **查看日志**：检查 `d-eyes.logs` 了解内部模块错误。
 2. **Inspect NOTICE**：非静默模式下 `ExtractFlags` 回填配置时会打印 `[NOTICE]`。这能帮助识别到底使用了哪些默认值。
 3. **确认权限**：`respond`/`audit` 在缺少管理员权限时可能无法读取某些路径，导致报告为空。
-4. **威胁情报模式**：若看到 `威胁情报：未配置可用的 API Key...` 可切换至 `--ti-mode server` 或补充 API Key。
+4. **威胁情报模式**：优先查看 `threatintel.*` 元数据（`mode_effective/remote_enabled/notice/notice_detail`）判断是否发生降级；需要 Server 编排时使用 `--ti-mode server`（此模式 Agent 不直连 OpenTIP/MetaDefender，仅上传 artifacts/token）。
 5. **输出路径**：使用 `--output-dir $(pwd)/reports` 将报告写到当前目录，方便在 CI 中打包。
 
 ---

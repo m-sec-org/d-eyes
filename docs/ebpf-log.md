@@ -1,3 +1,5 @@
+# eBPF verifier log（cilium/ebpf v0.20 迁移）
+
 ebpf v0.20版本虽然把 ProgramLogOptions 和 Log 字段干掉了，但换了一种方式来拿 verifier log，不是完全没法用了。
 
 核心变化是：
@@ -5,12 +7,8 @@ ebpf v0.20版本虽然把 ProgramLogOptions 和 Log 字段干掉了，但换了�
 现在只在 库内部 把 verifier 输出写到 buffer 里
 
 然后把结果挂在 Program.VerifierLog 这个字段上，由你自己决定往哪儿打印（比如 os.Stderr）
-Go Packages
-+1
 
 加载失败时，会返回一个带完整 log 的 VerifierError，可以用 errors.As 抽出来打印
-Go Packages
-+1
 
 下面是把老代码迁移到 v0.20 的典型做法。
 

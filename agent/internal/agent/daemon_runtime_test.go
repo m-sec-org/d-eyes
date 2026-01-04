@@ -196,6 +196,37 @@ func TestRemoteRunnerRunOnceProcessesLease(t *testing.T) {
 	require.Contains(t, store.saveCalls, "lease-1")
 }
 
+func TestProcessLeasePersistsDebugTimeline(t *testing.T) {
+	cfg := config.Default()
+	cfg.Output.Dir = t.TempDir()
+	internal.SetGlobalConfig(cfg)
+
+	client := newFakeRemoteClient()
+	store := newFakeResultStore()
+	debugRunner := debugTimelineRunner{}
+	runner := &remoteRunner{
+		client: client,
+		store:  store,
+		resolveTask: func(string) (tasks.TaskRunner, bool) {
+			return debugRunner, true
+		},
+	}
+	payload := map[string]any{"debug": true}
+	rawPayload, err := json.Marshal(payload)
+	require.NoError(t, err)
+	lease := &serverpb.TaskLease{
+		TaskId:   "task-debug",
+		LeaseId:  "lease-debug",
+		TaskType: "debug.command",
+		Payload:  rawPayload,
+	}
+	require.NoError(t, runner.processLease(context.Background(), lease))
+	require.NotEmpty(t, client.reportReqs)
+	meta := client.reportReqs[0].GetMetadata()
+	require.NotEmpty(t, meta["telemetry.debug_timeline"])
+	require.NotEmpty(t, meta["telemetry.debug.summary"])
+}
+
 func TestReportFailureCachesResult(t *testing.T) {
 	restoreMetadata := telemetry.OverrideExecutionMetadataCollector(func(context.Context) map[string]string {
 		return map[string]string{"telemetry.task.duration_ms": "15"}
@@ -518,4 +549,15 @@ func (f *fakeTaskRunner) Run(context.Context, tasks.TaskRequest) (tasks.TaskResu
 		return tasks.TaskResult{}, f.err
 	}
 	return f.result, nil
+}
+
+type debugTimelineRunner struct{}
+
+func (debugTimelineRunner) Run(_ context.Context, req tasks.TaskRequest) (tasks.TaskResult, error) {
+	if req.Debugger != nil {
+		req.Debugger.PhaseStart("debug", "start", "")
+		req.Debugger.Progress("debug", 1, 1, "complete")
+		req.Debugger.PhaseEnd("debug", "done")
+	}
+	return tasks.TaskResult{}, nil
 }

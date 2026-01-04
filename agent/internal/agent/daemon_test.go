@@ -153,3 +153,18 @@ func TestCLIAndRemoteContractAlignment(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyRemotePayloadSetsDebug(t *testing.T) {
+	req := tasks.TaskRequest{}
+	payload := map[string]any{"debug": true}
+	applyRemotePayload(&req, payload)
+	if !req.Debug {
+		t.Fatalf("expected debug flag from payload")
+	}
+	flagPayload := map[string]any{"flags": map[string]any{"debug": "true"}}
+	req = tasks.TaskRequest{}
+	applyRemotePayload(&req, flagPayload)
+	if !req.Debug {
+		t.Fatalf("expected debug flag from flags")
+	}
+}

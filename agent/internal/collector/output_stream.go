@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/m-sec-org/d-eyes/agent/internal/debugger"
 )
 
 type httpClient interface {
@@ -23,14 +25,18 @@ var newStreamHTTPClient = func() httpClient {
 }
 
 type streamWriter struct {
-	cfg     CollectorStreamConfig
-	client  httpClient
-	events  chan *SystemEvent
-	cancel  context.CancelFunc
-	workers sync.WaitGroup
+	cfg        CollectorStreamConfig
+	client     httpClient
+	events     chan *SystemEvent
+	cancel     context.CancelFunc
+	workers    sync.WaitGroup
+	emitter    *debugger.Emitter
+	batchCnt   int
+	errorCount int
+	lastReport time.Time
 }
 
-func newStreamWriter(cfg CollectorStreamConfig) (EventHandler, func(), error) {
+func newStreamWriter(cfg CollectorStreamConfig, emitter *debugger.Emitter) (EventHandler, func(), error) {
 	endpoint := strings.TrimSpace(cfg.URL)
 	if endpoint == "" {
 		return nil, nil, fmt.Errorf("stream output: url is required")
@@ -43,10 +49,11 @@ func newStreamWriter(cfg CollectorStreamConfig) (EventHandler, func(), error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	writer := &streamWriter{
-		cfg:    cfg,
-		client: newStreamHTTPClient(),
-		events: make(chan *SystemEvent, cfg.MaxBatch*4),
-		cancel: cancel,
+		cfg:     cfg,
+		client:  newStreamHTTPClient(),
+		events:  make(chan *SystemEvent, cfg.MaxBatch*4),
+		cancel:  cancel,
+		emitter: emitter,
 	}
 	writer.workers.Add(1)
 	go writer.run(ctx)
@@ -77,10 +84,21 @@ func (s *streamWriter) run(ctx context.Context) {
 		if len(batch) == 0 {
 			return
 		}
+		size := len(batch)
+		s.reportProgress(len(batch))
 		if err := s.upload(batch); err != nil {
 			log.Printf("[collector] stream upload failed: %v", err)
+			s.errorCount++
+			if s.emitter != nil {
+				s.emitter.Error("collect.stream", fmt.Sprintf("upload failed (%d): %v", s.errorCount, err))
+			}
+		} else if s.emitter != nil {
+			s.batchCnt++
+			s.emitter.Notice("collect.stream", fmt.Sprintf("batch %d uploaded size=%d", s.batchCnt, size))
+			s.reportProgress(s.cfg.MaxBatch)
 		}
 		batch = batch[:0]
+		s.reportProgress(0)
 	}
 	for {
 		select {
@@ -90,6 +108,7 @@ func (s *streamWriter) run(ctx context.Context) {
 		case evt := <-s.events:
 			if evt != nil {
 				batch = append(batch, evt)
+				s.reportProgress(len(batch))
 			}
 			if len(batch) >= s.cfg.MaxBatch {
 				flush()
@@ -154,6 +173,28 @@ func (s *streamWriter) agentName() string {
 		return host
 	}
 	return ""
+}
+
+func (s *streamWriter) reportProgress(current int) {
+	if s == nil || s.emitter == nil || s.cfg.MaxBatch <= 0 {
+		return
+	}
+	if current < 0 {
+		current = 0
+	}
+	total := s.cfg.MaxBatch
+	if current > total {
+		current = total
+	}
+	now := time.Now()
+	if current > 0 && current < total {
+		if !s.lastReport.IsZero() && now.Sub(s.lastReport) < 200*time.Millisecond {
+			return
+		}
+	}
+	s.lastReport = now
+	detail := fmt.Sprintf("stream buffer %d/%d events", current, total)
+	s.emitter.Progress("collect.stream", current, total, detail)
 }
 
 func cloneEvent(evt *SystemEvent) *SystemEvent {

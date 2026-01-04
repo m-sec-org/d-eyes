@@ -58,13 +58,15 @@ type ThreadSafeProvider struct {
 // Update replaces the active bundle.
 func (p *ThreadSafeProvider) Update(bundle RuleBundle) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	prev := p.bundle
 	p.bundle = bundle
 	if bundle != nil {
 		p.version = bundle.Version()
 	} else {
 		p.version = ""
 	}
+	p.mu.Unlock()
+	closeRuleBundle(prev)
 }
 
 // CurrentBundle implements BundleProvider.
@@ -82,4 +84,16 @@ func (p *ThreadSafeProvider) Version() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.version
+}
+
+func closeRuleBundle(bundle RuleBundle) {
+	if bundle == nil {
+		return
+	}
+	type closer interface {
+		Close() error
+	}
+	if c, ok := bundle.(closer); ok {
+		_ = c.Close()
+	}
 }

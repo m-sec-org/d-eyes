@@ -1,13 +1,14 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
+
+	"github.com/m-sec-org/d-eyes/agent/internal/cmdexec"
 )
 
 // Status represents the evaluation outcome of a rule or check.
@@ -84,40 +85,24 @@ func (e *CommandExecutor) Run(ctx context.Context, command string, args []string
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	var cmd *exec.Cmd
+	req := cmdexec.Request{
+		Command: strings.TrimSpace(command),
+		Args:    append([]string(nil), args...),
+		Timeout: timeout,
+	}
 	if shell {
-		// determine shell
-		sh := "/bin/sh"
-		shFlag := "-c"
-		if execShell := exec.Command("cmd"); execShell != nil && execShell.Path != "" && strings.Contains(command, "&&") {
-			// fallback to sh if available
-			_ = execShell
-		}
-		cmd = exec.CommandContext(ctx, sh, shFlag, command)
-	} else {
-		cmd = exec.CommandContext(ctx, command, args...)
+		req.Command, req.Args = shellCommand(command)
 	}
+	res, err := cmdexec.Run(ctx, req)
+	return res.Stdout, res.Stderr, res.ExitCode, err
+}
 
-	var stdoutBuf, stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
-
-	err := cmd.Run()
-
-	stdout := stdoutBuf.String()
-	stderr := stderrBuf.String()
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			exitCode = -1
-		}
+func shellCommand(command string) (string, []string) {
+	command = strings.TrimSpace(command)
+	if runtime.GOOS == "windows" {
+		return "cmd", []string{"/c", command}
 	}
-	return stdout, stderr, exitCode, err
+	return "/bin/sh", []string{"-c", command}
 }
 
 // Runner evaluates rules using the provided executor.
@@ -208,6 +193,7 @@ func (r *Runner) executeCheck(ctx context.Context, rule Rule, check CheckSpec) C
 
 func (r *Runner) runCommandCheck(ctx context.Context, rule Rule, check CheckSpec, detail CheckDetail) CheckDetail {
 	timeout := time.Duration(check.Timeout) * time.Second
+	ctx = cmdexec.WithIdentifier(ctx, fmt.Sprintf("baseline rule=%s check=%s", rule.ID, check.Name))
 	stdout, stderr, exitCode, err := r.executor.Run(ctx, check.Command, check.Args, check.Shell, timeout)
 	detail.Command = strings.TrimSpace(strings.Join(append([]string{check.Command}, check.Args...), " "))
 	detail.Actual = strings.TrimSpace(stdout)

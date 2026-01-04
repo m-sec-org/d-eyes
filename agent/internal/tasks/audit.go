@@ -10,15 +10,28 @@ import (
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 )
 
-type auditRunner struct{}
+type moduleFunc func(context.Context, TaskRequest) (moduleResult, error)
+
+type auditRunner struct {
+	baseline       TaskRunner
+	hostSummary    moduleFunc
+	userInspection moduleFunc
+}
 
 func AuditRunner() TaskRunner {
-	return &auditRunner{}
+	return &auditRunner{
+		baseline:       BaselineRunner(),
+		hostSummary:    runHostSummary,
+		userInspection: runUserInspection,
+	}
 }
 
 func (a *auditRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, error) {
 	if req.Manager == nil {
 		return TaskResult{}, errors.New("report manager missing")
+	}
+	if req.Debugger != nil {
+		req.Debugger.PhaseStart("audit", "start", req.Profile)
 	}
 	outputs := make([]reporting.OutputRecord, 0)
 	notes := make([]string, 0)
@@ -35,31 +48,59 @@ func (a *auditRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, err
 	if _, ok := baselineReq.Flags["scope"]; !ok {
 		baselineReq.Flags["scope"] = "all"
 	}
-	res, err := (&baselineRunner{}).Run(ctx, baselineReq)
+	baselineRunner := a.getBaselineRunner()
+	hostSummary := a.getHostSummary()
+	userInspection := a.getUserInspection()
+
+	res, err := baselineRunner.Run(ctx, baselineReq)
 	if err != nil {
 		notes = append(notes, fmt.Sprintf("baseline 执行失败: %v", err))
+		if req.Debugger != nil {
+			req.Debugger.Error("audit.baseline", err.Error())
+		}
 	} else {
 		outputs = append(outputs, res.Outputs...)
 		notes = append(notes, res.Notes...)
 		accumulateRisk(risks, res.Risks)
+		if req.Debugger != nil {
+			for _, out := range res.Outputs {
+				req.Debugger.Artifact("audit.baseline", out.Path)
+			}
+		}
 	}
 
 	// 主机概要
-	hostRes, err := runHostSummary(ctx, req)
+	hostRes, err := hostSummary(ctx, req)
 	if err != nil {
 		notes = append(notes, fmt.Sprintf("host summary 失败: %v", err))
+		if req.Debugger != nil {
+			req.Debugger.Error("audit.host", err.Error())
+		}
 	} else {
 		outputs = append(outputs, hostRes.Outputs...)
 		accumulateRisk(risks, hostRes.Risks)
+		if req.Debugger != nil {
+			for _, out := range hostRes.Outputs {
+				req.Debugger.Artifact("audit.host", out.Path)
+			}
+		}
 	}
 
 	// 用户会话
-	userRes, err := runUserInspection(ctx, req)
+	userRes, err := userInspection(ctx, req)
 	if err != nil {
 		notes = append(notes, fmt.Sprintf("user inspection 失败: %v", err))
+		if req.Debugger != nil {
+			req.Debugger.Error("audit.user", err.Error())
+		}
 	} else {
 		outputs = append(outputs, userRes.Outputs...)
 		accumulateRisk(risks, userRes.Risks)
+		if req.Debugger != nil {
+			for _, out := range userRes.Outputs {
+				req.Debugger.Artifact("audit.user", out.Path)
+			}
+		}
 	}
 
 	// 生成汇总 JSON
@@ -67,6 +108,15 @@ func (a *auditRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, err
 		notes = append(notes, fmt.Sprintf("汇总报告写入失败: %v", err))
 	} else if summaryRecord.Path != "" {
 		outputs = append(outputs, summaryRecord)
+		if req.Debugger != nil {
+			req.Debugger.Artifact("audit", summaryRecord.Path)
+			if len(risks) > 0 {
+				req.Debugger.Notice("audit", fmt.Sprintf("风险统计: %+v", risks))
+			}
+		}
+	}
+	if req.Debugger != nil {
+		req.Debugger.PhaseEnd("audit", "complete")
 	}
 
 	return TaskResult{
@@ -107,4 +157,25 @@ func cloneFlags(source map[string]any) map[string]any {
 		clone[k] = v
 	}
 	return clone
+}
+
+func (a *auditRunner) getBaselineRunner() TaskRunner {
+	if a == nil || a.baseline == nil {
+		return BaselineRunner()
+	}
+	return a.baseline
+}
+
+func (a *auditRunner) getHostSummary() moduleFunc {
+	if a == nil || a.hostSummary == nil {
+		return runHostSummary
+	}
+	return a.hostSummary
+}
+
+func (a *auditRunner) getUserInspection() moduleFunc {
+	if a == nil || a.userInspection == nil {
+		return runUserInspection
+	}
+	return a.userInspection
 }

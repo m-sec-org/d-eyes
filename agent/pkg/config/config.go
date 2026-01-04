@@ -397,7 +397,7 @@ func Default() Config {
 		},
 		ThreatIntel: threatintel.Config{
 			Mode:                 threatintel.ModeHybrid,
-			CacheTTL:             6 * time.Hour,
+			CacheTTL:             24 * time.Hour,
 			CacheSize:            512,
 			CacheDir:             "",
 			HTTPTimeout:          15 * time.Second,

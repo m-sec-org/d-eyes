@@ -132,27 +132,16 @@ func (scan *YaraFileScanOptions) Action(_ *cli.Context) error {
 		scan.Path = "./"
 	}
 
+	requestedBackend := resolveBackendMode(scan.Backend)
 	result, err := backend.Load(backend.Options{
 		RulePath: scan.RulePath,
-		Mode:     resolveBackendMode(scan.Backend),
+		Mode:     requestedBackend,
 	})
 	if err != nil {
 		return err
 	}
 	bundle := result.Bundle
-
-	fmt.Printf("Loaded %d rules (backend=%s engine=%s version=%s)\n",
-		bundle.RuleCount(), result.Backend, bundle.Name(), bundle.Version())
-	if result.Stats.TotalRuleFiles > 0 {
-		fmt.Printf("Rule coverage: %.1f%% (%d/%d files)\n",
-			result.Stats.Coverage()*100,
-			result.Stats.LoadedRuleFiles,
-			result.Stats.TotalRuleFiles,
-		)
-		if result.Fallback && result.FallbackReason != "" {
-			fmt.Println(color.Yellow.Sprintf("Fallback reason: %s", result.FallbackReason))
-		}
-	}
+	writeYaraBackendSummary(os.Stdout, requestedBackend, result)
 
 	targets := strings.Split(scan.Path, ",")
 	for i := range targets {

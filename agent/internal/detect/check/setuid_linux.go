@@ -3,10 +3,11 @@
 package check
 
 import (
+	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 
+	"github.com/m-sec-org/d-eyes/agent/internal/cmdexec"
 	"github.com/toolkits/slice"
 )
 
@@ -18,30 +19,34 @@ func SetUid() bool {
 		"authopen", "traceroute6", "traceroute", "ps", "auth_pam_tool", "Xorg.wrap", "gpasswd", "mount.cifs", "mount.nfs", "ping6", "pppd", "fusermount3",
 		"ntfs-3g",
 	}
-	c := exec.Command(
-		"bash", "-c",
-		"find / ! -path '/proc/*' -type f -perm -4000 2>/dev/null",
-	)
-
-	output, err := c.CombinedOutput()
+	res, err := cmdexec.Run(context.Background(), cmdexec.Request{
+		Command:    "sh",
+		Args:       []string{"-c", "find / ! -path '/proc/*' -type f -perm -4000 2>/dev/null"},
+		Identifier: "detect.check SetUid",
+	})
 
 	if err != nil {
 		fmt.Println(err.Error())
 		return false
 	}
 
-	fileInfos := strings.Split(string(output), "\n")
-	if len(fileInfos) != 0 {
-		suspicious = true
-		fmt.Println("主机含有非常见suid程序，请确认")
-	}
+	fileInfos := strings.Split(res.Stdout, "\n")
+	var suspiciousFiles []string
 	for _, info := range fileInfos {
 		if info == "" {
 			continue
 		}
 		tmp := strings.Split(info, "/")
 		if !slice.ContainsString(whitelist, tmp[len(tmp)-1]) {
-			fmt.Println(info)
+			suspiciousFiles = append(suspiciousFiles, info)
+		}
+	}
+
+	if len(suspiciousFiles) > 0 {
+		suspicious = true
+		fmt.Println("主机含有非常见suid程序，请确认")
+		for _, path := range suspiciousFiles {
+			fmt.Println(path)
 		}
 	}
 

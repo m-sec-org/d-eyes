@@ -1,25 +1,35 @@
 .task-board {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.5rem;
+  border-radius: var(--radius-base);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-card);
+  box-shadow: var(--shadow-card);
+  padding: 1.5rem 2rem;
+  transition: box-shadow var(--transition-fast);
+}
+
+.task-board:hover {
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
 }
 
 .task-board-grid {
-  margin-top: 0.5rem;
+  margin-top: 1rem;
 }
 
 .task-board-grid .ant-col {
-  margin-bottom: 1rem;
+  margin-bottom: 1.5rem;
 }
 
 .task-board-card {
   height: 100%;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-base);
   border: 1px solid var(--color-border);
   background: var(--color-surface-card);
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--shadow-card);
   transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast),
-    background var(--transition-fast);
+    background var(--color-surface-card);
 }
 
 .task-board-card:hover {
@@ -61,11 +71,12 @@
 
 .task-board-card.tone-neutral {
   border-color: var(--color-border);
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
 }
 
 .task-board-card.tone-info {
-  border-color: rgba(54, 207, 201, 0.4);
-  background: rgba(54, 207, 201, 0.1);
+  border-color: rgba(54, 207, 201, 0.6);
+  background: linear-gradient(135deg, rgba(54, 207, 201, 0.15) 0%, rgba(54, 207, 201, 0.08) 100%);
 }
 
 .task-board-card.tone-info .ant-statistic-content-value {
@@ -73,8 +84,8 @@
 }
 
 .task-board-card.tone-warning {
-  border-color: rgba(250, 140, 22, 0.4);
-  background: rgba(250, 140, 22, 0.1);
+  border-color: rgba(250, 140, 22, 0.6);
+  background: linear-gradient(135deg, rgba(250, 140, 22, 0.15) 0%, rgba(250, 140, 22, 0.08) 100%);
 }
 
 .task-board-card.tone-warning .ant-statistic-content-value {
@@ -82,16 +93,41 @@
 }
 
 .task-board-card.tone-danger {
-  border-color: rgba(245, 34, 45, 0.5);
-  background: rgba(245, 34, 45, 0.1);
+  border-color: rgba(245, 34, 45, 0.7);
+  background: linear-gradient(135deg, rgba(245, 34, 45, 0.15) 0%, rgba(245, 34, 45, 0.08) 100%);
 }
 
 .task-board-card.tone-danger .ant-statistic-content-value {
   color: #a8071a;
 }
 
+/* 统一TaskList卡片样式 */
+.task-list-card {
+  border-radius: var(--radius-base);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-card);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow var(--transition-fast);
+}
+
+.task-list-card:hover {
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+}
+
+.task-list-card .ant-card-body {
+  padding: 1.5rem 2rem;
+}
+
 @media (max-width: 768px) {
+  .task-board {
+    padding: 1rem 1.25rem;
+  }
+  
   .task-board-card .ant-card-body {
+    padding: 1rem 1.25rem;
+  }
+  
+  .task-list-card .ant-card-body {
     padding: 1rem 1.25rem;
   }
 }

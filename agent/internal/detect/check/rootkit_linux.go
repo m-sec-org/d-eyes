@@ -3,10 +3,11 @@
 package check
 
 import (
+	"bufio"
 	"fmt"
+
 	"github.com/m-sec-org/d-eyes/agent/pkg/color"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -1043,44 +1044,59 @@ func check_bad_LKM() {
 		return
 	}
 
-	cmd := exec.Command(
-		"bash", "-c",
-		"find /lib/modules/ -name '*.so' -o -name '*.ko'  -o -name '*.ko.xz' 2>/dev/null",
-	)
-
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Println(err.Error())
+	badNames := make(map[string]struct{}, len(LKM_BADNAMES))
+	for _, lkm := range LKM_BADNAMES {
+		badNames[lkm] = struct{}{}
 	}
-	infos := strings.Split(string(out), "\n")
-	for _, file := range infos {
-		for _, lkm := range LKM_BADNAMES {
-			filename := filepath.Base(file)
-			if lkm == filename {
-				bad_lkm_results[file] = lkm
-			}
+	_ = filepath.WalkDir("/lib/modules/", func(path string, d os.DirEntry, err error) error {
+		if err != nil || d == nil {
+			return nil
 		}
-	}
+		if d.IsDir() {
+			return nil
+		}
+		lowerName := strings.ToLower(d.Name())
+		if !strings.HasSuffix(lowerName, ".so") && !strings.HasSuffix(lowerName, ".ko") && !strings.HasSuffix(lowerName, ".ko.xz") {
+			return nil
+		}
+		if _, ok := badNames[d.Name()]; ok {
+			bad_lkm_results[path] = d.Name()
+		}
+		return nil
+	})
 }
 
 func get_kmsinfo() {
 
-	var cmd *exec.Cmd
-
 	if PathExists("/proc/kallsyms") {
-		cmd = exec.Command("bash", "-c", "cat /proc/kallsyms 2>/dev/null|awk '{print $3}'")
-	} else if PathExists("/proc/ksyms") {
-		cmd = exec.Command("bash", "-c", "cat /proc/ksyms")
-	} else {
+		file, err := os.Open("/proc/kallsyms")
+		if err != nil {
+			fmt.Println(err.Error())
+			return
+		}
+		defer file.Close()
+		symbols := make([]string, 0)
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			fields := strings.Fields(scanner.Text())
+			if len(fields) < 3 {
+				continue
+			}
+			symbols = append(symbols, fields[2])
+		}
+		if err := scanner.Err(); err != nil {
+			fmt.Println(err.Error())
+		}
+		kallsyms = symbols
 		return
+	} else if PathExists("/proc/ksyms") {
+		data, err := os.ReadFile("/proc/ksyms")
+		if err != nil {
+			fmt.Println(err.Error())
+			return
+		}
+		kallsyms = strings.Split(string(data), "\n")
 	}
-
-	out, err := cmd.Output()
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-	kallsyms = strings.Split(string(out), "\n")
-
 }
 
 func PathExists(path string) bool {

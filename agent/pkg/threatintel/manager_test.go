@@ -10,12 +10,21 @@ import (
 )
 
 func TestNewManagerValidatesSources(t *testing.T) {
-	_, err := NewManager(Config{Mode: ModeHybrid})
-	require.ErrorIs(t, err, ErrNoActiveConnector)
-
-	mgr, err := NewManager(Config{Mode: ModeLocal})
+	mgr, err := NewManager(Config{Mode: ModeHybrid})
 	require.NoError(t, err)
 	require.NotNil(t, mgr)
+	require.NotEmpty(t, mgr.Notices())
+	require.Equal(t, []string{NoticeCodeFallbackLocalNoAPIKey}, mgr.NoticeCodes())
+
+	findings, err := mgr.LookupIndicator(context.Background(), IndicatorIP, "8.8.8.8", nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, findings[0].Source)
+	require.Empty(t, findings[0].Notice)
+
+	mgr, err = NewManager(Config{Mode: ModeLocal})
+	require.NoError(t, err)
+	require.NotNil(t, mgr)
+	require.Empty(t, mgr.Notices())
 }
 
 func TestLookupIndicatorCachesAndExpires(t *testing.T) {

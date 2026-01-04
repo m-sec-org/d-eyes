@@ -35,7 +35,7 @@ type Config struct {
 
 // 默认情报接口地址，用于避免硬编码 Magic String。
 const (
-	DefaultOpenTIPBaseURL      = "https://tip.nsfocus.com/api"
+	DefaultOpenTIPBaseURL      = "https://opentip.kaspersky.com/api/v1"
 	DefaultMetaDefenderBaseURL = "https://api.metadefender.com/v4"
 )
 

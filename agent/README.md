@@ -67,7 +67,16 @@ Agent 作为 D-Eyes 平台的执行引擎，负责安全检测任务的实际运
 
 支持从源代码生成 SBOM 和捕获当前环境两种运行模式。
 
-### 6. 检测插件系统
+### 6. 入侵分析检测 (detect)
+
+`detect` 是面向入侵分析的插件化子命令集合，内置了 YARA 扫描、后端诊断与（Windows）进程内存扫描能力：
+
+- **YARA 后端双栈**：支持 `auto/native/portable`；默认 `auto` 优先 native（需 `-tags yara_native` + libyara），不可用时显式回退 portable 并暴露回退原因。
+- **诊断命令**：`d-eyes detect diag --backend auto` 输出当前后端、规则版本、覆盖率、缺失家族与 `fallback_reason`，便于 CI/排障。
+- **文件/进程扫描**：`detect filescan`、`detect processcan` 扫描文件/进程可执行文件内容，并统一输出 backend/coverage 摘要。
+- **进程内存扫描（Windows）**：`d-eyes detect memscan` 读取进程内存 region（默认 RWX），支持 `--pid/--all`、限额（`--max-bytes/--max-regions/--timeout`），并可选启用证据保全（`--evidence`/`--minidump`，默认关闭）。
+
+### 7. 检测插件系统
 
 检测插件系统采用插件化架构设计，支持灵活扩展检测能力。
 
@@ -75,7 +84,7 @@ Agent 作为 D-Eyes 平台的执行引擎，负责安全检测任务的实际运
 - **子命令注册机制**：支持向 detect 命令注册子命令
 - **多样检测能力**：可扩展支持各种检测场景，如恶意代码检测、异常行为分析等
 
-### 6. 分布式管理能力
+### 8. 分布式管理能力
 
 Agent 可与 D-Eyes Server 协同工作，支持分布式任务执行与管理。
 
@@ -117,10 +126,13 @@ performance:
 | 命令 | 分类 | 必填参数（无默认时） | 默认 profile | 主要能力 |
 |------|------|----------------------|--------------|----------|
 | `respond` | Operations | `--targets` 或 `config.tasks.respond.targets` | 来自 `config.tasks.respond.profile`（默认 `default/quick`） | 主机概要、文件扫描、网络连接、用户会话等组合模块 |
+| `detect` | Operations | 视子命令而定（如 `memscan` 需 `--pid`/`--all`） | - | 入侵分析检测：YARA 扫描、后端诊断、（Windows）内存扫描 |
 | `audit` | Operations | 无（可通过 `config.tasks.audit.*` 设定范围） | `config.tasks.audit.scope`（默认 `system`） | 合规审计：基线结果 + 主机信息 + 账号会话汇总 |
 | `inventory` | Operations | `--targets`, `config.tasks.inventory.targets` 或 `config.discovery.targets` | `config.tasks.inventory.profile`（默认 `fast`/`deep`） | 主机发现、端口扫描、服务识别、OS 指纹 |
 | `supplychain` | Operations | `--path` / `--file` 或 `config.tasks.supplychain.paths|file` | `config.tasks.supplychain.mode`（默认 `generate`） | SBOM 生成或运行环境采集 |
 | `baseline` | Operations | `--baseline-config` 或 `config.tasks.baseline.config` | `config.tasks.baseline.scope`（默认 `all`） | 系统/数据库/中间件基线评估 |
+| `bas` | Operations | 场景来源（`--scenario-id/--scenario/--scenario-file`） | `default` | BAS 攻击模拟（可选沙箱、审计与遥测） |
+| `action` | Automation | 无 | - | 执行来自 Server 的响应动作（占位任务） |
 | `remote` | Integration | `remote.enabled=true` 且 Server 参数完整 | - | 连接 Server、任务拉取、结果回传，自动静默执行 |
 | `version` | Integration | 无 | - | 输出版本号与运行平台信息 |
 
@@ -162,8 +174,20 @@ remote:
 - `--timeout`：任务超时时间
 - `--json`：在终端输出任务摘要的 JSON 结构
 - `--quiet`：静默模式，仅生成报告文件
+- `--debug`：启用调试事件输出（亦可通过 `DEYES_DEBUG=1` 指定）
+- `--ti-mode`：威胁情报模式：`auto` / `local` / `hybrid` / `server`（亦可通过 `D_EYES_TI_MODE` 指定）
 
 > **提示**：全局 Flags 在 v1.4 之后统一提升到顶层命令。若某 Flag 未在 CLI 中显式传入，会从 `config.yaml` 的对应字段（如 `config.tasks.*`、`config.output` 等）回落获取默认值。
+
+## 入侵检测 `detect`
+
+```bash
+# 诊断 YARA 后端与规则覆盖率（CI/排障优先）
+d-eyes detect diag --backend auto
+
+# Windows：扫描指定 PID 的进程内存（默认 RWX-only；显式触发）
+d-eyes detect memscan --pid 1234 --backend auto
+```
 
 ## 应急响应 `respond`
 

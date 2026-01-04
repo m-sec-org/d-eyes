@@ -1,0 +1,161 @@
+/* BAS 场景控制台专用样式 */
+.bas-scenario-console .app-form-section {
+  padding: 2rem;
+}
+
+/* 重新组织表单网格布局 */
+.bas-scenario-console .form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* 基本信息区域 */
+.bas-scenario-console .form-basic-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem 2rem;
+  padding: 1.5rem;
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-base);
+  border: 1px solid var(--color-border-secondary);
+}
+
+/* 单列字段占满宽度 */
+.bas-scenario-console .form-basic-section .ui-field.full-width {
+  grid-column: 1 / -1;
+}
+
+/* 复选框样式 */
+.bas-scenario-console .form-basic-section .ui-checkbox {
+  grid-column: 1 / -1;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  background: var(--color-surface-card);
+  border-radius: var(--radius-base);
+  border: 1px solid var(--color-border);
+}
+
+/* 资源限制区域 */
+.bas-scenario-console .resource-limits-section {
+  padding: 1.5rem;
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-base);
+  border: 1px solid var(--color-border-secondary);
+}
+
+.bas-scenario-console .resource-limits-section h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.bas-scenario-console .resource-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+}
+
+/* 步骤编排区域 */
+.bas-scenario-console .steps-editor {
+  padding: 1.5rem;
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-base);
+  border: 1px solid var(--color-border-secondary);
+}
+
+.bas-scenario-console .steps-editor h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.bas-scenario-console .step-draft {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto auto auto;
+  gap: 1rem;
+  align-items: end;
+  margin-bottom: 1rem;
+}
+
+/* 步骤列表样式 */
+.bas-scenario-console .steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.bas-scenario-console .step-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  background: var(--color-surface-card);
+  border-radius: var(--radius-base);
+  border: 1px solid var(--color-border);
+}
+
+.bas-scenario-console .step-content {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+}
+
+.bas-scenario-console .step-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* 表单按钮区域 */
+.bas-scenario-console .form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .bas-scenario-console .form-basic-section {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    padding: 1rem;
+  }
+  
+  .bas-scenario-console .resource-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .bas-scenario-console .step-draft {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+  
+  .bas-scenario-console .form-actions {
+    flex-direction: column;
+  }
+}
+
+/* 字段标签优化 */
+.bas-scenario-console .ui-field__label {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.bas-scenario-console .ui-field__hint {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+}
+
+/* 确保不影响其他页面 */
+.bas-scenario-console .form-grid .ui-field {
+  width: 100%;
+}
+
+.bas-scenario-console .resource-grid .ui-field {
+  width: 100%;
+}

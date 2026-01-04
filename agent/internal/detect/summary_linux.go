@@ -4,7 +4,6 @@ package detect
 
 import (
 	"fmt"
-	"os/exec"
 	"os/user"
 	"strconv"
 	"strings"
@@ -103,14 +102,15 @@ func SaveSummaryBaseInfo(manager *reporting.Manager) (reporting.OutputRecord, []
 	}
 
 	notes := make([]string, 0)
-	ifcfg := exec.Command("ifconfig", "-a")
-	if output, cmdErr := ifcfg.CombinedOutput(); cmdErr == nil {
-		if _, err := file.Write(output); err != nil {
-			return reporting.OutputRecord{}, nil, fmt.Errorf("write interface info: %w", err)
-		}
-	} else {
-		notes = append(notes, color.Yellow.Sprintf("ifconfig 执行失败: %v", cmdErr))
+
+	ifaceNotes, err := writeInterfaceInfo(file)
+	if err != nil {
+		return reporting.OutputRecord{}, nil, fmt.Errorf("write interface info: %w", err)
 	}
+	for _, note := range ifaceNotes {
+		notes = append(notes, color.Yellow.Sprintf("%s", note))
+	}
+
 	return reporting.OutputRecord{
 		Label: "主机概要",
 		Path:  path,

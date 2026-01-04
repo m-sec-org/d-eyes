@@ -76,16 +76,16 @@ func (scan *YaraProcessScanOptions) InitCommand() []*cli.Command {
 	}
 }
 func (scan *YaraProcessScanOptions) Action(_ *cli.Context) error {
+	requestedBackend := resolveBackendMode(scan.Backend)
 	result, err := backend.Load(backend.Options{
 		RulePath: scan.RulePath,
-		Mode:     resolveBackendMode(scan.Backend),
+		Mode:     requestedBackend,
 	})
 	if err != nil {
 		return err
 	}
 	bundle := result.Bundle
-	fmt.Printf("Loaded %d rules (backend=%s engine=%s version=%s)\n",
-		bundle.RuleCount(), result.Backend, bundle.Name(), bundle.Version())
+	writeYaraBackendSummary(os.Stdout, requestedBackend, result)
 
 	targets, err := scan.resolveTargets()
 	if err != nil {

@@ -4,7 +4,6 @@ package detect
 
 import (
 	"fmt"
-	"os/exec"
 	"os/user"
 	"strings"
 	"time"
@@ -107,13 +106,12 @@ func SaveSummaryBaseInfo(manager *reporting.Manager) (reporting.OutputRecord, []
 	}
 
 	notes := make([]string, 0)
-	cmd := exec.Command("ipconfig", "/all")
-	if output, cmdErr := cmd.CombinedOutput(); cmdErr == nil {
-		if _, err := file.Write(output); err != nil {
-			return reporting.OutputRecord{}, nil, fmt.Errorf("write interface info: %w", err)
-		}
-	} else {
-		notes = append(notes, color.Yellow.Sprintf("ipconfig 执行失败: %v", cmdErr))
+	ifaceNotes, err := writeInterfaceInfo(file)
+	if err != nil {
+		return reporting.OutputRecord{}, nil, fmt.Errorf("write interface info: %w", err)
+	}
+	for _, note := range ifaceNotes {
+		notes = append(notes, color.Yellow.Sprintf("%s", note))
 	}
 
 	return reporting.OutputRecord{

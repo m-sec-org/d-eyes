@@ -210,5 +210,7 @@ func TestRunLocalScan(t *testing.T) {
 }
 
 func TestIsRootRequiredAndHelpers(t *testing.T) {
-	_ = IsRootRequired()
+	if IsRootRequired() == isPrivilegedUser() {
+		t.Fatalf("expected IsRootRequired to be the negation of isPrivilegedUser")
+	}
 }

@@ -721,6 +721,11 @@ thead th {
 
 .command-result li {
   width: 100%;
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.command-result li:last-child {
+  border-bottom: none;
 }
 
 .command-item {

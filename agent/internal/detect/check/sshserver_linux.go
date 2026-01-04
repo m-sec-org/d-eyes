@@ -1,27 +1,42 @@
 package check
 
 import (
+	"bytes"
 	"fmt"
-	"os/exec"
-	"strings"
+	"io"
+	"os"
 )
 
 func SshWrapper() bool {
-	suspicious := false
-
-	c := exec.Command("bash", "-c", "file /usr/sbin/sshd 2>/dev/null")
-	output, err := c.CombinedOutput()
+	info, err := os.Stat("/usr/sbin/sshd")
 	if err != nil {
 		fmt.Println(err.Error())
-	}
-	infos := strings.Split(string(output), "\n")
-	if len(infos) == 0 {
 		return false
 	}
-	if !strings.Contains(infos[0], "ELF") && !strings.Contains(infos[0], "executable") {
+	if info.IsDir() {
 		fmt.Println("/usr/sbin/sshd被篡改,文件非可执行文件")
-		suspicious = true
+		return true
 	}
 
-	return suspicious
+	file, err := os.Open("/usr/sbin/sshd")
+	if err != nil {
+		fmt.Println("/usr/sbin/sshd被篡改,文件非可执行文件")
+		return true
+	}
+	defer file.Close()
+
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(file, header); err != nil {
+		fmt.Println("/usr/sbin/sshd被篡改,文件非可执行文件")
+		return true
+	}
+
+	isELF := bytes.Equal(header, []byte{0x7f, 'E', 'L', 'F'})
+	isExecutable := info.Mode()&0o111 != 0
+	if !isELF && !isExecutable {
+		fmt.Println("/usr/sbin/sshd被篡改,文件非可执行文件")
+		return true
+	}
+
+	return false
 }

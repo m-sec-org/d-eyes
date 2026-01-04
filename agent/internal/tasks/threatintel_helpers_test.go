@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +46,47 @@ func TestTICollectorCreatesReport(t *testing.T) {
 	}
 }
 
+func TestTICollectorIncludesThreatIntelMetadataWithoutRepeatingNotice(t *testing.T) {
+	mgr, cfg := fakes.NewReportManager(t)
+	ti, err := threatintel.NewManager(threatintel.Config{Mode: threatintel.ModeHybrid})
+	require.NoError(t, err)
+
+	req := TaskRequest{Profile: "default", Config: cfg, Manager: mgr, ThreatIntel: ti}
+	collector := newTICollector(req)
+	require.NotNil(t, collector)
+
+	collector.LookupIndicator(context.Background(), threatintel.IndicatorIP, "8.8.8.8", nil)
+	outputs, notes := collector.Flush("respond", "ti-meta", "TI Report")
+	require.Len(t, outputs, 1)
+	require.Len(t, notes, 0)
+
+	raw, err := os.ReadFile(outputs[0].Path)
+	require.NoError(t, err)
+
+	var report struct {
+		Metadata map[string]string `json:"metadata"`
+		Findings []map[string]any  `json:"findings"`
+		Errors   []string          `json:"errors"`
+		Command  string            `json:"command"`
+		Profile  string            `json:"profile"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &report))
+	require.Equal(t, "respond", report.Command)
+	require.Equal(t, "default", report.Profile)
+	require.Equal(t, "hybrid", report.Metadata["threatintel.mode_requested"])
+	require.Equal(t, "local", report.Metadata["threatintel.mode_effective"])
+	require.Equal(t, "false", report.Metadata["threatintel.remote_configured"])
+	require.Equal(t, "false", report.Metadata["threatintel.remote_enabled"])
+	require.Equal(t, "", report.Metadata["threatintel.remote_sources"])
+	require.Equal(t, threatintel.NoticeCodeFallbackLocalNoAPIKey, report.Metadata["threatintel.notice"])
+	require.Contains(t, report.Metadata["threatintel.notice_detail"], "已降级为 local")
+	require.Len(t, report.Findings, 1)
+	if _, ok := report.Findings[0]["notice"]; ok {
+		t.Fatalf("expected finding notice to be omitted from report: %#v", report.Findings[0])
+	}
+	require.Empty(t, report.Errors)
+}
+
 func TestTICollectorRecordsErrors(t *testing.T) {
 	mgr, cfg := fakes.NewReportManager(t)
 	ti, err := threatintel.NewManager(threatintel.Config{Mode: threatintel.ModeLocal})
@@ -82,6 +124,40 @@ func TestTICollectorUploadsArtifactsInServerMode(t *testing.T) {
 	require.Equal(t, "none", client.uploads[0].Encryption)
 }
 
+func TestTICollectorReportMetadataIncludesNoticeInServerMode(t *testing.T) {
+	mgr, cfg := fakes.NewReportManager(t)
+	cfg.ThreatIntel.Mode = threatintel.ModeServer
+	req := TaskRequest{
+		Profile:        "default",
+		Config:         cfg,
+		Manager:        mgr,
+		Metadata:       map[string]string{},
+		ArtifactClient: &errorArtifactClient{},
+	}
+	file := filepath.Join(t.TempDir(), "sample.bin")
+	require.NoError(t, os.WriteFile(file, []byte("payload"), 0o644))
+
+	collector := newTICollector(req)
+	require.NotNil(t, collector)
+	collector.LookupFile(context.Background(), file, nil)
+	outputs, notes := collector.Flush("respond", "ti-server-meta", "TI Report")
+	require.Len(t, outputs, 1)
+	require.NotEmpty(t, notes)
+
+	raw, err := os.ReadFile(outputs[0].Path)
+	require.NoError(t, err)
+
+	var report struct {
+		Metadata map[string]string `json:"metadata"`
+		Errors   []string          `json:"errors"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &report))
+	require.Equal(t, "server", report.Metadata["threatintel.mode_requested"])
+	require.Equal(t, "server", report.Metadata["threatintel.mode_effective"])
+	require.Equal(t, threatintel.NoticeCodeServerMode, report.Metadata["threatintel.notice"])
+	require.NotEmpty(t, report.Errors)
+}
+
 type stubArtifactClient struct {
 	uploads []artifacts.UploadInput
 }
@@ -89,4 +165,10 @@ type stubArtifactClient struct {
 func (s *stubArtifactClient) Upload(ctx context.Context, input artifacts.UploadInput) (*artifacts.UploadResult, error) {
 	s.uploads = append(s.uploads, input)
 	return &artifacts.UploadResult{Token: "token-stub"}, nil
+}
+
+type errorArtifactClient struct{}
+
+func (errorArtifactClient) Upload(context.Context, artifacts.UploadInput) (*artifacts.UploadResult, error) {
+	return nil, os.ErrPermission
 }

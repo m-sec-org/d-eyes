@@ -8,16 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadNativeModeFallsBackToPortable(t *testing.T) {
-	res, err := Load(Options{Mode: ModeNative})
-	require.NoError(t, err)
-	require.Equal(t, ModePortable, res.Backend)
-	require.True(t, res.Fallback)
-	require.Contains(t, res.FallbackReason, "falling back")
-	require.NotNil(t, res.Manager)
-	require.NotNil(t, res.Bundle)
-}
-
 func TestSanitizeRulePathHandlesFilesAndMissingEntries(t *testing.T) {
 	tmpDir := t.TempDir()
 	file := filepath.Join(tmpDir, "custom.yar")

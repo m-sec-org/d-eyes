@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/m-sec-org/d-eyes/agent/internal/debugger"
 	"github.com/m-sec-org/d-eyes/agent/pkg/artifacts"
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
@@ -37,6 +39,8 @@ type TaskRequest struct {
 	JSONOutput      bool
 	Notices         []string
 	SandboxApproved bool
+	Debug           bool
+	Debugger        *debugger.Emitter
 }
 
 // ArtifactClient 抽象远程 artifact 上传行为，便于测试时注入。
@@ -99,6 +103,14 @@ func (r *TaskRequest) ApplyDefaults(fallbackName string) {
 	if r.Metadata == nil {
 		r.Metadata = make(map[string]string)
 	}
+	if !r.Debug {
+		if val := strings.TrimSpace(r.Metadata["debug"]); val != "" {
+			r.Debug = parseBoolString(val)
+		}
+	}
+	if r.Debug {
+		r.Metadata["debug"] = "true"
+	}
 	if r.OutputDir == "" {
 		r.OutputDir = cfg.Output.Dir
 	}
@@ -136,6 +148,15 @@ func (r *TaskRequest) ApplyDefaults(fallbackName string) {
 	}
 }
 
+func parseBoolString(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on", "y", "enabled":
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *TaskRequest) initThreatIntel() {
 	mode := r.Config.ThreatIntel.Mode
 	if mode == "" {
@@ -152,17 +173,28 @@ func (r *TaskRequest) initThreatIntel() {
 	provider := getThreatIntelProvider()
 	manager, err := provider.NewManager(cfg)
 	if err != nil {
-		var note string
-		switch err {
-		case threatintel.ErrNoActiveConnector:
-			note = "威胁情报：未配置可用的 API Key，本地查询已禁用"
-		default:
-			note = fmt.Sprintf("威胁情报：初始化失败（%v），已降级为 server 模式", err)
+		if r.Metadata == nil {
+			r.Metadata = make(map[string]string)
 		}
-		r.Notices = append(r.Notices, note)
+		r.Metadata["threatintel.notice"] = threatintel.NoticeCodeInitFailed
+		switch {
+		case errors.Is(err, threatintel.ErrNoActiveConnector):
+			r.Metadata["threatintel.notice_detail"] = "未配置可用的情报数据源，已降级为 local（仅启发式）"
+		default:
+			r.Metadata["threatintel.notice_detail"] = "初始化失败，已降级为 local（仅启发式）"
+		}
+		r.Notices = append(r.Notices, fmt.Sprintf("威胁情报：%s", r.Metadata["threatintel.notice_detail"]))
+		fallbackCfg := cfg
+		fallbackCfg.Mode = threatintel.ModeLocal
+		if fallback, fallbackErr := threatintel.NewManager(fallbackCfg); fallbackErr == nil {
+			r.ThreatIntel = fallback
+		}
 		return
 	}
 	r.ThreatIntel = manager
+	for _, notice := range manager.Notices() {
+		r.Notices = append(r.Notices, fmt.Sprintf("威胁情报：%s", notice))
+	}
 }
 
 func defaultThreatIntelCacheDir() string {

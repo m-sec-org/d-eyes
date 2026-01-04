@@ -76,7 +76,7 @@ func TestWaitForCollectorStartup(t *testing.T) {
 		}
 		return statuses[calls]
 	}
-	got := waitForCollectorStartup(fn, 1, time.Second)
+	got := waitForCollectorStartup(fn, 1, time.Second, nil)
 	if countRunningCollectors(got) != 1 {
 		t.Fatalf("expected running collector after wait, got %+v", got)
 	}

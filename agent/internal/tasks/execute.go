@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/m-sec-org/d-eyes/agent/internal/debugger"
 	"github.com/m-sec-org/d-eyes/agent/internal/model"
 	"github.com/m-sec-org/d-eyes/agent/internal/telemetry"
 	"github.com/m-sec-org/d-eyes/agent/pkg/config"
@@ -35,12 +36,26 @@ func ExecuteWithResult(ctx context.Context, name string, runner TaskRunner, req 
 	if manager == nil {
 		manager = reporting.NewManager(config.Default())
 	}
+	if req.Debug && req.Debugger == nil {
+		req.Debugger = debugger.NewEmitter(os.Stderr, !req.Quiet)
+	}
 	req.Manager = manager
 	start := time.Now()
 	tracker := telemetry.NewTaskResourceTracker()
 	result, err := runner.Run(ctx, req)
+	if req.Debugger != nil {
+		if meta := req.Debugger.Metadata(); len(meta) > 0 {
+			if result.Metadata == nil {
+				result.Metadata = make(map[string]string)
+			}
+			for k, v := range meta {
+				result.Metadata[k] = v
+			}
+		}
+	}
 	resourceStats := tracker.Snapshot()
 	result.Metadata = telemetry.AppendTaskResourceMetadata(result.Metadata, resourceStats)
+	result.Metadata = appendThreatIntelMetadata(result.Metadata, req)
 
 	status := "完成"
 	switch {

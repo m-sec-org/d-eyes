@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/m-sec-org/d-eyes/agent/internal/assets"
+	"github.com/m-sec-org/d-eyes/agent/internal/debugger"
 	"github.com/m-sec-org/d-eyes/agent/internal/progress"
 	"github.com/m-sec-org/d-eyes/agent/internal/tasks/taskcache"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
@@ -24,6 +25,33 @@ const (
 )
 
 var inventoryCacheTTL = 6 * time.Hour
+
+type debugProgressReporter struct {
+	emitter *debugger.Emitter
+}
+
+func (r debugProgressReporter) Stage(stage progress.Stage, total int, description string) {
+	if r.emitter == nil {
+		return
+	}
+	r.emitter.PhaseStart(string(stage), description, fmt.Sprintf("total=%d", total))
+}
+
+func (r debugProgressReporter) Update(stage progress.Stage, current int, total int, detail string) {
+	if r.emitter == nil {
+		return
+	}
+	r.emitter.Progress(string(stage), current, total, detail)
+}
+
+func (r debugProgressReporter) Debug(message string) {
+	if r.emitter == nil {
+		return
+	}
+	r.emitter.Notice("inventory", message)
+}
+
+func (r debugProgressReporter) Finish() {}
 
 type inventoryExecutor interface {
 	ScanTarget(ctx context.Context, target string, opts assets.ScanOptions, req TaskRequest) (inventoryReport, error)
@@ -54,7 +82,18 @@ func (r *inventoryRunner) Run(ctx context.Context, req TaskRequest) (TaskResult,
 	if profile == "" {
 		profile = "fast"
 	}
+	if req.Debugger != nil {
+		req.Debugger.PhaseStart("inventory", "targets", fmt.Sprintf("count=%d profile=%s", len(targets), profile))
+	}
 	baseOptions := buildInventoryOptions(profile, req.Flags)
+	if req.Debugger != nil {
+		if baseOptions.EnableServiceDetect {
+			req.Debugger.Notice("inventory", "已启用服务识别")
+		}
+		if baseOptions.EnableOSDetect {
+			req.Debugger.Notice("inventory", "已启用系统识别")
+		}
+	}
 
 	results := make([]inventoryReport, 0, len(targets))
 	outputs := make([]reporting.OutputRecord, 0, len(targets)+1)
@@ -73,20 +112,34 @@ func (r *inventoryRunner) Run(ctx context.Context, req TaskRequest) (TaskResult,
 	}
 
 	exec := r.executor
-	for _, target := range targets {
+	for idx, target := range targets {
 		select {
 		case <-ctx.Done():
+			if req.Debugger != nil {
+				req.Debugger.Notice("inventory", "任务被取消")
+			}
 			return TaskResult{Outputs: outputs, Risks: riskTotals, Notes: []string{"任务被取消"}}, ctx.Err()
 		default:
 		}
+		if req.Debugger != nil {
+			req.Debugger.PhaseStart("inventory.target", target, fmt.Sprintf("%d/%d", idx+1, len(targets)))
+		}
 		report, err := exec.ScanTarget(ctx, target, baseOptions, req)
 		if err != nil {
+			if req.Debugger != nil {
+				req.Debugger.Error("inventory.target", fmt.Sprintf("%s: %v", target, err))
+			}
 			return TaskResult{}, err
 		}
 		results = append(results, report)
 		outputs = append(outputs, report.OutputRecord)
 		accumulateRisk(riskTotals, report.Risks)
 		cacheInventoryTarget(cacheKey, report)
+		if req.Debugger != nil {
+			req.Debugger.Artifact("inventory", report.OutputRecord.Path)
+			req.Debugger.PhaseEnd("inventory.target", target)
+			req.Debugger.Progress("inventory", idx+1, len(targets), target)
+		}
 	}
 
 	if summaryRecord, summaryMeta, err := writeInventorySummary(req, results, riskTotals, targets, cacheKey, profile); err == nil && summaryRecord.Path != "" {
@@ -94,8 +147,14 @@ func (r *inventoryRunner) Run(ctx context.Context, req TaskRequest) (TaskResult,
 		for k, v := range summaryMeta {
 			resultMetadata[k] = v
 		}
+		if req.Debugger != nil {
+			req.Debugger.Artifact("inventory", summaryRecord.Path)
+		}
 	}
 
+	if req.Debugger != nil {
+		req.Debugger.PhaseEnd("inventory", "complete")
+	}
 	return TaskResult{
 		Outputs:  outputs,
 		Risks:    riskTotals,
@@ -119,7 +178,11 @@ func (defaultInventoryExecutor) ScanTarget(ctx context.Context, target string, o
 	if scanner == nil {
 		return inventoryReport{}, fmt.Errorf("无法创建扫描器")
 	}
-	manager := progress.NewManager(progress.NullReporter{}, 500*time.Millisecond, opts.Debug)
+	var reporter progress.Reporter = progress.NullReporter{}
+	if req.Debugger != nil {
+		reporter = debugProgressReporter{emitter: req.Debugger}
+	}
+	manager := progress.NewManager(reporter, 500*time.Millisecond, opts.Debug || req.Debug)
 	scanner.SetProgress(manager)
 	defer manager.Finish()
 

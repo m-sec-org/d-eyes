@@ -2,32 +2,44 @@ package check
 
 import (
 	"fmt"
+
 	"github.com/m-sec-org/d-eyes/agent/internal/utils"
-	"os/exec"
+	"os"
 	"strings"
 )
 
 func Sudo() bool {
 	suspicious := false
 	if utils.FileExist("/etc/sudoers") {
-		c := exec.Command(
-			"bash", "-c",
-			"cat /etc/sudoers 2>/dev/null |grep -v '#'|grep -v '%'|grep '(ALL\\|(root'|awk '{print $1}'",
-		)
-		output, err := c.CombinedOutput()
+		content, err := os.ReadFile("/etc/sudoers")
 		if err != nil {
 			fmt.Println(err.Error())
 			return false
 		}
-		shellProcess3 := strings.Split(string(output), "\n")
-		for _, user := range shellProcess3 {
-			if len(user) < 1 {
+		lines := strings.Split(string(content), "\n")
+		for _, line := range lines {
+			if line == "" {
 				continue
 			}
-			if user != "root" && user[0] != '%' {
-				fmt.Printf("用户 %s 可通过sudo命令获取特权\n", user)
-				suspicious = true
+			if strings.Contains(line, "#") {
+				continue
 			}
+			if strings.Contains(line, "%") {
+				continue
+			}
+			if !strings.Contains(line, "(ALL") && !strings.Contains(line, "(root") {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) == 0 {
+				continue
+			}
+			user := strings.TrimSpace(fields[0])
+			if user == "" || user == "root" || strings.HasPrefix(user, "%") {
+				continue
+			}
+			fmt.Printf("用户 %s 可通过sudo命令获取特权\n", user)
+			suspicious = true
 		}
 	}
 	return suspicious

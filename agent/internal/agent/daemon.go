@@ -1000,6 +1000,12 @@ func applyRemotePayload(req *tasks.TaskRequest, payload map[string]any) {
 	if v, ok := anyToBool(flags["json"]); ok {
 		req.JSONOutput = v
 	}
+	if v, ok := anyToBool(payload["debug"]); ok {
+		req.Debug = v
+	}
+	if v, ok := anyToBool(flags["debug"]); ok {
+		req.Debug = v
+	}
 	if d, ok := anyToDuration(payload["timeout"]); ok && d > 0 {
 		req.Timeout = d
 	}

@@ -12,6 +12,8 @@ import (
 
 	"github.com/m-sec-org/d-eyes/agent/internal/benchmark"
 	"github.com/m-sec-org/d-eyes/agent/internal/benchmarkexec"
+	"github.com/m-sec-org/d-eyes/agent/internal/debugger"
+	"github.com/m-sec-org/d-eyes/agent/internal/progress"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 	"github.com/m-sec-org/d-eyes/agent/pkg/threatintel"
 )
@@ -23,6 +25,33 @@ type baselineExecutor interface {
 type baselineRunner struct {
 	executor baselineExecutor
 }
+
+type baselineProgressReporter struct {
+	emitter *debugger.Emitter
+}
+
+func (r baselineProgressReporter) Stage(stage progress.Stage, total int, description string) {
+	if r.emitter == nil {
+		return
+	}
+	r.emitter.PhaseStart("baseline."+string(stage), description, fmt.Sprintf("total=%d", total))
+}
+
+func (r baselineProgressReporter) Update(stage progress.Stage, current int, total int, detail string) {
+	if r.emitter == nil {
+		return
+	}
+	r.emitter.Progress("baseline."+string(stage), current, total, detail)
+}
+
+func (r baselineProgressReporter) Debug(message string) {
+	if r.emitter == nil {
+		return
+	}
+	r.emitter.Notice("baseline", message)
+}
+
+func (r baselineProgressReporter) Finish() {}
 
 func BaselineRunner() TaskRunner {
 	return BaselineRunnerWithExecutor(nil)
@@ -46,6 +75,9 @@ func (b *baselineRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, 
 		return TaskResult{}, errors.New("report manager missing")
 	}
 	scope := getStringFlag(req.Flags, "scope", "all")
+	if req.Debugger != nil {
+		req.Debugger.PhaseStart("baseline", "start", fmt.Sprintf("scope=%s", scope))
+	}
 	profile := req.Profile
 	if profile == "default" || profile == "" {
 		profile = scope
@@ -80,7 +112,10 @@ func (b *baselineRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, 
 		ConfigPath: getStringFlag(req.Flags, "baseline-config", ""),
 		Timeout:    req.Timeout,
 		Verbose:    getBoolFlag(req.Flags, "verbose"),
-		Debug:      getBoolFlag(req.Flags, "debug"),
+		Debug:      getBoolFlag(req.Flags, "debug") || req.Debug,
+	}
+	if req.Debugger != nil {
+		benchReq.Reporter = baselineProgressReporter{emitter: req.Debugger}
 	}
 	if benchReq.Timeout <= 0 {
 		benchReq.Timeout = req.Config.Performance.Timeout
@@ -88,6 +123,9 @@ func (b *baselineRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, 
 	exec := b.executor
 	result, err := exec.Execute(ctx, benchReq)
 	if err != nil {
+		if req.Debugger != nil {
+			req.Debugger.Error("baseline", err.Error())
+		}
 		return TaskResult{}, err
 	}
 
@@ -108,6 +146,9 @@ func (b *baselineRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, 
 	}
 
 	if err := writeBaselineReport(path, format, output); err != nil {
+		if req.Debugger != nil {
+			req.Debugger.Error("baseline", fmt.Sprintf("write report: %v", err))
+		}
 		return TaskResult{}, err
 	}
 
@@ -122,7 +163,6 @@ func (b *baselineRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, 
 	if benchReq.ConfigPath != "" {
 		metadata["baseline_config"] = benchReq.ConfigPath
 	}
-	mergeMetadata(metadata, req.Metadata)
 
 	outputs := []reporting.OutputRecord{{Label: "基线检查", Path: path}}
 	notes := append([]string{}, result.Warnings...)
@@ -133,6 +173,18 @@ func (b *baselineRunner) Run(ctx context.Context, req TaskRequest) (TaskResult, 
 	if len(tiNotes) > 0 {
 		notes = append(notes, tiNotes...)
 	}
+	if req.Debugger != nil {
+		req.Debugger.Artifact("baseline", path)
+		if len(result.SeverityCount) > 0 {
+			req.Debugger.Notice("baseline", fmt.Sprintf("风险统计: %+v", result.SeverityCount))
+		}
+		if len(notes) > 0 {
+			req.Debugger.Notice("baseline", strings.Join(notes, "; "))
+		}
+		req.Debugger.PhaseEnd("baseline", "complete")
+	}
+
+	mergeMetadata(metadata, req.Metadata)
 
 	return TaskResult{
 		Outputs:  outputs,

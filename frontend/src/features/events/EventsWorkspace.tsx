@@ -357,7 +357,7 @@ export function EventsWorkspace() {
         </Form>
       </Card>
 
-      <Row gutter={16} className="events-main">
+      <Row gutter={24} className="events-main">
         <Col xl={16} lg={24}>
           <Card
             title="事件时间线"

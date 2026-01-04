@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"os/exec"
-	"runtime"
 	"sync"
 	"time"
 
@@ -244,10 +241,5 @@ func (d *CompositeHostDiscoverer) discover(ctx context.Context, target string) (
 
 // IsRootRequired 检查是否需要管理员/root权限
 func IsRootRequired() bool {
-	if runtime.GOOS == "windows" {
-		cmd := exec.Command("net", "session")
-		err := cmd.Run()
-		return err != nil
-	}
-	return os.Geteuid() != 0
+	return !isPrivilegedUser()
 }

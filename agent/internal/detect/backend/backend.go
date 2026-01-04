@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,31 +40,68 @@ type Result struct {
 
 // Load 根据配置加载规则束，提供统一的 pure Go 入口。
 func Load(opts Options) (*Result, error) {
-	mode := normalizeMode(opts.Mode)
+	requestedMode := normalizeMode(opts.Mode)
 	fallback := false
 	fallbackReason := ""
-	if mode == ModeNative {
-		// 当前仓库仅包含纯 Go 引擎，native 模式暂未实现。
-		fallback = true
-		fallbackReason = "native backend unavailable, falling back to portable engine"
-		mode = ModePortable
+
+	loadWithFactory := func(factory rules.RuleEngineFactory) (*rules.Manager, engine.RuleBundle, goengine.BuildStats, error) {
+		manager := rules.NewManager(rules.Config{
+			EmbeddedFS: yaraRules.RulesFS,
+			CustomDir:  sanitizeRulePath(opts.RulePath),
+			Version:    opts.VersionHint,
+			Factory:    factory,
+		})
+		bundle, err := manager.EnsureLoaded()
+		if err != nil {
+			return nil, nil, goengine.BuildStats{}, err
+		}
+		snapshot := manager.Snapshot()
+		return manager, bundle, snapshot.Stats.Clone(), nil
 	}
 
-	manager := rules.NewManager(rules.Config{
-		EmbeddedFS: yaraRules.RulesFS,
-		CustomDir:  sanitizeRulePath(opts.RulePath),
-		Version:    opts.VersionHint,
-	})
-	bundle, err := manager.EnsureLoaded()
+	mode := requestedMode
+	var factory rules.RuleEngineFactory
+	switch requestedMode {
+	case ModeNative:
+		factory = nativeFactory()
+		if factory == nil {
+			fallback = true
+			fallbackReason = "native backend unavailable (build without yara_native), falling back to portable engine"
+			mode = ModePortable
+		}
+	case ModeAuto:
+		// Prefer native when available; otherwise fall back to portable with an observable reason.
+		if factory = nativeFactory(); factory != nil {
+			manager, bundle, stats, err := loadWithFactory(factory)
+			if err == nil {
+				return &Result{
+					Backend:  ModeNative,
+					Bundle:   bundle,
+					Manager:  manager,
+					Stats:    stats,
+					Fallback: false,
+				}, nil
+			}
+			fallback = true
+			fallbackReason = fmt.Sprintf("native backend failed to load (%v), falling back to portable engine", err)
+			mode = ModePortable
+			factory = nil
+		} else {
+			fallback = true
+			fallbackReason = "native backend unavailable (build without yara_native), falling back to portable engine"
+			mode = ModePortable
+		}
+	}
+
+	manager, bundle, stats, err := loadWithFactory(factory)
 	if err != nil {
 		return nil, err
 	}
-	snapshot := manager.Snapshot()
 	return &Result{
 		Backend:        mode,
 		Bundle:         bundle,
 		Manager:        manager,
-		Stats:          snapshot.Stats.Clone(),
+		Stats:          stats,
 		Fallback:       fallback,
 		FallbackReason: fallbackReason,
 	}, nil

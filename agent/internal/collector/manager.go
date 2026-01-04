@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/m-sec-org/d-eyes/agent/internal/debugger"
 )
 
 // Manager orchestrates the lifecycle of multiple collectors (ETW/eBPF, etc.).
@@ -12,6 +14,7 @@ type Manager struct {
 	mu         sync.Mutex
 	factories  map[Kind]Factory
 	collectors map[string]*managedCollector
+	emitter    *debugger.Emitter
 }
 
 type managedCollector struct {
@@ -29,6 +32,20 @@ func NewManager() *Manager {
 		factories:  make(map[Kind]Factory),
 		collectors: make(map[string]*managedCollector),
 	}
+}
+
+// NewManagerWithEmitter constructs a Manager with debug emitter.
+func NewManagerWithEmitter(emitter *debugger.Emitter) *Manager {
+	m := NewManager()
+	m.emitter = emitter
+	return m
+}
+
+// SetEmitter wires a debug emitter for lifecycle events.
+func (m *Manager) SetEmitter(emitter *debugger.Emitter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.emitter = emitter
 }
 
 // RegisterFactory binds a collector kind to a factory.
@@ -56,6 +73,7 @@ func (m *Manager) Start(ctx context.Context, cfg Config, handler EventHandler) e
 	}
 	instance, err := factory(cfg)
 	if err != nil {
+		m.emitState(cfg.Name, cfg.Kind, "error", err)
 		return err
 	}
 
@@ -73,12 +91,15 @@ func (m *Manager) Start(ctx context.Context, cfg Config, handler EventHandler) e
 	}
 	m.collectors[cfg.Name] = mc
 	m.mu.Unlock()
+	m.emitState(cfg.Name, cfg.Kind, "starting", nil)
 
 	go func() {
 		if err := instance.Start(runCtx, handler); err != nil {
+			m.emitState(cfg.Name, cfg.Kind, "error", err)
 			cancel()
 		} else {
 			mc.startOnce.Do(func() { mc.started = true })
+			m.emitState(cfg.Name, cfg.Kind, "running", nil)
 		}
 	}()
 	return nil
@@ -95,6 +116,7 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	if !ok {
 		return nil
 	}
+	m.emitState(mc.cfg.Name, mc.cfg.Kind, "stopping", nil)
 	return mc.stop(ctx)
 }
 
@@ -110,8 +132,10 @@ func (m *Manager) StopAll(ctx context.Context) error {
 
 	var multi error
 	for _, mc := range collectors {
+		m.emitState(mc.cfg.Name, mc.cfg.Kind, "stopping", nil)
 		if err := mc.stop(ctx); err != nil {
 			multi = errors.Join(multi, err)
+			m.emitState(mc.cfg.Name, mc.cfg.Kind, "error", err)
 		}
 	}
 	return multi
@@ -143,4 +167,20 @@ func (mc *managedCollector) stop(ctx context.Context) error {
 		mc.cancel()
 	}
 	return mc.instance.Stop(ctx)
+}
+
+func (m *Manager) emitState(name string, kind Kind, state string, err error) {
+	m.mu.Lock()
+	emitter := m.emitter
+	m.mu.Unlock()
+	if emitter == nil {
+		return
+	}
+	msg := state
+	if err != nil {
+		msg = fmt.Sprintf("%s: %v", state, err)
+		emitter.Error(string(kind), msg)
+		return
+	}
+	emitter.Notice(string(kind), fmt.Sprintf("collector %s %s", name, state))
 }

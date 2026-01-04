@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/m-sec-org/d-eyes/agent/internal/debugger"
 )
 
 // Service wires configuration-driven collectors onto a shared Manager.
@@ -21,6 +23,20 @@ type ServiceOption func(*Service)
 func WithManager(m *Manager) ServiceOption {
 	return func(s *Service) {
 		s.manager = m
+	}
+}
+
+// WithDebugEmitter wires a debug emitter into the underlying Manager.
+func WithDebugEmitter(emitter *debugger.Emitter) ServiceOption {
+	return func(s *Service) {
+		if emitter == nil {
+			return
+		}
+		if s.manager == nil {
+			s.manager = NewManagerWithEmitter(emitter)
+			return
+		}
+		s.manager.SetEmitter(emitter)
 	}
 }
 
@@ -99,7 +115,11 @@ func (s *Service) Status() []CollectorStatus {
 }
 
 func (s *Service) decorateHandler(cfg Config, base EventHandler) (EventHandler, func(), error) {
-	return buildOutputHandler(cfg, base)
+	var emitter *debugger.Emitter
+	if s != nil && s.manager != nil {
+		emitter = s.manager.emitter
+	}
+	return buildOutputHandler(cfg, base, emitter)
 }
 
 func (s *Service) wrapCollectorMetadata(cfg Config, handler EventHandler) EventHandler {

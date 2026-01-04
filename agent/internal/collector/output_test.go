@@ -39,7 +39,7 @@ func TestBuildOutputHandler_StreamMode(t *testing.T) {
 		baseCount.Add(1)
 		return nil
 	})
-	handler, cleanup, err := buildOutputHandler(cfg, base)
+	handler, cleanup, err := buildOutputHandler(cfg, base, nil)
 	if err != nil {
 		t.Fatalf("buildOutputHandler returned error: %v", err)
 	}

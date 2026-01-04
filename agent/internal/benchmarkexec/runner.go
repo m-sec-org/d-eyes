@@ -21,6 +21,7 @@ type Request struct {
 	Timeout    time.Duration
 	Verbose    bool
 	Debug      bool
+	Reporter   progress.Reporter
 }
 
 // Result 包含扫描后的详细信息
@@ -59,7 +60,11 @@ func Execute(ctx context.Context, req Request) (Result, error) {
 	}
 
 	scanner := benchmark.NewScanner(cfg)
-	progressManager := progress.NewManager(progress.NullReporter{}, 500*time.Millisecond, cfg.Debug)
+	reporter := req.Reporter
+	if reporter == nil {
+		reporter = progress.NullReporter{}
+	}
+	progressManager := progress.NewManager(reporter, 500*time.Millisecond, cfg.Debug)
 	scanner.SetProgress(progressManager)
 	defer progressManager.Finish()
 

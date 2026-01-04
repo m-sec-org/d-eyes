@@ -9,13 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/m-sec-org/d-eyes/agent/internal/cmdexec"
 	"github.com/m-sec-org/d-eyes/agent/internal/tasks/taskcache"
 	"github.com/m-sec-org/d-eyes/agent/pkg/reporting"
 )
@@ -76,15 +76,43 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 	if len(paths) == 0 && filePath == "" {
 		return TaskResult{}, errors.New("supplychain generate 需要 --path 或 --file")
 	}
+	totalInputs := len(paths)
+	if filePath != "" {
+		totalInputs++
+	}
+	processed := 0
+	advanceProgress := func(string) {}
+	if req.Debugger != nil && totalInputs > 0 {
+		advanceProgress = func(detail string) {
+			processed++
+			if processed > totalInputs {
+				processed = totalInputs
+			}
+			req.Debugger.Progress("supplychain", processed, totalInputs, detail)
+		}
+	}
+	if req.Debugger != nil {
+		req.Debugger.PhaseStart("supplychain", "generate", strings.Join(paths, ","))
+	}
 
 	components := make([]componentRecord, 0)
 	notes := make([]string, 0)
 	outputType := normalizeOutputType(getStringFlag(req.Flags, "type", "json"))
 	cacheKey := supplyChainCacheKey(paths, filePath, outputType)
 	if cached, ok, err := restoreSupplyChainCache(req, cacheKey, outputType); err == nil && ok {
+		if req.Debugger != nil {
+			req.Debugger.Notice("supplychain", "缓存命中，跳过生成")
+			if totalInputs > 0 {
+				req.Debugger.Progress("supplychain", totalInputs, totalInputs, "cache restored")
+			}
+			req.Debugger.PhaseEnd("supplychain", "cache")
+		}
 		return cached, nil
 	} else if err != nil {
 		notes = append(notes, fmt.Sprintf("供应链缓存恢复失败: %v", err))
+		if req.Debugger != nil {
+			req.Debugger.Notice("supplychain", fmt.Sprintf("cache restore error: %v", err))
+		}
 	}
 
 	var manifestIdx *manifestCache
@@ -103,11 +131,14 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 		default:
 		}
 		found, err := scanProjectManifests(ctx, p, manifestIdx, &stats)
+		detail := fmt.Sprintf("path %s", p)
 		if err != nil {
 			notes = append(notes, fmt.Sprintf("扫描 %s 失败: %v", p, err))
+			advanceProgress(detail + " failed")
 			continue
 		}
 		components = append(components, found...)
+		advanceProgress(detail + " scanned")
 	}
 
 	if filePath != "" {
@@ -117,10 +148,13 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 		default:
 		}
 		found, err := scanManifestFile(filePath, manifestIdx, &stats)
+		base := filepath.Base(filePath)
 		if err != nil {
 			notes = append(notes, fmt.Sprintf("解析 %s 失败: %v", filePath, err))
+			advanceProgress(fmt.Sprintf("file %s failed", base))
 		} else {
 			components = append(components, found...)
+			advanceProgress(fmt.Sprintf("file %s parsed", base))
 		}
 	}
 
@@ -132,6 +166,9 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 
 	record, metadata, err := writeSupplyChainReport(req, "generate", outputType, components, notes)
 	if err != nil {
+		if req.Debugger != nil {
+			req.Debugger.Error("supplychain", fmt.Sprintf("write report: %v", err))
+		}
 		return TaskResult{}, err
 	}
 
@@ -162,6 +199,10 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 	if err := taskcache.SaveFile(cacheNamespace, cacheKey, record.Path, cacheMeta); err != nil {
 		notes = append(notes, fmt.Sprintf("供应链缓存写入失败: %v", err))
 	}
+	if req.Debugger != nil {
+		req.Debugger.Artifact("supplychain", record.Path)
+		req.Debugger.PhaseEnd("supplychain", "complete")
+	}
 
 	return TaskResult{
 		Outputs:  []reporting.OutputRecord{record},
@@ -172,13 +213,19 @@ func (s *supplyChainRunner) generateSBOM(ctx context.Context, req TaskRequest) (
 }
 
 func (s *supplyChainRunner) captureEnvironment(ctx context.Context, req TaskRequest) (TaskResult, error) {
-	cmd := exec.CommandContext(ctx, "pip", "list", "--format=freeze")
-	out, err := cmd.Output()
+	res, err := cmdexec.Run(ctx, cmdexec.Request{
+		Command:    "pip",
+		Args:       []string{"list", "--format=freeze"},
+		Identifier: "tasks.supplychain capture pip list",
+	})
 	if err != nil {
+		if stderr := strings.TrimSpace(res.Stderr); stderr != "" {
+			return TaskResult{}, fmt.Errorf("pip list 执行失败: %w\n%s", err, stderr)
+		}
 		return TaskResult{}, fmt.Errorf("pip list 执行失败: %w", err)
 	}
 
-	components := parseRequirements(string(out), "pip-list")
+	components := parseRequirements(res.Stdout, "pip-list")
 	outputType := normalizeOutputType(getStringFlag(req.Flags, "type", "json"))
 
 	record, metadata, err := writeSupplyChainReport(req, "capture", outputType, components, nil)

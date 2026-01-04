@@ -3,17 +3,19 @@
 package check
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
+
 	"github.com/m-sec-org/d-eyes/agent/internal/utils"
-	"io/ioutil"
-	"os/exec"
+	"os"
 	"strings"
 )
 
 func AuthorizedKeys() bool {
 	suspicious := false
 
-	dirs, _ := ioutil.ReadDir("/home")
+	dirs, _ := os.ReadDir("/home")
 	for _, dir := range dirs {
 
 		if !dir.IsDir() {
@@ -38,16 +40,24 @@ func fileAnalysis(file string, user string) bool {
 	suspicious := false
 
 	if utils.FileExist(file) {
-		c := exec.Command(
-			"bash", "-c",
-			"cat "+file+" 2>/dev/null |awk '{print $3}'",
-		)
-		output, _ := c.CombinedOutput()
-		shellProcess3 := strings.Split(string(output), "\n")
-		if len(shellProcess3) > 0 {
+		data, err := os.ReadFile(file)
+		if err != nil {
 			fmt.Printf("用户 %s 存在免密登录的证书，证书位置: %s \n", user, file)
+			return true
 		}
-		suspicious = true
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			fmt.Printf("用户 %s 存在免密登录的证书，证书位置: %s \n", user, file)
+			return true
+		}
+		if err := scanner.Err(); err != nil {
+			fmt.Printf("用户 %s 存在免密登录的证书，证书位置: %s \n", user, file)
+			return true
+		}
 	}
 	return suspicious
 

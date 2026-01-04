@@ -4,12 +4,13 @@ Stage4 要求在发布或 PR 合入前执行完整的测试矩阵。可以直接
 
 | 维度 | 目的 | 命令 |
 |------|------|------|
-| Agent | 覆盖所有 Runner/CLI/远程守护逻辑 | `cd agent && go test ./...` |
+| Agent-Portable | 覆盖所有 Runner/CLI/远程守护逻辑（pure Go 保底路径） | `cd agent && CGO_ENABLED=0 go test ./...` |
+| Agent-Native (可选) | 覆盖 `yara_native`（CGO + libyara）路径，用于验证 native backend 与 match 映射 | `cd agent && CGO_ENABLED=1 go test -tags yara_native ./...` |
 | Server-Core | 覆盖 API、Scheduler、Store 等核心模块 | `cd server && go test ./...` |
 | Server-BAS/Scheduler | 针对 BAS 审批、调度限流与 Postgres JSON 序列化的关键路径，强制 `-count=1` 规避缓存 | `cd server && go test -run BAS -count=1 ./internal/scheduler ./internal/basscenarios ./internal/store/postgres` |
 | Server-API (BAS/Playbook/Plugin/Cert) | 覆盖 BAS 场景、审批、插件安装与证书轮换的 RBAC/错误分支 | `cd server && go test -run '(BAS\|Playbook\|Plugin\|Cert)' -count=1 ./internal/api/v1` |
-| 前端 | Ops Console 关键视图（默认使用 pnpm） | `cd frontend && pnpm test --runInBand --passWithNoTests` |
-| 前端-Workspace Vitest | 验证 PluginMarketplace SSE/回滚、AuditLogView 过滤/导出等关键交互 | `cd frontend && pnpm vitest run --pool=vmThreads src/features/plugins/__tests__/PluginMarketplace.test.tsx src/features/audit/__tests__/AuditLogView.test.tsx` |
+| 前端 | Ops Console 关键视图（默认使用 pnpm） | `cd frontend && pnpm exec vitest run --passWithNoTests` |
+| 前端-Workspace Vitest | 验证 PluginMarketplace SSE/回滚、AuditLogView 过滤/导出等关键交互 | `cd frontend && pnpm exec vitest run --pool=vmThreads src/features/plugins/__tests__/PluginMarketplace.test.tsx src/features/audit/__tests__/AuditLogView.test.tsx` |
 | 前端-Playwright | 回归工具工作台（Report/Config/Compliance）端到端流程 | `cd frontend && pnpm test:e2e` |
 | Docs | 确保发布文档、SDK 指南、发布说明有效 | `scripts/docs-lint.sh` |
 
@@ -20,6 +21,25 @@ scripts/test-matrix.sh
 ```
 
 脚本会顺序执行表格中的命令，并在缺少 `pnpm` 时自动跳过前端回归。
+
+## Native YARA 运行条件
+
+`Agent-Native` 仅在环境满足以下条件时执行：
+
+- `pkg-config --exists yara` 可用（能找到 libyara）
+- 存在可用的 C 编译器（`gcc` 或 `cc`）
+
+CI 中建议将 `Agent-Native` 独立为可选 Job（或在具备依赖的 runner 上启用）。
+
+## Windows 专项（memscan e2e）
+
+Windows Job/开发机上建议额外确认 `detect memscan --all` 端到端链路稳定且不会 hang（禁用缓存，并设置 `go test` 超时上限）：
+
+```bash
+cd agent && go test -count=1 -timeout=5m -run '^TestDetectMemscanWindows' ./internal/detect
+```
+
+同时，`scripts/test-matrix.sh` 在 Windows 上默认会为所有 `go test` 增加全局 `-timeout=15m`（可通过 `GO_TEST_TIMEOUT` 覆盖）。
 
 ### 常见问题
 

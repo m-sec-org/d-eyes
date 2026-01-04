@@ -1,0 +1,136 @@
+## 0. Research & Alignment
+- [x] 0.1.1 定义阶段一支持矩阵：明确每项能力的目标 OS/Arch（Windows/Linux × amd64/arm64）。
+- [x] 0.1.2 定义默认启用策略：`detect memscan` 保持显式触发（不默认集成到 respond/audit 等任务流），并要求 `--pid` 或 `--all` 显式选择目标。
+- [x] 0.1.3 定义构建/Tag 策略：portable 默认可用；`yara_native` 作为可选 build tag（CGO+libyara）按平台能力启用，`auto` 需可回退并可观测原因。
+- [x] 0.1.4 定义测试/CI 矩阵：portable 在 Windows/Linux（amd64/arm64）必测；native 在具备 libyara 的环境中按 tag 运行；memscan Windows-only 实现需提供非 Windows 的清晰降级/不支持提示。
+- [x] 0.1.5 将上述决策同步到 `design.md` 与 spec delta（平台范围、默认策略、降级语义一致）。
+- [x] 0.2.1 对齐默认数据源配置：统一 Agent/Server 的 `OpenTIPBaseURL`/`MetaDefenderBaseURL` 默认值，并明确配置键（YAML/Env）与敏感信息处理原则。
+- [x] 0.2.2 明确 OpenTIP API 契约：`GET {base}/search/hash?request=<sha256>`、`POST {base}/scan/file`；鉴权 `x-api-key`；限额以 `429 + Retry-After` 为准（可选解析 `X-RateLimit-*`）。
+- [x] 0.2.3 明确 MetaDefender API 契约：`GET {base}/hash/<sha256>`、`POST {base}/file`、`GET {base}/file/<data_id>`；鉴权 `apikey`；限额以 `429 + Retry-After` 为准（可选解析 `X-RateLimit-*`）。
+- [x] 0.2.4 定义缓存与 TTL：Agent 侧以 `ThreatIntel.CacheTTL` 作为本地缓存上限（默认 24h），优先尊重服务端 TTL/Cache-Control；Server 侧以 `ThreatIntel.VerdictTTL` 控制 verdict 过期。
+- [x] 0.2.5 明确分工边界：`ti-mode=server` 仅上送 artifacts/token，由 Server orchestrator 执行外部扫描；`ti-mode=hybrid/local` 默认不依赖 Server，且在 API Key 缺失/限额时需降级不失败（保留本地启发式）。
+- [x] 0.2.6 将对齐结论同步到 `design.md`（并修正代码默认值），确保后续 4.1/4.2 实现可直接按契约落地。
+
+## 1. YARA 后端补齐（P0）
+- [x] 1.1.1 选型并引入 libyara Go 绑定（`github.com/hillu/go-yara/v4`），仅在 `-tags yara_native` 下编译，默认构建保持纯 Go（无 CGO 依赖）。
+- [x] 1.1.2 实现 native `RuleBundle`：支持从 `rules.Manager` 的 sources（`map[path]bytes`）编译为 native ruleset，并输出 `BuildStats`（成功/跳过/原因）。
+- [x] 1.1.3 实现匹配映射：将 native match 的 `Rule/Tags/Metas/Strings` 转换为现有 `engine.Match`（含 `Description`、`Metadata(map[string]string)`、`MatchedString{Identifier,Offsets}`），并按 meta 中 `severity/category/threat/confidence` 生成 `ScoreHints`（若存在）。
+- [x] 1.1.4 在 `detect/backend` 中打通 `ModeNative` 加载路径：当启用 `yara_native` 且依赖可用时使用 native；否则回退 portable 并记录 `FallbackReason`（不改变现有 portable 行为）。
+- [x] 1.1.5 增加 `yara_native` build-tag 测试：使用最小规则集验证编译成功、规则数与 match 映射正确；在无 libyara 环境下保持默认测试不受影响。
+- [x] 1.2 完善 `backend.Load` 的 `auto` 选择：优先 native，可用时切换；不可用时明确回退到 portable，并暴露回退原因。
+- [x] 1.3 增加 `d-eyes detect diag`（或等价命令）输出当前 backend、规则版本、覆盖率、关键家族缺失/skip reason，便于 CI/排障。
+- [x] 1.4 为 `detect filescan/processcan/memscan` 统一输出 backend/coverage 展示格式，并补齐对应测试（portable 必测；native 在 tag 环境下运行）。
+
+## 2. 进程内存扫描引擎（P0）
+- [x] 2.1 新增 Windows 内存枚举与读取组件（VirtualQueryEx + ReadProcessMemory），默认聚焦 RWX 段，并提供限流/限额（每进程最大字节数、最大 region 数、全局超时）。
+  - [x] 2.1.1 定义 memscan 组件接口与统计结构（chunk 回调、Stats、degraded reasons）。
+  - [x] 2.1.2 Windows 实现：OpenProcess + VirtualQueryEx 枚举 region，并过滤 `MEM_COMMIT`（跳过 `PAGE_NOACCESS`/`PAGE_GUARD`）。
+  - [x] 2.1.3 Windows 实现：ReadProcessMemory 分块读取（默认 256KB chunk）。
+  - [x] 2.1.4 Guardrails：`max-bytes` / `max-regions` / `timeout` 达限后停止并在 Stats 中标注 degraded reason。
+  - [x] 2.1.5 非 Windows stub + 单元测试覆盖（限额与 RWX 过滤逻辑）。
+  - [x] 2.1.6 Windows 最小 smoke：真实 PID 可读 RWX region（VirtualAlloc + Query/Read）。
+  - [x] 2.1.7 ReadProcessMemory 读失败分类与容错：对 `ERROR_PARTIAL_COPY` 等场景计数并继续扫描，为 2.2 报告字段准备。
+- [x] 2.2 新增 `d-eyes detect memscan` 子命令：支持 `--pid`/`--all`、`--backend`、`--rwx-only`、`--max-bytes`、`--max-regions`、`--timeout` 等参数，并输出结构化报告文件。
+  - [x] 2.2.1 增加 `detect memscan` 子命令与参数：`--pid`/`--all`（互斥且必须其一）、`--rule`、`--backend`、`--rwx-only`、`--max-bytes`、`--max-regions`、`--timeout`。
+  - [x] 2.2.2 实现扫描流程：按 PID 或全量进程遍历，复用 `backend.Load` + `engine.RuleBundle.Scan` 对内存 chunk 扫描并聚合结果。
+  - [x] 2.2.3 结构化报告落盘：写入 `detect/memscan/*.json`，包含 `{pid,process_name,base_address,size,protection,rule_name,tags}` 命中记录、进程级 Stats、以及 degraded/skip reason。
+  - [x] 2.2.4 权限/错误退化语义：无法打开/读取的进程标记为 `skipped` 并继续其它进程；全局超时/限额触发时输出退化标记与原因。
+  - [x] 2.2.5 非 Windows 行为：返回明确的 unsupported 错误（非零退出），不进行扫描。
+  - [x] 2.2.6 补齐最小单测：参数校验、risk level 归一化、非 Windows unsupported 退出码。
+  - [x] 2.2.7 Windows e2e：真实 PID 执行 `detect memscan` 生成报告，并校验字段/退化口径（max-bytes）。
+  - [x] 2.2.8 skipped reason 升级为 Windows 错误码分类（对齐 2.1 `ReadErrorsByKind` 的口径）。
+  - [x] 2.2.9 报告补齐 per-process `skip_reason` 字段（skipped 进程必填），并与 `summary.skipped_reasons` 口径一致。
+  - [x] 2.2.10 Windows e2e：`--all` 场景验证 `processes_skipped/skipped_reasons` 统计与多进程容错（至少 1 scanned + 1 skipped）。
+- [x] 2.3 为命中进程提供可选证据保全（例如命中后触发 MiniDump/region hexdump 的可选开关），并确保敏感数据处理与默认安全策略（默认关闭/需显式启用）。
+  - [x] 2.3.1 增加 `detect memscan` 证据保全开关与参数：默认关闭，需显式启用（`--evidence`/`--minidump` + 限额参数）。
+  - [x] 2.3.2 证据输出目录与权限策略：写入 `detect/memscan/evidence`，尽可能设置为仅当前用户可读写（敏感数据默认最小化）。
+  - [x] 2.3.3 hexdump 证据实现：命中时基于已读取 chunk 生成“最小上下文片段”（围绕 match offset），并在报告中记录 `sha256/地址/路径` 等元数据（不在报告中内嵌 raw bytes）。
+  - [x] 2.3.4 MiniDump 证据实现（Windows）：仅在显式开关下对“命中进程”生成 `.dmp`；失败不影响扫描结果，但需可观测（notes/错误字段）。
+  - [x] 2.3.5 补齐测试：Windows e2e 覆盖 hexdump 证据产物与报告字段；MiniDump smoke 可选执行（避免 CI 默认产生大体积敏感文件）。
+  - [x] 2.3.6 证据保全去重与更细粒度限额：按 `rule+region` 去重合并，并增加全局限额（用于 `--all` 控制产物规模）。
+  - [x] 2.3.7 MiniDump 失败分类统计与报告字段：按稳定错误类别聚合（access-denied/dll-missing/other 等），便于 `--all` 排障。
+  - [x] 2.3.8 证据保全 offsets 汇总：按 `rule+region` 汇总多 offset（不落 raw bytes），并提供截断口径避免报告膨胀。
+  - [x] 2.3.9 证据保全 bytes 预算：增加全局/按进程 evidence 字节预算（hexdump raw bytes），用于 `--all` 场景成本控制，并在报告中暴露统计口径。
+- [x] 2.4 增加测试：核心逻辑单测（region 过滤、限额退化、错误分流）；Windows 端到端测试可按 build tag/CI matrix 管控。
+  - [x] 2.4.1 region 过滤单测：committed/readable/RWX/guard/noaccess/unknown filter。
+  - [x] 2.4.2 限额退化单测：max-bytes/max-regions/timeout/canceled 口径。
+  - [x] 2.4.3 错误分流单测：access-denied/zero-read/partial-copy 口径与继续扫描语义。
+  - [x] 2.4.6 walk 边界单测：visit 返回 error 直接中止；Query 异常返回透传（含扫描中途异常）。
+  - [x] 2.4.8 walk 安全退化单测：Query 返回 `Size=0` / 地址不前进时安全停止（不死循环）。
+  - [x] 2.4.4 Windows e2e 管控：`//go:build windows` + MiniDump 用 env opt-in（避免默认产生敏感产物）。
+  - [x] 2.4.7 CI Windows job 纳入 memscan e2e：在 `scripts/test-matrix.sh` Windows 环境下强制执行 memscan e2e（`-count=1` + `-timeout`），尤其覆盖 `--all`。
+  - [x] 2.4.9 CI Windows 全局超时门限：Windows 环境 `go test` 默认追加 `-timeout`（可由 `GO_TEST_TIMEOUT` 覆盖），降低 hang 风险。
+  - [x] 2.4.5 回归：`go test ./agent/...`、`go test ./server/...`、`openspec validate add-agent-stage-one-core-capabilities --strict`。
+
+## 3. Windows Native API 与特权判断（P0）
+- [x] 3.1 替换 `detect export` 的 `ipconfig /all` 依赖，改用 native/库接口采集网卡/地址信息并写入同一报告。
+  - [x] 3.1.1 移除 Windows `ipconfig /all` 调用：`detect export` 不再依赖 `os/exec`。
+  - [x] 3.1.2 新增接口采集与输出：基于 `net.Interfaces` 枚举网卡、地址并生成稳定可读输出（排序/错误容错）。
+  - [x] 3.1.6 Windows 扩展字段：基于 `GetAdaptersAddresses` 补充 DNS Server / Gateway / DNS Suffix（与 net.Interfaces 输出合并，失败不影响主流程）。
+  - [x] 3.1.7 Windows 扩展字段：基于 `GetAdaptersAddresses` 补充 DHCP Server / ConnectionType / OperStatus / LinkSpeed（与 net.Interfaces 输出合并，失败不影响主流程）。
+  - [x] 3.1.3 写入同一报告：将采集到的 interface/address 信息写入 `detect/export/summary-base-info.txt` 的 InterfaceInfo 段落。
+  - [x] 3.1.4 增加单测：覆盖枚举失败/地址采集失败/排序稳定性等分支。
+  - [x] 3.1.8 Windows CI 最小 e2e：新增 `detect export` e2e 测试并纳入 `scripts/test-matrix.sh`，断言输出包含 `dns_server/gateway` 关键字段。
+  - [x] 3.1.9 输出增强：扩充 `IfType/ConnectionType/TunnelType` label 映射覆盖面，并评估补充 `Description/Metric/TunnelType` 字段（基于 `GetAdaptersAddresses`，失败不影响主流程）；当 extras 可用时显式输出 `ipv4_metric/ipv6_metric`（包含 0 值）便于排障。
+  - [x] 3.1.5 回归：`go test ./agent/...`、`go test ./server/...`、`openspec validate add-agent-stage-one-core-capabilities --strict`。
+- [x] 3.2 替换 `IsRootRequired` 的 `net session` 检测与 `assets/isPrivilegedUser` 的 Windows stub，改用 Token membership/权限 API，确保 inventory/port scan 的特权能力判断准确。
+  - [x] 3.2.1 Windows 特权判断实现：基于 `Token.IsElevated` + `Token.IsMember(Administrators)` + `TokenUser(LocalSystem)` 的 best-effort 判定。
+  - [x] 3.2.2 替换 `IsRootRequired`：移除 `net session` 依赖，统一以 `!isPrivilegedUser()` 为口径（跨平台一致）。
+  - [x] 3.2.3 增加单测：断言 `IsRootRequired` 与 `isPrivilegedUser` 语义一致（互为取反），避免回归。
+  - [x] 3.2.4 回归：`go test ./agent/...`、Windows 交叉编译 `./agent/internal/assets` 测试二进制、`openspec validate add-agent-stage-one-core-capabilities --strict`。
+- [x] 3.3 清点并分级现存 `exec.Command` 使用场景：对默认路径（respond/audit/inventory/baseline/bas）逐步消除；对必须保留的命令执行建立 allowlist + 审计记录。
+  - [x] 3.3.1 盘点并分级：全量扫描 `exec.Command*` 使用点，按 default path / 非 default / build/test 分类，形成可追踪清单。
+  - [x] 3.3.2 统一执行器：新增 `internal/cmdexec`，支持 allowlist/denylist + JSONL 审计日志；默认 allowlist 覆盖 baseline/inventory 必需命令。
+  - [x] 3.3.3 配置联动：`SetGlobalConfig` 时自动注入命令策略（allowlist/denylist/log path），确保默认链路可用且可审计。
+  - [x] 3.3.4 Baseline 迁移：`benchmark/engine` 命令执行切换为 `cmdexec`，并为每条 rule/check 注入审计 `identifier`。
+  - [x] 3.3.5 Inventory 迁移：TTL 探测 `ping` 切换为 `cmdexec`（支持 ctx cancel），并注入审计 `identifier`。
+  - [x] 3.3.6 增加单测：覆盖 `cmdexec` 的默认 allowlist、通配符放开、日志关闭等边界，避免回归。
+  - [x] 3.3.7 回归：`go test ./agent/...`、`go test ./server/...`、Windows 交叉编译关键包、`openspec validate add-agent-stage-one-core-capabilities --strict`。
+  - [x] 3.3.8 `detect export` Linux 路径清理：移除 `ifconfig` 外部命令依赖，复用 `writeInterfaceInfo` 统一采集输出。
+  - [x] 3.3.9 `detect/check` 清理：移除 `bash/awk/find/file` 等 `exec.Command` 调用，改为 native 解析或 `cmdexec`（含 `identifier`）。
+  - [x] 3.3.10 `sbom/python` 清理：`pip/conda` 由 `cmdexec` 执行并写入审计日志，错误提示包含“策略禁止/命令缺失”口径。
+  - [x] 3.3.11 `tasks/supplychain` 清理：`capture` 模式 `pip list` 由 `cmdexec` 执行并写入审计日志。
+  - [x] 3.3.12 `collector/ebpf` 清理：`clang` 编译由 `cmdexec` 执行并写入审计日志（错误包含 stderr）。
+  - [x] 3.3.13 审计字段稳定性：补充 `cmdexec` JSONL 字段断言 + 各模块最小 e2e（sbom/supplychain/ebpf）验证 `id/fields` 稳定。
+
+## 4. 威胁情报联动增强（P1）
+- [x] 4.1 调整 `pkg/threatintel`：`hybrid` 在无 API Key 时至少启用本地启发式（不再整体禁用），并在结果中标注 source 与 notice。
+  - [x] 4.1.1 `NewManager` 语义调整：`hybrid` 无 key 不再返回 `ErrNoActiveConnector`，改为回退到 `local` 并记录 notice。
+  - [x] 4.1.2 Findings 输出增强：确保 `source` 始终可观测；`notice` 字段保留用于 per-finding 信息（fallback 不在每条 finding 重复输出）。
+  - [x] 4.1.3 报告级 metadata：输出稳定字段 `threatintel.mode_requested/mode_effective/remote_enabled/remote_configured/notice`，用于排障与 CI 断言。
+  - [x] 4.1.4 ExecutionResult metadata：将上述 `threatintel.*` 字段同步到 `ExecutionResult.metadata`，并新增 `threatintel.remote_sources`（仅 provider 名称）。
+  - [x] 4.1.5 CLI 可诊断 notice：初始化 `ThreatIntel` 时将 manager 的 notice 注入 `TaskRequest.Notices`（stderr `[NOTICE]` 可见）。
+  - [x] 4.1.6 增加/更新单测：覆盖 hybrid fallback、report metadata 字段稳定、以及 per-finding notice 不重复。
+  - [x] 4.1.7 回归：`go test ./agent/...`、`openspec validate add-agent-stage-one-core-capabilities --strict`。
+  - [x] 4.1.8 补齐 `ti-mode=server`/初始化失败场景的 `threatintel.notice` 稳定口径（`server_mode`/`init_failed`），并确保 ExecutionResult/report metadata 一致输出（含测试）。
+  - [x] 4.1.9 将 hybrid fallback notice“码化”：`threatintel.notice` 输出稳定 code（如 `fallback_local_no_api_key`），并新增可选 `threatintel.notice_detail` 承载人类可读信息（含测试覆盖）。
+  - [x] 4.1.10 为后续 quota/remote 暂停/provider 错误等 notice 预置 code 常量与聚合约束：`threatintel.notice` 仅输出 code（非法输入自动降级为 `unknown` 并写入 `notice_detail`），并补充单测防回归。
+  - [x] 4.1.11 notice detail 脱敏：在聚合与初始化失败路径对 API Key 等敏感串做 `<redacted>` 替换（含单测），避免后续 remote quota/provider 错误场景泄漏 key。
+  - [x] 4.1.12 init_failed 不拼接原始 error：避免把可能包含 header/配置全文的 `err.Error()` 写入 notice/detail，改为输出安全的摘要文案（含单测约束）。
+  - [x] 4.1.13 notice_detail 规范化工具：新增统一 `FormatNoticeDetail/SanitizeNoticeDetail`（短摘要+字段、截断、脱敏），并在 metadata 聚合处强制执行，便于后续 quota/paused/provider_error 直接复用（含单测）。
+- [x] 4.2 增加 OpenTIP/MetaDefender HTTP 客户端：统一超时、缓存 TTL、并发控制；根据返回头/错误码识别 quota 并触发降级策略（跳过远程查询或标记 server 扫描）。
+  - [x] 4.2.1 定义 remote provider 抽象与错误分类：支持 hash lookup + file scan，识别 `429 + Retry-After` 与 5xx temporary error。
+  - [x] 4.2.2 实现 OpenTIP 客户端：`/search/hash` + `/scan/file`，鉴权 `x-api-key`，解析 verdict/confidence，支持 Cache-Control TTL。
+  - [x] 4.2.3 实现 MetaDefender 客户端：`/hash/<sha256>` + `/file` upload + `/file/<data_id>` poll，鉴权 `apikey`，解析 scan_results，支持 Cache-Control TTL。
+  - [x] 4.2.4 Manager 集成：hybrid 模式下执行远程查询并与本地启发式合并；按 `MaxParallelPerSource` 并发限流；对 quota/temporary error 做 pause/backoff 并在 pause 期间跳过远程请求；缓存 TTL 取 `min(CacheTTL, responseTTL, pauseRemaining)`。
+  - [x] 4.2.5 notice 口径对齐：quota/paused/provider_error 统一使用 `notice.go` code（如 `remote_quota_exceeded/remote_paused/provider_error`），detail 用 `FormatNoticeDetail` 输出“短摘要 + provider/status/retry_after/timeout”等最小字段，避免拼接请求/headers/config 全量内容。
+  - [x] 4.2.6 增加/更新测试：httptest 验证 TTL 缓存、生效 pause/backoff、MetaDefender file scan fallback，以及 notice code/detail 稳定口径。
+  - [x] 4.2.7 回归：`go test ./agent/...`、`openspec validate add-agent-stage-one-core-capabilities --strict`。
+- [x] 4.3 在 `respond/baseline/bas` 中验证情报输出与 metadata 落盘（含 remote mode 的 `ExecutionResult.metadata`）保持一致。
+  - [x] 4.3.1 baseline：端到端解析 threatintel 报告 metadata，并与 `ExecutionResult.metadata` 对齐断言（含 remote ok / quota→paused 退化口径）。
+  - [x] 4.3.2 bas：端到端解析 threatintel 报告 metadata，并与 `ExecutionResult.metadata` 对齐断言（含 remote ok / quota→paused 退化口径）。
+  - [x] 4.3.3 respond：端到端解析 threatintel 报告 metadata，并与 `ExecutionResult.metadata` 对齐断言（含 remote ok / quota→paused 退化口径）。
+- [x] 4.4 增加测试：httptest 服务器模拟 TTL/RateLimit/错误码；验证缓存命中、quota 降级、server 模式 artifact 上传不回归。
+  - [x] 4.4.1 远程限额场景补齐：429 缺失 Retry-After 时默认按 30s pause，并保持 notice/detail 稳定口径。
+  - [x] 4.4.2 远程错误码场景补齐：5xx/temporary error 触发 provider_error + remote_paused，pause 结束后可恢复 remote 查询。
+  - [x] 4.4.3 server 模式回归：ti-mode=server 时不调用 OpenTIP/MetaDefender，仅上传 artifacts 并写入 `threatintel.artifact_tokens`（respond filescan/baseline 覆盖）。
+
+## 5. Docs & QA
+- [x] 5.1 更新 `docs/agent-cli-usage.md` 与 `docs/编译指南.md`：补充 `detect memscan/diag`、native backend tag、以及常见退化说明。更新`agent/README.md`以及`d-eyes/README.md`文档，对齐实现技术、支撑场景和技术优势内容。
+  - [x] 5.1.1 更新 `docs/agent-cli-usage.md`：补充 `detect` 命令矩阵、`detect diag/memscan` 用法、以及 ThreatIntel 退化口径说明。
+  - [x] 5.1.2 更新 `docs/编译指南.md`：补充 `memscan` 平台范围/默认策略、ThreatIntel 退化口径，并对齐 `yara_native` build tag 说明。
+  - [x] 5.1.3 更新 `agent/README.md` 与 `README.md`：对齐 detect/memscan/diag、`yara_native` 与 `--ti-mode` 模式，补充支撑场景与技术优势描述。
+- [x] 5.2 执行 `go test ./...`（含必要的 build tags matrix），并确保新增能力在 CI gate 中可验证。
+  - [x] 5.2.1 更新 `scripts/test-matrix.sh`：Agent portable（`CGO_ENABLED=0`）必测；检测到 libyara 时追加 `-tags yara_native`；Windows 下补充 memscan/export e2e，前端依赖缺失时本地安全跳过（CI 不跳过）。
+  - [x] 5.2.2 更新 `docs/test-matrix.md`：补齐 Agent portable/native（`yara_native`）矩阵说明与运行条件，并对齐前端 vitest 命令口径。
+  - [x] 5.2.3 运行 `scripts/test-matrix.sh`：验证 Agent/Server 测试矩阵与 docs lint 通过（本环境缺少 libyara，native step 自动跳过）。
