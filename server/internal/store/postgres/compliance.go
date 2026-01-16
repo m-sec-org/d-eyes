@@ -70,7 +70,7 @@ func (p *PostgresStore) CreateComplianceControl(ctx context.Context, control *mo
 	control.CreatedAt = now
 	control.UpdatedAt = now
 	refsJSON, _ := json.Marshal(control.References)
-	_, err := p.pool.Exec(ctx, `INSERT INTO compliance_controls (id, framework_id, code, title, severity, description, references, created_at, updated_at)
+	_, err := p.pool.Exec(ctx, `INSERT INTO compliance_controls (id, framework_id, code, title, severity, description, refs, created_at, updated_at)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		control.ID, control.FrameworkID, control.Code, control.Title, control.Severity, control.Description, refsJSON, control.CreatedAt, control.UpdatedAt)
 	if err != nil {
@@ -85,7 +85,7 @@ func (p *PostgresStore) UpdateComplianceControl(ctx context.Context, control *mo
 	}
 	control.UpdatedAt = time.Now()
 	refsJSON, _ := json.Marshal(control.References)
-	_, err := p.pool.Exec(ctx, `UPDATE compliance_controls SET framework_id=$2, code=$3, title=$4, severity=$5, description=$6, references=$7, updated_at=$8 WHERE id=$1`,
+	_, err := p.pool.Exec(ctx, `UPDATE compliance_controls SET framework_id=$2, code=$3, title=$4, severity=$5, description=$6, refs=$7, updated_at=$8 WHERE id=$1`,
 		control.ID, control.FrameworkID, control.Code, control.Title, control.Severity, control.Description, refsJSON, control.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("update control: %w", err)
@@ -94,7 +94,7 @@ func (p *PostgresStore) UpdateComplianceControl(ctx context.Context, control *mo
 }
 
 func (p *PostgresStore) ListComplianceControls(ctx context.Context, frameworkID uuid.UUID) ([]*model.ComplianceControl, error) {
-	rows, err := p.pool.Query(ctx, `SELECT id, framework_id, code, title, severity, description, references, created_at, updated_at
+	rows, err := p.pool.Query(ctx, `SELECT id, framework_id, code, title, severity, description, refs, created_at, updated_at
         FROM compliance_controls WHERE framework_id = $1 ORDER BY code`, frameworkID)
 	if err != nil {
 		return nil, fmt.Errorf("list controls: %w", err)

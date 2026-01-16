@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/m-sec-org/d-eyes/agent/internal/agent/adaptive"
 	"github.com/m-sec-org/d-eyes/agent/internal/agent/eventstream"
 	"github.com/m-sec-org/d-eyes/agent/internal/agent/remote"
+	"github.com/m-sec-org/d-eyes/agent/internal/agent/remotelog"
 	"github.com/m-sec-org/d-eyes/agent/internal/collector"
 	"github.com/m-sec-org/d-eyes/agent/internal/model"
 	"github.com/m-sec-org/d-eyes/agent/internal/tasks"
@@ -146,6 +148,14 @@ func newRemoteRunner(cfg config.RemoteConfig, opts ...remoteRunnerOption) (*remo
 		throttle:     adaptive.NewController(cfg.Adaptive),
 		cacheStats:   make(map[string]string),
 	}
+	debugEnabled := internal.IsDebugMode()
+	if global := internal.GetGlobalConfig(); global.Logging.Debug {
+		debugEnabled = true
+	}
+	runner.debugLog = remotelog.New(remotelog.Config{
+		Enabled: debugEnabled,
+		Secrets: []string{cfg.AgentToken},
+	})
 	for _, opt := range opts {
 		if opt != nil {
 			opt(runner)
@@ -154,7 +164,7 @@ func newRemoteRunner(cfg config.RemoteConfig, opts ...remoteRunnerOption) (*remo
 	if runner.collectorFactory == nil {
 		runner.collectorFactory = runner.defaultCollectorFactory
 	}
-	artifactClient, err := newArtifactClient(cfg)
+	artifactClient, err := newArtifactClient(cfg, debugEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +218,7 @@ func defaultCacheDir() string {
 	return base
 }
 
-func newArtifactClient(cfg config.RemoteConfig) (tasks.ArtifactClient, error) {
+func newArtifactClient(cfg config.RemoteConfig, debugEnabled bool) (tasks.ArtifactClient, error) {
 	base := strings.TrimSpace(cfg.ServerAPIBase)
 	if base == "" {
 		return nil, nil
@@ -219,6 +229,7 @@ func newArtifactClient(cfg config.RemoteConfig) (tasks.ArtifactClient, error) {
 		Timeout:    30 * time.Second,
 		RetryCount: 3,
 		UserAgent:  "d-eyes-agent",
+		Debug:      debugEnabled,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("artifacts client: %w", err)
@@ -235,6 +246,7 @@ type remoteRunner struct {
 	timeSource   timeSource
 	resolveTask  taskResolver
 	throttle     *adaptive.Controller
+	debugLog     *remotelog.Logger
 
 	running    int32
 	cacheMu    sync.RWMutex
@@ -294,6 +306,13 @@ func (r *remoteRunner) newTicker(d time.Duration) ticker {
 		return realTimeSource{}.NewTicker(d)
 	}
 	return r.timeSource.NewTicker(d)
+}
+
+func (r *remoteRunner) debug(event string, fields ...remotelog.Field) {
+	if r == nil || r.debugLog == nil {
+		return
+	}
+	r.debugLog.Debug(event, fields...)
 }
 
 func (r *remoteRunner) defaultCollectorFactory(configs []collector.Config) collectorController {
@@ -662,9 +681,28 @@ func (r *remoteRunner) run(ctx context.Context) error {
 func (r *remoteRunner) runOnce(ctx context.Context) error {
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	r.debug("grpc.connect",
+		remotelog.Field{Key: "phase", Value: "start"},
+		remotelog.Field{Key: "grpc_addr", Value: r.remoteCfg.ServerGRPCAddr},
+		remotelog.Field{Key: "tls_enabled", Value: r.remoteCfg.TLS.Enabled},
+	)
+	connectStart := time.Now()
 	if err := r.client.Connect(dialCtx); err != nil {
+		r.debug("grpc.connect",
+			remotelog.Field{Key: "phase", Value: "error"},
+			remotelog.Field{Key: "grpc_addr", Value: r.remoteCfg.ServerGRPCAddr},
+			remotelog.Field{Key: "tls_enabled", Value: r.remoteCfg.TLS.Enabled},
+			remotelog.Field{Key: "dur_ms", Value: time.Since(connectStart).Milliseconds()},
+			remotelog.Field{Key: "err", Value: err},
+		)
 		return err
 	}
+	r.debug("grpc.connect",
+		remotelog.Field{Key: "phase", Value: "done"},
+		remotelog.Field{Key: "grpc_addr", Value: r.remoteCfg.ServerGRPCAddr},
+		remotelog.Field{Key: "tls_enabled", Value: r.remoteCfg.TLS.Enabled},
+		remotelog.Field{Key: "dur_ms", Value: time.Since(connectStart).Milliseconds()},
+	)
 	defer r.client.Close()
 
 	labels := map[string]string{internal.LabelMode: internal.LabelValueRemote}
@@ -713,9 +751,30 @@ func (r *remoteRunner) runOnce(ctx context.Context) error {
 		}
 	}
 
-	if _, err := r.client.Register(ctx, meta); err != nil {
+	r.debug("grpc.register",
+		remotelog.Field{Key: "phase", Value: "start"},
+		remotelog.Field{Key: "agent_name", Value: meta.Name},
+		remotelog.Field{Key: "platform", Value: meta.Platform},
+		remotelog.Field{Key: "version", Value: meta.Version},
+		remotelog.Field{Key: "capabilities_count", Value: len(meta.Capabilities)},
+		remotelog.Field{Key: "label_keys", Value: remotelog.StringMapKeys(labels)},
+	)
+	registerStart := time.Now()
+	resp, err := r.client.Register(ctx, meta)
+	if err != nil {
+		r.debug("grpc.register",
+			remotelog.Field{Key: "phase", Value: "error"},
+			remotelog.Field{Key: "dur_ms", Value: time.Since(registerStart).Milliseconds()},
+			remotelog.Field{Key: "err", Value: err},
+		)
 		return err
 	}
+	r.debug("grpc.register",
+		remotelog.Field{Key: "phase", Value: "done"},
+		remotelog.Field{Key: "agent_id", Value: resp.GetAgentId()},
+		remotelog.Field{Key: "heartbeat_interval_seconds", Value: resp.GetHeartbeatIntervalSeconds()},
+		remotelog.Field{Key: "dur_ms", Value: time.Since(registerStart).Milliseconds()},
+	)
 	if id := strings.TrimSpace(r.client.AgentID()); id != "" {
 		_ = os.Setenv("D_EYES_AGENT_ID", id)
 	}
@@ -729,10 +788,24 @@ func (r *remoteRunner) runOnce(ctx context.Context) error {
 	telemetry.StartSystemSampler(ctx, 5*time.Second)
 
 	hbCh := make(chan remote.HeartbeatPayload, 1)
+	r.debug("grpc.heartbeat",
+		remotelog.Field{Key: "phase", Value: "start"},
+		remotelog.Field{Key: "interval", Value: r.remoteCfg.HeartbeatInterval},
+	)
+	heartbeatStart := time.Now()
 	hbErrCh, err := r.client.StartHeartbeat(ctx, hbCh)
 	if err != nil {
+		r.debug("grpc.heartbeat",
+			remotelog.Field{Key: "phase", Value: "error"},
+			remotelog.Field{Key: "dur_ms", Value: time.Since(heartbeatStart).Milliseconds()},
+			remotelog.Field{Key: "err", Value: err},
+		)
 		return err
 	}
+	r.debug("grpc.heartbeat",
+		remotelog.Field{Key: "phase", Value: "done"},
+		remotelog.Field{Key: "dur_ms", Value: time.Since(heartbeatStart).Milliseconds()},
+	)
 
 	if err := r.flushPending(ctx); err != nil {
 		log.Printf("[remote] flush pending results error: %v", err)
@@ -745,6 +818,10 @@ func (r *remoteRunner) runOnce(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case err := <-hbErrCh:
+			r.debug("grpc.heartbeat",
+				remotelog.Field{Key: "phase", Value: "error"},
+				remotelog.Field{Key: "err", Value: err},
+			)
 			return err
 		case <-ticker.C():
 			if err := r.flushPending(ctx); err != nil {
@@ -815,13 +892,30 @@ func (r *remoteRunner) pollOnce(ctx context.Context, hbCh chan<- remote.Heartbea
 		}
 	}
 	r.enqueueHeartbeatPayload(hbCh, float64(atomic.LoadInt32(&r.running)), nil)
+	r.debug("grpc.pull_tasks",
+		remotelog.Field{Key: "phase", Value: "start"},
+		remotelog.Field{Key: "max_tasks", Value: requestCount},
+	)
+	pullStart := time.Now()
 	resp, err := r.client.PullTasks(ctx, requestCount)
 	if err != nil {
+		r.debug("grpc.pull_tasks",
+			remotelog.Field{Key: "phase", Value: "error"},
+			remotelog.Field{Key: "max_tasks", Value: requestCount},
+			remotelog.Field{Key: "dur_ms", Value: time.Since(pullStart).Milliseconds()},
+			remotelog.Field{Key: "err", Value: err},
+		)
 		if r.throttle != nil {
 			r.throttle.RecordResult(ctx, err, 0, 0)
 		}
 		return err
 	}
+	r.debug("grpc.pull_tasks",
+		remotelog.Field{Key: "phase", Value: "done"},
+		remotelog.Field{Key: "max_tasks", Value: requestCount},
+		remotelog.Field{Key: "leases", Value: len(resp.GetLeases())},
+		remotelog.Field{Key: "dur_ms", Value: time.Since(pullStart).Milliseconds()},
+	)
 	if len(resp.GetLeases()) == 0 {
 		if r.throttle != nil {
 			r.throttle.RecordResult(ctx, nil, 0, telemetry.LatestCPUPercent())
@@ -841,9 +935,69 @@ func (r *remoteRunner) pollOnce(ctx context.Context, hbCh chan<- remote.Heartbea
 }
 
 func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLease) error {
+	if lease == nil {
+		return errors.New("nil task lease")
+	}
+	leaseStart := time.Now()
+	taskID := lease.GetTaskId()
+	leaseID := lease.GetLeaseId()
+	taskType := lease.GetTaskType()
+	rawProfile := strings.TrimSpace(lease.GetProfile())
+	leasePayload := lease.GetPayload()
+	var (
+		resultStatus    string
+		resultExitCode  int32
+		resultErrorCode string
+		hasResult       bool
+		retErr          error
+	)
+	defer func() {
+		fields := []remotelog.Field{
+			{Key: "phase", Value: "done"},
+			{Key: "task_id", Value: taskID},
+			{Key: "lease_id", Value: leaseID},
+			{Key: "task_type", Value: taskType},
+			{Key: "dur_ms", Value: time.Since(leaseStart).Milliseconds()},
+		}
+		if hasResult {
+			fields = append(fields,
+				remotelog.Field{Key: "status", Value: resultStatus},
+				remotelog.Field{Key: "exit_code", Value: resultExitCode},
+				remotelog.Field{Key: "error_code", Value: resultErrorCode},
+			)
+		}
+		if retErr != nil {
+			fields = append(fields, remotelog.Field{Key: "err", Value: retErr})
+		}
+		r.debug("remote.lease", fields...)
+	}()
+	r.debug("remote.lease",
+		remotelog.Field{Key: "phase", Value: "start"},
+		remotelog.Field{Key: "task_id", Value: taskID},
+		remotelog.Field{Key: "lease_id", Value: leaseID},
+		remotelog.Field{Key: "task_type", Value: taskType},
+		remotelog.Field{Key: "profile", Value: rawProfile},
+		remotelog.Field{Key: "payload_bytes", Value: len(leasePayload)},
+		remotelog.Field{Key: "payload_keys", Value: remotelog.JSONTopLevelKeys(leasePayload)},
+		remotelog.Field{Key: "metadata_keys", Value: len(lease.GetMetadata())},
+		remotelog.Field{Key: "metadata_key_list", Value: remotelog.StringMapKeys(lease.GetMetadata())},
+	)
 	runner, ok := r.taskRunnerByName(lease.GetTaskType())
 	if !ok {
-		return r.reportFailure(ctx, lease, fmt.Errorf("unsupported task type %q", lease.GetTaskType()))
+		err := fmt.Errorf("unsupported task type %q", lease.GetTaskType())
+		r.debug("remote.lease",
+			remotelog.Field{Key: "phase", Value: "error"},
+			remotelog.Field{Key: "task_id", Value: taskID},
+			remotelog.Field{Key: "lease_id", Value: leaseID},
+			remotelog.Field{Key: "task_type", Value: taskType},
+			remotelog.Field{Key: "err", Value: err},
+		)
+		hasResult = true
+		resultStatus = "failed"
+		resultExitCode = 1
+		resultErrorCode = "agent.remote_execution_failed"
+		retErr = r.reportFailure(ctx, lease, err)
+		return retErr
 	}
 
 	cfg := internal.GetGlobalConfig()
@@ -862,8 +1016,24 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 		var payload map[string]any
 		if err := json.Unmarshal(lease.GetPayload(), &payload); err != nil {
 			log.Printf("[remote] invalid payload for task %s: %v", lease.GetTaskId(), err)
+			r.debug("remote.lease.payload",
+				remotelog.Field{Key: "phase", Value: "error"},
+				remotelog.Field{Key: "task_id", Value: taskID},
+				remotelog.Field{Key: "lease_id", Value: leaseID},
+				remotelog.Field{Key: "task_type", Value: taskType},
+				remotelog.Field{Key: "payload_bytes", Value: len(leasePayload)},
+				remotelog.Field{Key: "err", Value: err},
+			)
 		} else {
 			applyRemotePayload(&req, payload)
+			r.debug("remote.lease.payload",
+				remotelog.Field{Key: "phase", Value: "done"},
+				remotelog.Field{Key: "task_id", Value: taskID},
+				remotelog.Field{Key: "lease_id", Value: leaseID},
+				remotelog.Field{Key: "task_type", Value: taskType},
+				remotelog.Field{Key: "payload_bytes", Value: len(leasePayload)},
+				remotelog.Field{Key: "payload_keys", Value: remotelog.JSONTopLevelKeys(leasePayload)},
+			)
 		}
 	}
 	if req.Name == "" {
@@ -875,9 +1045,40 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 	if r.cfg.Sandbox.Enabled {
 		req.Config.Tasks.BAS.SandboxEnabled = true
 	}
+	r.debug("remote.lease.merge",
+		remotelog.Field{Key: "phase", Value: "done"},
+		remotelog.Field{Key: "task_id", Value: taskID},
+		remotelog.Field{Key: "lease_id", Value: leaseID},
+		remotelog.Field{Key: "task_type", Value: taskType},
+		remotelog.Field{Key: "profile", Value: req.Profile},
+		remotelog.Field{Key: "flags_keys", Value: anyMapKeys(req.Flags)},
+		remotelog.Field{Key: "metadata_keys", Value: len(req.Metadata)},
+		remotelog.Field{Key: "metadata_key_list", Value: remotelog.StringMapKeys(req.Metadata)},
+		remotelog.Field{Key: "sandbox_enabled", Value: req.Config.Sandbox.Enabled},
+		remotelog.Field{Key: "sandbox_require_approval", Value: req.Config.Sandbox.RequireApproval},
+		remotelog.Field{Key: "sandbox_approved", Value: req.SandboxApproved},
+	)
 	if err := tasks.ValidateRequest(lease.GetTaskType(), &req); err != nil {
-		return r.reportFailure(ctx, lease, err)
+		r.debug("remote.lease.validate",
+			remotelog.Field{Key: "phase", Value: "error"},
+			remotelog.Field{Key: "task_id", Value: taskID},
+			remotelog.Field{Key: "lease_id", Value: leaseID},
+			remotelog.Field{Key: "task_type", Value: taskType},
+			remotelog.Field{Key: "err", Value: err},
+		)
+		hasResult = true
+		resultStatus = "failed"
+		resultExitCode = 1
+		resultErrorCode = "agent.remote_execution_failed"
+		retErr = r.reportFailure(ctx, lease, err)
+		return retErr
 	}
+	r.debug("remote.lease.validate",
+		remotelog.Field{Key: "phase", Value: "done"},
+		remotelog.Field{Key: "task_id", Value: taskID},
+		remotelog.Field{Key: "lease_id", Value: leaseID},
+		remotelog.Field{Key: "task_type", Value: taskType},
+	)
 
 	timeout := req.Timeout
 	if timeout <= 0 {
@@ -890,8 +1091,35 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 		defer cancel()
 	}
 
+	r.debug("remote.execute",
+		remotelog.Field{Key: "phase", Value: "start"},
+		remotelog.Field{Key: "task_id", Value: taskID},
+		remotelog.Field{Key: "lease_id", Value: leaseID},
+		remotelog.Field{Key: "task_type", Value: taskType},
+		remotelog.Field{Key: "profile", Value: req.Profile},
+		remotelog.Field{Key: "timeout", Value: timeout},
+	)
+	execStart := time.Now()
 	summary, result, execErr := tasks.ExecuteWithResult(ctxTask, lease.GetTaskType(), runner, req, internal.GetReportManager())
 	execModel := tasks.ToExecutionResult(summary, result, execErr)
+	execFields := []remotelog.Field{
+		{Key: "phase", Value: "done"},
+		{Key: "task_id", Value: taskID},
+		{Key: "lease_id", Value: leaseID},
+		{Key: "task_type", Value: taskType},
+		{Key: "dur_ms", Value: time.Since(execStart).Milliseconds()},
+		{Key: "status", Value: execModel.Status},
+		{Key: "exit_code", Value: execModel.ExitCode},
+		{Key: "error_code", Value: execModel.ErrorCode},
+	}
+	if execErr != nil {
+		execFields = append(execFields, remotelog.Field{Key: "err", Value: execErr})
+	}
+	r.debug("remote.execute", execFields...)
+	hasResult = true
+	resultStatus = execModel.Status
+	resultExitCode = execModel.ExitCode
+	resultErrorCode = execModel.ErrorCode
 	execModel.Metadata = mergeStringMaps(execModel.Metadata, req.Metadata)
 	if telemetryData := telemetry.CollectExecutionMetadata(ctxTask); len(telemetryData) > 0 {
 		execModel.Metadata = mergeStringMaps(execModel.Metadata, telemetryData)
@@ -915,9 +1143,34 @@ func (r *remoteRunner) processLease(ctx context.Context, lease *serverpb.TaskLea
 	if err := r.store.Save(reqProto); err != nil {
 		log.Printf("[remote] save result cache failed: %v", err)
 	}
+	r.debug("grpc.report_result",
+		remotelog.Field{Key: "phase", Value: "start"},
+		remotelog.Field{Key: "task_id", Value: reqProto.GetTaskId()},
+		remotelog.Field{Key: "lease_id", Value: reqProto.GetLeaseId()},
+		remotelog.Field{Key: "status", Value: reqProto.GetStatus()},
+		remotelog.Field{Key: "exit_code", Value: reqProto.GetExitCode()},
+		remotelog.Field{Key: "error_code", Value: reqProto.GetErrorCode()},
+		remotelog.Field{Key: "summary_bytes", Value: len(payloadBytes)},
+		remotelog.Field{Key: "metadata_keys", Value: len(execModel.Metadata)},
+	)
+	reportStart := time.Now()
 	if _, err := r.client.ReportResult(ctx, reqProto); err != nil {
-		return err
+		r.debug("grpc.report_result",
+			remotelog.Field{Key: "phase", Value: "error"},
+			remotelog.Field{Key: "task_id", Value: reqProto.GetTaskId()},
+			remotelog.Field{Key: "lease_id", Value: reqProto.GetLeaseId()},
+			remotelog.Field{Key: "dur_ms", Value: time.Since(reportStart).Milliseconds()},
+			remotelog.Field{Key: "err", Value: err},
+		)
+		retErr = err
+		return retErr
 	}
+	r.debug("grpc.report_result",
+		remotelog.Field{Key: "phase", Value: "done"},
+		remotelog.Field{Key: "task_id", Value: reqProto.GetTaskId()},
+		remotelog.Field{Key: "lease_id", Value: reqProto.GetLeaseId()},
+		remotelog.Field{Key: "dur_ms", Value: time.Since(reportStart).Milliseconds()},
+	)
 	if err := r.store.Delete(lease.GetLeaseId()); err != nil {
 		log.Printf("[remote] delete cache failed: %v", err)
 	}
@@ -932,7 +1185,7 @@ func (r *remoteRunner) startEventUploader(ctx context.Context, agentName string)
 	if r.eventPipeline == nil {
 		return nil
 	}
-	uploader := newEventUploader(r.eventPipeline, r.cfg, r.client.AgentID(), agentName)
+	uploader := newEventUploader(r.eventPipeline, r.cfg, r.client.AgentID(), agentName, r.debugLog)
 	if uploader == nil {
 		return nil
 	}
@@ -998,9 +1251,33 @@ func (r *remoteRunner) reportFailure(ctx context.Context, lease *serverpb.TaskLe
 	if err := r.store.Save(req); err != nil {
 		log.Printf("[remote] save failure cache error: %v", err)
 	}
+	r.debug("grpc.report_result",
+		remotelog.Field{Key: "phase", Value: "start"},
+		remotelog.Field{Key: "task_id", Value: req.GetTaskId()},
+		remotelog.Field{Key: "lease_id", Value: req.GetLeaseId()},
+		remotelog.Field{Key: "status", Value: req.GetStatus()},
+		remotelog.Field{Key: "exit_code", Value: req.GetExitCode()},
+		remotelog.Field{Key: "error_code", Value: req.GetErrorCode()},
+		remotelog.Field{Key: "summary_bytes", Value: len(payload)},
+		remotelog.Field{Key: "metadata_keys", Value: len(metadata)},
+	)
+	reportStart := time.Now()
 	if _, err := r.client.ReportResult(ctx, req); err != nil {
+		r.debug("grpc.report_result",
+			remotelog.Field{Key: "phase", Value: "error"},
+			remotelog.Field{Key: "task_id", Value: req.GetTaskId()},
+			remotelog.Field{Key: "lease_id", Value: req.GetLeaseId()},
+			remotelog.Field{Key: "dur_ms", Value: time.Since(reportStart).Milliseconds()},
+			remotelog.Field{Key: "err", Value: err},
+		)
 		return err
 	}
+	r.debug("grpc.report_result",
+		remotelog.Field{Key: "phase", Value: "done"},
+		remotelog.Field{Key: "task_id", Value: req.GetTaskId()},
+		remotelog.Field{Key: "lease_id", Value: req.GetLeaseId()},
+		remotelog.Field{Key: "dur_ms", Value: time.Since(reportStart).Milliseconds()},
+	)
 	_ = r.store.Delete(lease.GetLeaseId())
 	return nil
 }
@@ -1010,14 +1287,46 @@ func (r *remoteRunner) flushPending(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	r.debug("remote.flush_pending",
+		remotelog.Field{Key: "phase", Value: "start"},
+		remotelog.Field{Key: "pending", Value: len(pending)},
+	)
 	for _, req := range pending {
+		r.debug("grpc.report_result",
+			remotelog.Field{Key: "phase", Value: "start"},
+			remotelog.Field{Key: "task_id", Value: req.GetTaskId()},
+			remotelog.Field{Key: "lease_id", Value: req.GetLeaseId()},
+			remotelog.Field{Key: "status", Value: req.GetStatus()},
+			remotelog.Field{Key: "exit_code", Value: req.GetExitCode()},
+			remotelog.Field{Key: "error_code", Value: req.GetErrorCode()},
+			remotelog.Field{Key: "summary_bytes", Value: len(req.GetSummaryJson())},
+			remotelog.Field{Key: "metadata_keys", Value: len(req.GetMetadata())},
+		)
+		reportStart := time.Now()
 		if _, err := r.client.ReportResult(ctx, req); err != nil {
+			r.debug("grpc.report_result",
+				remotelog.Field{Key: "phase", Value: "error"},
+				remotelog.Field{Key: "task_id", Value: req.GetTaskId()},
+				remotelog.Field{Key: "lease_id", Value: req.GetLeaseId()},
+				remotelog.Field{Key: "dur_ms", Value: time.Since(reportStart).Milliseconds()},
+				remotelog.Field{Key: "err", Value: err},
+			)
 			return err
 		}
+		r.debug("grpc.report_result",
+			remotelog.Field{Key: "phase", Value: "done"},
+			remotelog.Field{Key: "task_id", Value: req.GetTaskId()},
+			remotelog.Field{Key: "lease_id", Value: req.GetLeaseId()},
+			remotelog.Field{Key: "dur_ms", Value: time.Since(reportStart).Milliseconds()},
+		)
 		if err := r.store.Delete(req.GetLeaseId()); err != nil {
 			return err
 		}
 	}
+	r.debug("remote.flush_pending",
+		remotelog.Field{Key: "phase", Value: "done"},
+		remotelog.Field{Key: "pending", Value: len(pending)},
+	)
 	return nil
 }
 
@@ -1144,6 +1453,21 @@ func extractFlagMap(payload map[string]any) map[string]any {
 		flags[k] = v
 	}
 	return flags
+}
+
+func anyMapKeys(m map[string]any) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func anyToString(v any) (string, bool) {

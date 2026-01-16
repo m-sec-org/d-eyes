@@ -1,9 +1,4 @@
 -- Tasks table
-drop table if exists artifacts cascade;
-drop table if exists task_runs cascade;
-drop table if exists tasks cascade;
-drop table if exists agents cascade;
-
 CREATE TABLE IF NOT EXISTS agents (
     id UUID PRIMARY KEY,
     name TEXT,

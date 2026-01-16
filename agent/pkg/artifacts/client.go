@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -15,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/m-sec-org/d-eyes/agent/internal/agent/remotelog"
 )
 
 // Config 控制 Artifact Client 行为。
@@ -26,6 +29,7 @@ type Config struct {
 	RetryWait  time.Duration
 	UserAgent  string
 	HTTPClient *http.Client
+	Debug      bool
 }
 
 // UploadInput 描述一次上传所需的信息。
@@ -52,6 +56,7 @@ type Client struct {
 	retryCount int
 	retryWait  time.Duration
 	timeout    time.Duration
+	debugLog   *remotelog.Logger
 }
 
 const (
@@ -93,6 +98,13 @@ func NewClient(cfg Config) (*Client, error) {
 	if ua == "" {
 		ua = "d-eyes-agent"
 	}
+	var debugLog *remotelog.Logger
+	if cfg.Debug {
+		debugLog = remotelog.New(remotelog.Config{
+			Enabled: true,
+			Secrets: []string{apiKey},
+		})
+	}
 	return &Client{
 		baseURL:    strings.TrimRight(base, "/"),
 		apiKey:     apiKey,
@@ -101,6 +113,7 @@ func NewClient(cfg Config) (*Client, error) {
 		retryCount: retryCount,
 		retryWait:  retryWait,
 		timeout:    timeout,
+		debugLog:   debugLog,
 	}, nil
 }
 
@@ -155,11 +168,19 @@ func (c *Client) Upload(ctx context.Context, input UploadInput) (*UploadResult, 
 	}, nil
 }
 
+func (c *Client) debug(event string, fields ...remotelog.Field) {
+	if c == nil || c.debugLog == nil {
+		return
+	}
+	c.debugLog.Debug(event, fields...)
+}
+
 func (c *Client) doJSON(ctx context.Context, method, endpoint string, payload any, out any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
+	path := safeURLPath(endpoint)
 	var lastErr error
 	for attempt := 0; attempt < c.retryCount; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
@@ -168,13 +189,28 @@ func (c *Client) doJSON(ctx context.Context, method, endpoint string, payload an
 		}
 		c.applyHeaders(req)
 		req.Header.Set("Content-Type", "application/json")
+		start := time.Now()
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			lastErr = err
+			lastErr = sanitizeHTTPError(err)
+			c.debug("http.artifacts.presign",
+				remotelog.Field{Key: "phase", Value: "error"},
+				remotelog.Field{Key: "method", Value: method},
+				remotelog.Field{Key: "path", Value: path},
+				remotelog.Field{Key: "dur_ms", Value: time.Since(start).Milliseconds()},
+				remotelog.Field{Key: "err", Value: lastErr},
+			)
 		} else {
 			respBody, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 && readErr == nil {
+				c.debug("http.artifacts.presign",
+					remotelog.Field{Key: "phase", Value: "done"},
+					remotelog.Field{Key: "method", Value: method},
+					remotelog.Field{Key: "path", Value: path},
+					remotelog.Field{Key: "status", Value: resp.StatusCode},
+					remotelog.Field{Key: "dur_ms", Value: time.Since(start).Milliseconds()},
+				)
 				if out != nil {
 					if err := json.Unmarshal(respBody, out); err != nil {
 						return err
@@ -187,6 +223,14 @@ func (c *Client) doJSON(ctx context.Context, method, endpoint string, payload an
 			} else {
 				lastErr = fmt.Errorf("artifacts: request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 			}
+			c.debug("http.artifacts.presign",
+				remotelog.Field{Key: "phase", Value: "error"},
+				remotelog.Field{Key: "method", Value: method},
+				remotelog.Field{Key: "path", Value: path},
+				remotelog.Field{Key: "status", Value: resp.StatusCode},
+				remotelog.Field{Key: "dur_ms", Value: time.Since(start).Milliseconds()},
+				remotelog.Field{Key: "err", Value: lastErr},
+			)
 		}
 		select {
 		case <-ctx.Done():
@@ -198,6 +242,7 @@ func (c *Client) doJSON(ctx context.Context, method, endpoint string, payload an
 }
 
 func (c *Client) uploadFile(ctx context.Context, endpoint, contentType, path string) error {
+	endpointPath := safeURLPath(endpoint)
 	var lastErr error
 	for attempt := 0; attempt < c.retryCount; attempt++ {
 		file, err := os.Open(path)
@@ -212,17 +257,40 @@ func (c *Client) uploadFile(ctx context.Context, endpoint, contentType, path str
 		c.applyHeaders(req)
 		req.Header.Set("Content-Type", contentType)
 
+		start := time.Now()
 		resp, err := c.httpClient.Do(req)
 		file.Close()
 		if err != nil {
-			lastErr = err
+			lastErr = sanitizeHTTPError(err)
+			c.debug("http.artifacts.upload",
+				remotelog.Field{Key: "phase", Value: "error"},
+				remotelog.Field{Key: "method", Value: http.MethodPut},
+				remotelog.Field{Key: "path", Value: endpointPath},
+				remotelog.Field{Key: "dur_ms", Value: time.Since(start).Milliseconds()},
+				remotelog.Field{Key: "err", Value: lastErr},
+			)
 		} else {
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				c.debug("http.artifacts.upload",
+					remotelog.Field{Key: "phase", Value: "done"},
+					remotelog.Field{Key: "method", Value: http.MethodPut},
+					remotelog.Field{Key: "path", Value: endpointPath},
+					remotelog.Field{Key: "status", Value: resp.StatusCode},
+					remotelog.Field{Key: "dur_ms", Value: time.Since(start).Milliseconds()},
+				)
 				return nil
 			}
 			lastErr = fmt.Errorf("artifacts: upload failed (%d)", resp.StatusCode)
+			c.debug("http.artifacts.upload",
+				remotelog.Field{Key: "phase", Value: "error"},
+				remotelog.Field{Key: "method", Value: http.MethodPut},
+				remotelog.Field{Key: "path", Value: endpointPath},
+				remotelog.Field{Key: "status", Value: resp.StatusCode},
+				remotelog.Field{Key: "dur_ms", Value: time.Since(start).Milliseconds()},
+				remotelog.Field{Key: "err", Value: lastErr},
+			)
 		}
 		select {
 		case <-ctx.Done():
@@ -238,6 +306,49 @@ func (c *Client) applyHeaders(req *http.Request) {
 	req.Header.Set("X-User", "agent")
 	req.Header.Set("X-User-Role", "agent")
 	req.Header.Set("User-Agent", c.userAgent)
+}
+
+func safeURLPath(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err == nil && parsed != nil {
+		if parsed.Path != "" {
+			return truncatePath(parsed.Path, 256)
+		}
+		return "/"
+	}
+	if idx := strings.IndexByte(raw, '?'); idx >= 0 {
+		raw = raw[:idx]
+	}
+	if idx := strings.IndexByte(raw, '#'); idx >= 0 {
+		raw = raw[:idx]
+	}
+	return truncatePath(raw, 256)
+}
+
+func truncatePath(path string, max int) string {
+	if max <= 0 || len(path) <= max {
+		return path
+	}
+	if max == 1 {
+		return path[:1]
+	}
+	return path[:max-1] + "…"
+}
+
+func sanitizeHTTPError(err error) error {
+	var urlErr *url.Error
+	if err == nil || !errors.As(err, &urlErr) || urlErr == nil {
+		return err
+	}
+	safeURL := safeURLPath(urlErr.URL)
+	if safeURL == "" {
+		return urlErr.Err
+	}
+	return fmt.Errorf("%s %s: %v", urlErr.Op, safeURL, urlErr.Err)
 }
 
 func computeFileHash(path string) (string, error) {

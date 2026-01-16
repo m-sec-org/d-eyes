@@ -90,7 +90,10 @@ export function BASScenarioConsole() {
   const [actionModal, setActionModal] = useState<ScenarioActionModalState | null>(null);
   const [actionPayload, setActionPayload] = useState({ actor: 'secops.lead', notes: '', profile: 'default' });
   const [actionSubmitting, setActionSubmitting] = useState(false);
-  const basRuns = useMemo(() => (runResponse ?? []).filter((task) => task.type?.toLowerCase().startsWith('bas')), [runResponse]);
+  const basRuns = useMemo(
+    () => (runResponse?.data ?? []).filter((task) => task.type?.toLowerCase().startsWith('bas')),
+    [runResponse?.data]
+  );
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const selectedRun = basRuns.find((task) => task.id === selectedRunId) ?? null;
   const shouldPollReport = selectedRun ? RUN_POLLING_STATES.has(selectedRun.status) : false;

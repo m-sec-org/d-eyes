@@ -10,7 +10,7 @@ const TI_STREAM_PATH = import.meta.env.VITE_THREAT_INTEL_STREAM_URL ?? '/api/v1/
 const ANOMALY_STREAM_PATH = import.meta.env.VITE_ANOMALY_STREAM_URL ?? '/api/v1/anomalies/stream';
 const QUEUE_STREAM_PATH = import.meta.env.VITE_QUEUE_STREAM_URL ?? '/api/v1/queues/stream';
 const DETECTION_STREAM_PATH = import.meta.env.VITE_DETECTION_STREAM_URL ?? '/api/v1/detections/stream';
-const USE_MOCK_SSE = import.meta.env.VITE_USE_MOCK_SSE !== 'false';
+const USE_MOCK_SSE = import.meta.env.DEV && import.meta.env.VITE_USE_MOCK_SSE !== 'false';
 
 export function createTaskEventStream(channel?: string): EventSource {
   if (USE_MOCK_SSE) {

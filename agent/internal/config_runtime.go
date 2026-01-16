@@ -20,6 +20,9 @@ var (
 	quietMode     bool
 	quietModeLock sync.RWMutex
 
+	debugMode     bool
+	debugModeLock sync.RWMutex
+
 	configWatchers     []ConfigWatcher
 	configWatchersLock sync.RWMutex
 )
@@ -67,6 +70,20 @@ func IsQuietMode() bool {
 	quietModeLock.RLock()
 	defer quietModeLock.RUnlock()
 	return quietMode
+}
+
+// SetDebugMode updates the process-level debug flag (typically from CLI --debug/DEYES_DEBUG).
+func SetDebugMode(enabled bool) {
+	debugModeLock.Lock()
+	defer debugModeLock.Unlock()
+	debugMode = enabled
+}
+
+// IsDebugMode reports whether process-level debug is enabled.
+func IsDebugMode() bool {
+	debugModeLock.RLock()
+	defer debugModeLock.RUnlock()
+	return debugMode
 }
 
 // RegisterConfigWatcher attaches a callback invoked whenever SetGlobalConfig is called.

@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS anomalies (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE anomalies ADD COLUMN IF NOT EXISTS task_id UUID REFERENCES tasks(id) ON DELETE SET NULL;
+ALTER TABLE anomalies ADD COLUMN IF NOT EXISTS ioc TEXT;
+ALTER TABLE anomalies ADD COLUMN IF NOT EXISTS entities JSONB;
+
 CREATE INDEX IF NOT EXISTS anomalies_agent_idx ON anomalies(agent_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS anomalies_task_idx ON anomalies(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS anomalies_status_idx ON anomalies(status);

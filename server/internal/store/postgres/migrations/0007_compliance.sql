@@ -15,10 +15,11 @@ CREATE TABLE IF NOT EXISTS compliance_controls (
     title TEXT NOT NULL,
     severity TEXT,
     description TEXT,
-    references JSONB,
+    refs JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE compliance_controls ADD COLUMN IF NOT EXISTS refs JSONB;
 CREATE INDEX IF NOT EXISTS compliance_controls_framework_idx ON compliance_controls(framework_id);
 
 CREATE TABLE IF NOT EXISTS control_mappings (

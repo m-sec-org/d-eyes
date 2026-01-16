@@ -202,6 +202,7 @@ GLOBAL OPTIONS:
 	}
 	app.Before = func(c *cli.Context) error {
 		SetQuietMode(false)
+		SetDebugMode(c.Bool("debug"))
 		explicitConfigPath := c.IsSet("config")
 		path := c.String("config")
 		if path == "" {

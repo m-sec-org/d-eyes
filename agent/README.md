@@ -156,6 +156,10 @@ d-eyes remote
 remote:
   enabled: true
   server_grpc_addr: 127.0.0.1:9090
+  # Server 的 HTTP 基础地址（用于 artifacts 上传、system events 上报等 HTTP API）
+  # 注意：这里填“根地址”，不要带 /api/v1 后缀（Agent 内部会拼接 /api/v1/...）
+  # 例如：http://127.0.0.1:8080 或 https://deyes.example.com
+  server_api_base: http://127.0.0.1:8080
   agent_token: changeme
   agent_name: edge-node-01
   heartbeat_interval: 10s
@@ -168,7 +172,7 @@ remote:
 
 远程模式会将待回传结果写入本地缓存目录（默认 `~/.d-eyes/cache`），断线后自动重试。执行链路与 CLI 完全复用同一套 `TaskRunner`/`TaskRequest` 规范，区别在于：
 
-- 默认启用静默模式（`--quiet`）并强制输出 JSON 摘要，方便 Server 解析。
+- 默认启用静默模式（`--quiet`），不在终端输出任务摘要；执行结果通过 gRPC `ReportResult` 回传给 Server。
 - 任务参数映射与 CLI Flag 一致：**推荐把参数放在 `payload` 顶层**（例如 `payload.targets: "/tmp,/var/log"`）；若同时提供 `payload.flags`，Agent 会优先使用该 map 作为参数来源（此时需把参数放进 `payload.flags.*`，不要依赖 `payload` 顶层字段）。
 
 与 Server Task Catalog（profile/schema）对齐的运维建议：
@@ -190,6 +194,41 @@ remote:
 - `--ti-mode`：威胁情报模式：`auto` / `local` / `hybrid` / `server`（亦可通过 `D_EYES_TI_MODE` 指定）
 
 > **提示**：全局 Flags 在 v1.4 之后统一提升到顶层命令。若某 Flag 未在 CLI 中显式传入，会从 `config.yaml` 的对应字段（如 `config.tasks.*`、`config.output` 等）回落获取默认值。
+
+#### 远程模式 Debug 日志（remote 排障）
+
+当你需要排查 Agent 与 Server 的联动（注册/心跳/拉取/执行/回传/HTTP 上传）时，建议开启 remote debug 日志：
+
+```bash
+# 方式一：CLI flag
+d-eyes remote --debug
+
+# 方式二：环境变量（适合 systemd / 容器）
+DEYES_DEBUG=1 d-eyes remote
+```
+
+日志特性与输出位置：
+
+- 日志格式为结构化单行文本，可直接 grep：固定前缀 `[remote][debug]` + `event=...` + `k=v` 字段。
+- Debug 日志写入 `stderr`（不污染 stdout 的机器输出），并同时镜像写入全局日志输出（通常是可执行文件同目录的 `d-eyes.logs`）。
+- **不会泄漏秘密**：`agent_token`/`X-API-Key` 等会被强制替换为 `<redacted>`；`payload/metadata` 默认只输出大小/keys，不输出 values。
+
+常用重定向/过滤示例：
+
+```bash
+# 把 debug 日志单独抓到文件（推荐）
+d-eyes remote --debug 2>remote-debug.log
+
+# 从全局日志中过滤 remote debug（常见于后台运行/服务）
+grep '\\[remote\\]\\[debug\\]' ./d-eyes.logs | tail -n 200
+```
+
+常见字段与排障口径（按 event）：
+
+- `grpc.connect|grpc.register|grpc.pull_tasks|grpc.report_result`：`phase`（start/done/error）、`dur_ms`、`err`；其中 `grpc.report_result` 会带 `task_id/lease_id/status/exit_code/error_code`。
+- `remote.lease`：单次租约生命周期汇总（必含 `task_id/lease_id/task_type`），并附带 `payload_bytes/payload_keys/metadata_key_list`（仅 keys）。
+- `remote.execute`：任务执行开始/结束（`dur_ms/status/exit_code/error_code`），失败时 `err` 会被截断并去敏。
+- `http.events.ingest|http.artifacts.presign|http.artifacts.upload`：仅输出 `method/path/status/dur_ms/err`；`path` 会剥离 URL query（避免 presigned URL 或 API key 泄漏）。注意：HTTP 事件/工件日志仅在配置了 `remote.server_api_base` 时出现。
 
 ## 入侵检测 `detect`
 

@@ -358,6 +358,9 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS anomalies (
 		    id UUID PRIMARY KEY,
 		    agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
+		    task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+		    ioc TEXT,
+		    entities JSONB,
 		    severity TEXT,
 		    score DOUBLE PRECISION,
 		    summary JSONB,
@@ -365,6 +368,9 @@ func (p *PostgresStore) ensureSchema(ctx context.Context) error {
 		    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE anomalies ADD COLUMN IF NOT EXISTS task_id UUID REFERENCES tasks(id) ON DELETE SET NULL`,
+		`ALTER TABLE anomalies ADD COLUMN IF NOT EXISTS ioc TEXT`,
+		`ALTER TABLE anomalies ADD COLUMN IF NOT EXISTS entities JSONB`,
 		`CREATE INDEX IF NOT EXISTS anomalies_agent_idx ON anomalies(agent_id, created_at DESC)`,
 	}
 	for _, stmt := range stmts {
